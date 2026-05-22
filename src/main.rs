@@ -1,7 +1,10 @@
+mod cli;
 mod state;
+
+use clap::Parser;
 
 #[tokio::main]
 async fn main() {
-    let _state = state::AppState::new();
+    let _args = cli::Cli::parse();
     println!("ollama-monitor starting...");
 }
