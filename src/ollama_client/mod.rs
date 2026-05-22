@@ -1,2 +1,2 @@
 pub mod client;
-pub use client::{OllamaClient, PsResponse, PsModel};
+pub use client::OllamaClient;

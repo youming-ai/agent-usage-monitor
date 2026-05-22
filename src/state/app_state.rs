@@ -8,7 +8,7 @@ pub struct RunningModel {
     pub name: String,
     pub running_for: String,
     pub size: u64,
-    pub gpu_utilization: Option<f64>,
+    pub vram: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

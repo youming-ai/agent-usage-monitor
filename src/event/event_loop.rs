@@ -1,11 +1,10 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent};
+use crossterm::event::{self, Event, KeyEvent};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 pub enum AppEvent {
     Tick,
     Key(KeyEvent),
-    Quit,
 }
 
 pub struct EventLoop {
@@ -25,12 +24,16 @@ impl EventLoop {
                     .checked_sub(last_tick.elapsed())
                     .unwrap_or(Duration::from_secs(0));
 
-                if event::poll(timeout).unwrap() {
-                    if let Event::Key(key) = event::read().unwrap() {
-                        if tx_clone.send(AppEvent::Key(key)).is_err() {
+                match event::poll(timeout) {
+                    Ok(true) => {
+                        if let Ok(Event::Key(key)) = event::read()
+                            && tx_clone.send(AppEvent::Key(key)).is_err()
+                        {
                             break;
                         }
                     }
+                    Ok(false) => {}
+                    Err(_) => break,
                 }
 
                 if last_tick.elapsed() >= tick_rate {

@@ -106,7 +106,6 @@ fn run_tui(
                     }
                     _ => {}
                 },
-                AppEvent::Quit => break,
             }
         }
     }

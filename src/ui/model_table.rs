@@ -18,15 +18,15 @@ pub fn model_table_widget(app_state: &Arc<RwLock<AppState>>) -> Table<'static> {
                 Cell::from(m.running_for.clone()),
                 Cell::from(format_size(m.size, BINARY)),
                 Cell::from(
-                    m.gpu_utilization
-                        .map(|g| format!("{:.1}%", g))
+                    m.vram
+                        .map(|v| format_size(v, BINARY))
                         .unwrap_or_else(|| "N/A".to_string()),
                 ),
             ])
         })
         .collect();
 
-    let header = Row::new(vec!["Model", "Running", "Memory", "GPU"])
+    let header = Row::new(vec!["Model", "Running", "Memory", "VRAM"])
         .style(Style::default().fg(Color::Yellow));
 
     Table::new(

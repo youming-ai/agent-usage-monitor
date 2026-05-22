@@ -7,7 +7,7 @@ use ratatui::{
 use std::sync::{Arc, RwLock};
 
 pub fn usage_table_widget(app_state: &Arc<RwLock<AppState>>) -> Table<'static> {
-    let state = app_state.read().unwrap();
+    let state = app_state.read().unwrap_or_else(|e| e.into_inner());
     let rows: Vec<Row> = state
         .recent_calls
         .iter()

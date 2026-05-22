@@ -11,7 +11,7 @@ pub fn status_bar_widget(
     proxy_port: u16,
     ollama_host: &str,
 ) -> Paragraph<'static> {
-    let state = app_state.read().unwrap();
+    let state = app_state.read().unwrap_or_else(|e| e.into_inner());
     let proxy_status = if state.is_proxy_paused() {
         Span::styled("Proxy: PAUSED", Style::default().fg(Color::Red))
     } else {
