@@ -1,5 +1,6 @@
 mod cli;
 mod ollama_client;
+mod proxy;
 mod state;
 
 use clap::Parser;
