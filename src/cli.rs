@@ -12,4 +12,19 @@ pub struct Cli {
 
     #[arg(short, long, default_value_t = 2)]
     pub refresh: u64,
+
+    /// Takeover mode: proxy on 11434, forward to 11436
+    /// (requires Ollama to be restarted on port 11436)
+    #[arg(long, default_value_t = false)]
+    pub takeover: bool,
+}
+
+impl Cli {
+    pub fn effective(&self) -> (u16, String) {
+        if self.takeover {
+            (11434, "127.0.0.1:11436".to_string())
+        } else {
+            (self.proxy_port, self.ollama_host.clone())
+        }
+    }
 }

@@ -27,12 +27,12 @@ fn normalize_host(host: &str) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = cli::Cli::parse();
+    let (proxy_port, ollama_host) = args.effective();
     let app_state = Arc::new(RwLock::new(AppState::new()));
-    let ollama_url = normalize_host(&args.ollama_host);
+    let ollama_url = normalize_host(&ollama_host);
 
     // Start proxy
     let proxy_state = app_state.clone();
-    let proxy_port = args.proxy_port;
     let proxy_target = ollama_url.clone();
     let proxy_handle = task::spawn(async move {
         if let Err(e) = start_proxy(proxy_port, proxy_target, proxy_state).await {
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tui_state = app_state.clone();
     let tui_handle = task::spawn_blocking(move || {
         let mut terminal = ratatui::init();
-        let result = run_tui(&mut terminal, tui_state, proxy_port, &args.ollama_host);
+        let result = run_tui(&mut terminal, tui_state, proxy_port, &ollama_host);
         ratatui::restore();
         result
     });
