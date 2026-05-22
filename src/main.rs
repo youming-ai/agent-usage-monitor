@@ -1,4 +1,5 @@
 mod cli;
+mod event;
 mod ollama_client;
 mod proxy;
 mod state;
