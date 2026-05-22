@@ -16,15 +16,24 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::task;
 
+fn normalize_host(host: &str) -> String {
+    if host.starts_with("http://") || host.starts_with("https://") {
+        host.to_string()
+    } else {
+        format!("http://{}", host)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = cli::Cli::parse();
     let app_state = Arc::new(RwLock::new(AppState::new()));
+    let ollama_url = normalize_host(&args.ollama_host);
 
     // Start proxy
     let proxy_state = app_state.clone();
-    let proxy_target = format!("http://{}", args.ollama_host);
     let proxy_port = args.proxy_port;
+    let proxy_target = ollama_url.clone();
     let proxy_handle = task::spawn(async move {
         if let Err(e) = start_proxy(proxy_port, proxy_target, proxy_state).await {
             eprintln!("Proxy error: {}", e);
@@ -33,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Start Ollama polling
     let poll_state = app_state.clone();
-    let ollama_client = OllamaClient::new(format!("http://{}", args.ollama_host));
+    let ollama_client = OllamaClient::new(ollama_url);
     let refresh_secs = args.refresh;
     let poll_handle = task::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(refresh_secs));

@@ -8,7 +8,7 @@ use axum::{
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 #[derive(Clone)]
 pub struct ProxyState {
@@ -69,7 +69,8 @@ pub async fn proxy_handler(
             }
         };
         if let Ok(json) = serde_json::from_slice::<Value>(&body) {
-            if json.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+            // For non-streaming, done is always true, but check anyway
+            if json.get("done").and_then(|v| v.as_bool()).unwrap_or(true) {
                 extract_usage(&json, &state.app_state);
             }
         }
@@ -93,9 +94,10 @@ pub async fn proxy_handler(
             .unwrap();
     }
 
-    // Intercept streaming response
+    // Intercept streaming response with line buffering to handle chunks split across TCP packets
     let app_state = state.app_state.clone();
     let bytes_stream = upstream_resp.bytes_stream();
+    let line_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     let mapped = bytes_stream.map(move |chunk_result| {
         let chunk = match chunk_result {
@@ -103,15 +105,27 @@ pub async fn proxy_handler(
             Err(e) => return Err(axum::Error::new(e)),
         };
 
-        // Try to parse each line as JSON
+        let mut buffer = line_buffer.lock().unwrap_or_else(|e| e.into_inner());
         if let Ok(text) = std::str::from_utf8(&chunk) {
-            for line in text.lines() {
+            buffer.push_str(text);
+            // Process complete lines, keep partial last line in buffer
+            let mut lines = buffer.lines().peekable();
+            let mut new_buffer = String::new();
+            while let Some(line) = lines.next() {
+                if lines.peek().is_none() {
+                    // Last line might be incomplete, keep it for next chunk
+                    new_buffer.push_str(line);
+                    break;
+                }
+                // Try to parse complete line as JSON
                 if let Ok(json) = serde_json::from_str::<Value>(line) {
+                    // Ollama generate/chat: done=true in final chunk has usage
                     if json.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
                         extract_usage(&json, &app_state);
                     }
                 }
             }
+            *buffer = new_buffer;
         }
 
         Ok::<_, axum::Error>(chunk)
