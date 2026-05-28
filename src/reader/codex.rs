@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 pub struct CodexReader {
     sessions_dir: PathBuf,
     file_positions: HashMap<PathBuf, u64>,
+    current_model: String,
 }
 
 impl CodexReader {
@@ -17,6 +18,7 @@ impl CodexReader {
         Self {
             sessions_dir,
             file_positions: HashMap::new(),
+            current_model: "unknown".to_string(),
         }
     }
 
@@ -61,7 +63,7 @@ impl CodexReader {
         new_records
     }
 
-    fn read_file_from(&self, path: &Path, skip_lines: u64) -> Vec<UsageRecord> {
+    fn read_file_from(&mut self, path: &Path, skip_lines: u64) -> Vec<UsageRecord> {
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => return Vec::new(),
@@ -72,82 +74,98 @@ impl CodexReader {
         content
             .lines()
             .skip(skip_lines as usize)
-            .filter_map(|line| parse_codex_line(line, &project))
+            .filter_map(|line| self.parse_codex_line(line, &project))
             .collect()
     }
-}
 
-fn parse_codex_line(line: &str, project: &str) -> Option<UsageRecord> {
-    let v: Value = serde_json::from_str(line).ok()?;
-    let event_type = v.get("type")?.as_str()?;
+    fn parse_codex_line(&mut self, line: &str, project: &str) -> Option<UsageRecord> {
+        let v: Value = serde_json::from_str(line).ok()?;
+        let event_type = v.get("type")?.as_str()?;
 
-    if event_type != "event_msg" {
-        return None;
+        // turn_context is a top-level event (not wrapped in event_msg)
+        if event_type == "turn_context" {
+            if let Some(model) = v.get("payload").and_then(|p| p.get("model")).and_then(|m| m.as_str()) {
+                self.current_model = model.to_string();
+            }
+            return None;
+        }
+
+        if event_type != "event_msg" {
+            return None;
+        }
+
+        let payload = v.get("payload")?;
+        let payload_type = payload.get("type")?.as_str()?;
+
+        // Also check task_started for model (fallback)
+        if payload_type == "task_started" {
+            if let Some(model) = payload
+                .get("collaboration_mode")
+                .and_then(|c| c.get("settings"))
+                .and_then(|s| s.get("model"))
+                .and_then(|m| m.as_str())
+            {
+                self.current_model = model.to_string();
+            }
+            return None;
+        }
+
+        if payload_type != "token_count" {
+            return None;
+        }
+
+        let info = payload.get("info")?;
+        if info.is_null() {
+            return None;
+        }
+
+        let total = info.get("total_token_usage")?;
+        let input_tokens = total.get("input_tokens")?.as_u64()?;
+        let output_tokens = total.get("output_tokens")?.as_u64().unwrap_or(0);
+        let cached = total
+            .get("cached_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let last = info.get("last_token_usage");
+        let delta_input = last
+            .and_then(|l| l.get("input_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(input_tokens);
+        let delta_output = last
+            .and_then(|l| l.get("output_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(output_tokens);
+        let delta_cached = last
+            .and_then(|l| l.get("cached_input_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(cached);
+
+        if delta_input == 0 && delta_output == 0 {
+            return None;
+        }
+
+        let timestamp_str = v.get("timestamp")?.as_str()?;
+        let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
+
+        let cost_usd =
+            pricing::calculate_cost(&self.current_model, delta_input, delta_output, delta_cached, 0);
+
+        Some(UsageRecord {
+            timestamp,
+            platform: Platform::Codex,
+            model: self.current_model.clone(),
+            project: project.to_string(),
+            input_tokens: delta_input,
+            output_tokens: delta_output,
+            cache_read_tokens: delta_cached,
+            cache_creation_tokens: 0,
+            cost_usd,
+            service_tier: String::new(),
+            message_id: String::new(),
+            request_id: String::new(),
+        })
     }
-
-    let payload = v.get("payload")?;
-    let payload_type = payload.get("type")?.as_str()?;
-
-    if payload_type != "token_count" {
-        return None;
-    }
-
-    let info = payload.get("info")?;
-    if info.is_null() {
-        return None;
-    }
-
-    let total = info.get("total_token_usage")?;
-    let input_tokens = total.get("input_tokens")?.as_u64()?;
-    let output_tokens = total.get("output_tokens")?.as_u64().unwrap_or(0);
-    let cached = total
-        .get("cached_input_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    let last = info.get("last_token_usage");
-    let delta_input = last
-        .and_then(|l| l.get("input_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(input_tokens);
-    let delta_output = last
-        .and_then(|l| l.get("output_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(output_tokens);
-    let delta_cached = last
-        .and_then(|l| l.get("cached_input_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(cached);
-
-    if delta_input == 0 && delta_output == 0 {
-        return None;
-    }
-
-    let timestamp_str = v.get("timestamp")?.as_str()?;
-    let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
-
-    let model = payload
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let cost_usd = pricing::calculate_cost(&model, delta_input, delta_output, delta_cached, 0);
-
-    Some(UsageRecord {
-        timestamp,
-        platform: Platform::Codex,
-        model,
-        project: project.to_string(),
-        input_tokens: delta_input,
-        output_tokens: delta_output,
-        cache_read_tokens: delta_cached,
-        cache_creation_tokens: 0,
-        cost_usd,
-        service_tier: String::new(),
-        message_id: String::new(),
-        request_id: String::new(),
-    })
 }
 
 fn extract_codex_project(path: &Path) -> String {
