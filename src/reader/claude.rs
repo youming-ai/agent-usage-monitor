@@ -1,4 +1,3 @@
-use crate::reader::pricing;
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -128,14 +127,12 @@ fn parse_claude_line(line: &str, project: &str) -> Option<UsageRecord> {
         .unwrap_or("standard")
         .to_string();
 
-    let cost_from_file = v
+    // Cost: read from JSONL only (comes from Anthropic API response)
+    let cost_usd = v
         .get("cost_usd")
         .and_then(|v| v.as_f64())
-        .or_else(|| v.get("cost").and_then(|v| v.as_f64()));
-
-    let cost_usd = cost_from_file.unwrap_or_else(|| {
-        pricing::calculate_cost(&model, input_tokens, output_tokens, cache_read, cache_creation)
-    });
+        .or_else(|| v.get("cost").and_then(|v| v.as_f64()))
+        .unwrap_or(0.0);
 
     Some(UsageRecord {
         timestamp,
