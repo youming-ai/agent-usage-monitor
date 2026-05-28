@@ -69,16 +69,14 @@ Claude Code and Codex automatically write usage data to local files:
 
 This tool reads those files directly — no network calls, no API keys, no proxy needed.
 
-## Supported Models (Pricing)
+## Supported Platforms
 
-| Model | Input ($/1M) | Output ($/1M) | Cache Read ($/1M) |
-|-------|-------------|---------------|-------------------|
-| claude-opus-4 | 15.00 | 75.00 | 1.50 |
-| claude-sonnet-4 | 3.00 | 15.00 | 0.30 |
-| claude-haiku-4 | 1.00 | 5.00 | 0.10 |
-| gpt-5.5 | 1.25 | 5.00 | 0.125 |
-| gpt-5.3-codex | 2.50 | 10.00 | 0.25 |
-| gpt-5.4-mini | 0.15 | 0.60 | 0.015 |
+| Platform | Data Source |
+|----------|-------------|
+| Claude Code | `~/.claude/projects/**/*.jsonl` |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl` |
+
+Cost is calculated from built-in pricing tables for Anthropic and OpenAI models. Unknown models show $0.00.
 
 ## License
 
