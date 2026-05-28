@@ -1,65 +1,199 @@
-use chrono::{DateTime, Local};
-use std::sync::atomic::{AtomicBool, Ordering};
+use chrono::{DateTime, Utc};
 
-pub const MAX_RECENT_CALLS: usize = 50;
+pub const MAX_RECORDS: usize = 100;
 
-#[derive(Debug, Clone)]
-pub struct RunningModel {
-    pub name: String,
-    pub running_for: String,
-    pub size: u64,
-    pub vram: Option<u64>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    ClaudeCode,
+    Codex,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    ClaudeCode,
+    Codex,
+}
+
+impl Tab {
+    pub fn next(self) -> Self {
+        match self {
+            Tab::ClaudeCode => Tab::Codex,
+            Tab::Codex => Tab::ClaudeCode,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        self.next()
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::ClaudeCode => "Claude Code",
+            Tab::Codex => "Codex",
+        }
+    }
+}
+
+/// Single API call record
 #[derive(Debug, Clone)]
-pub struct ApiCall {
-    pub timestamp: DateTime<Local>,
+pub struct UsageRecord {
+    pub timestamp: DateTime<Utc>,
+    pub platform: Platform,
     pub model: String,
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
-    pub total_duration_ms: u64,
-    pub tokens_per_sec: f64,
+    pub project: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cost_usd: f64,
+    pub service_tier: String,
+    pub message_id: String,
+    pub request_id: String,
 }
 
+/// Aggregated session/project summary
+#[derive(Debug, Clone)]
+pub struct SessionSummary {
+    pub project: String,
+    pub model: String,
+    pub total_input: u64,
+    pub total_output: u64,
+    pub total_cache_read: u64,
+    pub total_cache_creation: u64,
+    pub total_cost: f64,
+    pub request_count: u64,
+    pub last_active: DateTime<Utc>,
+}
+
+/// Global application state
 pub struct AppState {
-    pub running_models: Vec<RunningModel>,
-    pub recent_calls: Vec<ApiCall>,
-    pub total_calls: usize,
-    pub proxy_paused: AtomicBool,
+    // Claude Code
+    pub claude_records: Vec<UsageRecord>,
+    pub claude_sessions: Vec<SessionSummary>,
+    pub claude_total_calls: usize,
+    pub claude_total_cost: f64,
+
+    // Codex
+    pub codex_records: Vec<UsageRecord>,
+    pub codex_sessions: Vec<SessionSummary>,
+    pub codex_total_calls: usize,
+    pub codex_total_cost: f64,
+
+    // Shared
+    pub active_tab: Tab,
     pub last_error: Option<String>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
-            running_models: Vec::new(),
-            recent_calls: Vec::with_capacity(MAX_RECENT_CALLS),
-            total_calls: 0,
-            proxy_paused: AtomicBool::new(false),
+            claude_records: Vec::with_capacity(MAX_RECORDS),
+            claude_sessions: Vec::new(),
+            claude_total_calls: 0,
+            claude_total_cost: 0.0,
+            codex_records: Vec::with_capacity(MAX_RECORDS),
+            codex_sessions: Vec::new(),
+            codex_total_calls: 0,
+            codex_total_cost: 0.0,
+            active_tab: Tab::ClaudeCode,
             last_error: None,
         }
     }
 
-    pub fn add_call(&mut self, call: ApiCall) {
-        if self.recent_calls.len() >= MAX_RECENT_CALLS {
-            self.recent_calls.remove(0);
+    pub fn add_claude_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.claude_records.len() >= MAX_RECORDS {
+                self.claude_records.remove(0);
+            }
+            self.claude_total_cost += r.cost_usd;
+            self.claude_total_calls += 1;
+            self.claude_records.push(r);
         }
-        self.recent_calls.push(call);
-        self.total_calls += 1;
+        self.rebuild_claude_sessions();
     }
 
-    pub fn clear_calls(&mut self) {
-        self.recent_calls.clear();
-        self.total_calls = 0;
+    pub fn add_codex_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.codex_records.len() >= MAX_RECORDS {
+                self.codex_records.remove(0);
+            }
+            self.codex_total_cost += r.cost_usd;
+            self.codex_total_calls += 1;
+            self.codex_records.push(r);
+        }
+        self.rebuild_codex_sessions();
     }
 
-    pub fn is_proxy_paused(&self) -> bool {
-        self.proxy_paused.load(Ordering::Relaxed)
+    fn rebuild_claude_sessions(&mut self) {
+        use std::collections::BTreeMap;
+        let mut map: BTreeMap<(String, String), SessionSummary> = BTreeMap::new();
+        for r in &self.claude_records {
+            let key = (r.project.clone(), r.model.clone());
+            let entry = map.entry(key).or_insert_with(|| SessionSummary {
+                project: r.project.clone(),
+                model: r.model.clone(),
+                total_input: 0,
+                total_output: 0,
+                total_cache_read: 0,
+                total_cache_creation: 0,
+                total_cost: 0.0,
+                request_count: 0,
+                last_active: r.timestamp,
+            });
+            entry.total_input += r.input_tokens;
+            entry.total_output += r.output_tokens;
+            entry.total_cache_read += r.cache_read_tokens;
+            entry.total_cache_creation += r.cache_creation_tokens;
+            entry.total_cost += r.cost_usd;
+            entry.request_count += 1;
+            if r.timestamp > entry.last_active {
+                entry.last_active = r.timestamp;
+            }
+        }
+        self.claude_sessions = map.into_values().collect();
     }
 
-    pub fn toggle_proxy_paused(&self) {
-        let current = self.proxy_paused.load(Ordering::Relaxed);
-        self.proxy_paused.store(!current, Ordering::Relaxed);
+    fn rebuild_codex_sessions(&mut self) {
+        use std::collections::BTreeMap;
+        let mut map: BTreeMap<(String, String), SessionSummary> = BTreeMap::new();
+        for r in &self.codex_records {
+            let key = (r.project.clone(), r.model.clone());
+            let entry = map.entry(key).or_insert_with(|| SessionSummary {
+                project: r.project.clone(),
+                model: r.model.clone(),
+                total_input: 0,
+                total_output: 0,
+                total_cache_read: 0,
+                total_cache_creation: 0,
+                total_cost: 0.0,
+                request_count: 0,
+                last_active: r.timestamp,
+            });
+            entry.total_input += r.input_tokens;
+            entry.total_output += r.output_tokens;
+            entry.total_cache_read += r.cache_read_tokens;
+            entry.total_cache_creation += r.cache_creation_tokens;
+            entry.total_cost += r.cost_usd;
+            entry.request_count += 1;
+            if r.timestamp > entry.last_active {
+                entry.last_active = r.timestamp;
+            }
+        }
+        self.codex_sessions = map.into_values().collect();
+    }
+
+    pub fn clear_claude(&mut self) {
+        self.claude_records.clear();
+        self.claude_sessions.clear();
+        self.claude_total_calls = 0;
+        self.claude_total_cost = 0.0;
+    }
+
+    pub fn clear_codex(&mut self) {
+        self.codex_records.clear();
+        self.codex_sessions.clear();
+        self.codex_total_calls = 0;
+        self.codex_total_cost = 0.0;
     }
 }
 

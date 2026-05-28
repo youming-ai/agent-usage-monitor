@@ -1,101 +1,97 @@
 mod cli;
 mod event;
-mod ollama_client;
-mod proxy;
+mod reader;
 mod state;
 mod ui;
 
 use crate::event::{AppEvent, EventLoop};
-use crate::ollama_client::OllamaClient;
-use crate::proxy::start_proxy;
+use crate::reader::claude::ClaudeReader;
+use crate::reader::codex::CodexReader;
 use crate::state::AppState;
 use clap::Parser;
 use crossterm::event::KeyCode;
-use ratatui::DefaultTerminal;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::task;
 
-fn normalize_host(host: &str) -> String {
-    if host.starts_with("http://") || host.starts_with("https://") {
-        host.to_string()
-    } else {
-        format!("http://{}", host)
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = cli::Cli::parse();
-    let (proxy_port, ollama_host) = args.effective();
     let app_state = Arc::new(RwLock::new(AppState::new()));
-    let ollama_url = normalize_host(&ollama_host);
 
-    // Start proxy
-    let proxy_state = app_state.clone();
-    let proxy_target = ollama_url.clone();
-    let proxy_handle = task::spawn(async move {
-        if let Err(e) = start_proxy(proxy_port, proxy_target, proxy_state).await {
-            eprintln!("Proxy error: {}", e);
+    // Claude reader task
+    let claude_state = app_state.clone();
+    let mut claude_reader = ClaudeReader::new(args.claude_path.clone());
+    let refresh = args.refresh;
+    let claude_handle = task::spawn(async move {
+        let initial = claude_reader.scan_all();
+        if !initial.is_empty() {
+            if let Ok(mut state) = claude_state.write() {
+                state.add_claude_records(initial);
+            }
         }
-    });
 
-    // Start Ollama polling
-    let poll_state = app_state.clone();
-    let ollama_client = OllamaClient::new(ollama_url);
-    let refresh_secs = args.refresh;
-    let poll_handle = task::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(refresh_secs));
+        let mut interval = tokio::time::interval(Duration::from_secs(refresh));
         loop {
             interval.tick().await;
-            match ollama_client.poll_ps().await {
-                Ok(ps) => {
-                    if let Ok(mut state) = poll_state.write() {
-                        OllamaClient::update_state(ps, &mut state);
-                        state.last_error = None;
-                    }
-                }
-                Err(e) => {
-                    if let Ok(mut state) = poll_state.write() {
-                        state.last_error = Some(format!("Poll error: {}", e));
-                        state.running_models.clear();
-                    }
+            let new_records = claude_reader.poll_delta();
+            if !new_records.is_empty() {
+                if let Ok(mut state) = claude_state.write() {
+                    state.add_claude_records(new_records);
                 }
             }
         }
     });
 
-    // Run TUI
+    // Codex reader task
+    let codex_state = app_state.clone();
+    let mut codex_reader = CodexReader::new(args.codex_path.clone());
+    let codex_handle = task::spawn(async move {
+        let initial = codex_reader.scan_all();
+        if !initial.is_empty() {
+            if let Ok(mut state) = codex_state.write() {
+                state.add_codex_records(initial);
+            }
+        }
+
+        let mut interval = tokio::time::interval(Duration::from_secs(refresh));
+        loop {
+            interval.tick().await;
+            let new_records = codex_reader.poll_delta();
+            if !new_records.is_empty() {
+                if let Ok(mut state) = codex_state.write() {
+                    state.add_codex_records(new_records);
+                }
+            }
+        }
+    });
+
+    // TUI task
     let tui_state = app_state.clone();
     let tui_handle = task::spawn_blocking(move || {
         let mut terminal = ratatui::init();
-        let result = run_tui(&mut terminal, tui_state, proxy_port, &ollama_host);
+        let result = run_tui(&mut terminal, tui_state);
         ratatui::restore();
         result
     });
 
-    // Wait for TUI to finish (user pressed 'q')
     tui_handle.await??;
-
-    // Abort background tasks
-    proxy_handle.abort();
-    poll_handle.abort();
+    claude_handle.abort();
+    codex_handle.abort();
 
     Ok(())
 }
 
 fn run_tui(
-    terminal: &mut DefaultTerminal,
+    terminal: &mut ratatui::DefaultTerminal,
     app_state: Arc<RwLock<AppState>>,
-    proxy_port: u16,
-    ollama_host: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tick_rate = Duration::from_millis(250);
     let (mut event_loop, _tx) = EventLoop::new(tick_rate);
 
     loop {
         terminal.draw(|frame| {
-            ui::render(frame, &app_state, proxy_port, ollama_host);
+            ui::render(frame, &app_state);
         })?;
 
         if let Some(event) = event_loop.rx.blocking_recv() {
@@ -103,14 +99,22 @@ fn run_tui(
                 AppEvent::Tick => {}
                 AppEvent::Key(key) => match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Char('p') => {
-                        if let Ok(state) = app_state.write() {
-                            state.toggle_proxy_paused();
+                    KeyCode::Tab | KeyCode::Right => {
+                        if let Ok(mut state) = app_state.write() {
+                            state.active_tab = state.active_tab.next();
+                        }
+                    }
+                    KeyCode::Left => {
+                        if let Ok(mut state) = app_state.write() {
+                            state.active_tab = state.active_tab.prev();
                         }
                     }
                     KeyCode::Char('r') => {
                         if let Ok(mut state) = app_state.write() {
-                            state.clear_calls();
+                            match state.active_tab {
+                                state::Tab::ClaudeCode => state.clear_claude(),
+                                state::Tab::Codex => state.clear_codex(),
+                            }
                         }
                     }
                     _ => {}

@@ -1,30 +1,31 @@
 use clap::Parser;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "ollama-monitor")]
-#[command(about = "Real-time Ollama monitor with usage tracking")]
+#[command(name = "usage-monitor")]
+#[command(about = "Real-time Claude Code & Codex usage monitor")]
 pub struct Cli {
-    #[arg(short, long, default_value = "11435")]
-    pub proxy_port: u16,
+    /// Path to Claude Code data directory
+    #[arg(long, default_value_os_t = default_claude_path())]
+    pub claude_path: PathBuf,
 
-    #[arg(short = 'o', long, default_value = "127.0.0.1:11434")]
-    pub ollama_host: String,
+    /// Path to Codex data directory
+    #[arg(long, default_value_os_t = default_codex_path())]
+    pub codex_path: PathBuf,
 
-    #[arg(short, long, default_value_t = 2)]
+    /// Polling interval in seconds
+    #[arg(short, long, default_value_t = 5)]
     pub refresh: u64,
-
-    /// Takeover mode: proxy on 11434, forward to 11436
-    /// (requires Ollama to be restarted on port 11436)
-    #[arg(long, default_value_t = false)]
-    pub takeover: bool,
 }
 
-impl Cli {
-    pub fn effective(&self) -> (u16, String) {
-        if self.takeover {
-            (11434, "127.0.0.1:11436".to_string())
-        } else {
-            (self.proxy_port, self.ollama_host.clone())
-        }
-    }
+fn default_claude_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".claude/projects")
+}
+
+fn default_codex_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".codex")
 }

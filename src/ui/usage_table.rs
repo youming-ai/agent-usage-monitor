@@ -1,48 +1,53 @@
-use crate::state::AppState;
+use crate::state::UsageRecord;
 use ratatui::{
     layout::Constraint,
     style::{Color, Style},
     widgets::{Block, Borders, Cell, Row, Table},
 };
-use std::sync::{Arc, RwLock};
 
-pub fn usage_table_widget(app_state: &Arc<RwLock<AppState>>) -> Table<'static> {
-    let state = app_state.read().unwrap_or_else(|e| e.into_inner());
-    let rows: Vec<Row> = state
-        .recent_calls
+pub fn usage_table(records: &[UsageRecord], max: usize) -> Table<'static> {
+    let rows: Vec<Row> = records
         .iter()
         .rev()
-        .map(|c| {
+        .map(|r| {
             Row::new(vec![
-                Cell::from(c.timestamp.format("%H:%M:%S").to_string()),
-                Cell::from(c.model.clone()),
-                Cell::from(c.prompt_tokens.to_string()),
-                Cell::from(c.completion_tokens.to_string()),
-                Cell::from(format!("{}ms", c.total_duration_ms)),
-                Cell::from(format!("{:.1}", c.tokens_per_sec)),
+                Cell::from(r.timestamp.format("%H:%M:%S").to_string()),
+                Cell::from(r.model.clone()),
+                Cell::from(format_tokens(r.input_tokens)),
+                Cell::from(format_tokens(r.output_tokens)),
+                Cell::from(format!("${:.4}", r.cost_usd)),
             ])
         })
         .collect();
 
-    let header = Row::new(vec!["Time", "Model", "In", "Out", "Total", "T/s"])
+    let header = Row::new(vec!["Time", "Model", "In", "Out", "Cost"])
         .style(Style::default().fg(Color::Yellow));
 
     Table::new(
         rows,
         [
             Constraint::Percentage(15),
-            Constraint::Percentage(30),
-            Constraint::Percentage(12),
-            Constraint::Percentage(12),
+            Constraint::Percentage(35),
+            Constraint::Percentage(17),
+            Constraint::Percentage(17),
             Constraint::Percentage(16),
-            Constraint::Percentage(15),
         ],
     )
     .header(header)
     .block(
         Block::default()
-            .title(format!("Recent API Calls ({}/{}) ", state.recent_calls.len(), crate::state::MAX_RECENT_CALLS))
+            .title(format!("Recent API Calls ({}/{})", records.len(), max))
             .borders(Borders::ALL),
     )
     .row_highlight_style(Style::default().bg(Color::DarkGray))
+}
+
+fn format_tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
 }

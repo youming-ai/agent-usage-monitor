@@ -1,34 +1,32 @@
-use crate::state::AppState;
+use crate::state::Tab;
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use std::sync::{Arc, RwLock};
 
-pub fn status_bar_widget(
-    app_state: &Arc<RwLock<AppState>>,
-    proxy_port: u16,
-    ollama_host: &str,
+pub fn status_bar(
+    active_tab: Tab,
+    total_calls: usize,
+    total_cost: f64,
+    last_error: &Option<String>,
 ) -> Paragraph<'static> {
-    let state = app_state.read().unwrap_or_else(|e| e.into_inner());
-    let proxy_status = if state.is_proxy_paused() {
-        Span::styled("Proxy: PAUSED", Style::default().fg(Color::Red))
-    } else {
-        Span::styled("Proxy: ON", Style::default().fg(Color::Green))
-    };
+    let tab_label = active_tab.label();
 
-    let error_span = if let Some(ref err) = state.last_error {
+    let error_span = if let Some(err) = last_error.as_ref() {
         Span::styled(format!(" | ERROR: {}", err), Style::default().fg(Color::Red))
     } else {
         Span::raw("")
     };
 
     let line = Line::from(vec![
-        proxy_status,
+        Span::styled(
+            format!("[{}]", tab_label),
+            Style::default().fg(Color::Green),
+        ),
         Span::raw(format!(
-            " | {} → {} | Calls: {} | q:quit p:pause r:clr",
-            proxy_port, ollama_host, state.total_calls
+            " {} calls | ${:.2} | Tab:switch r:clear q:quit",
+            total_calls, total_cost
         )),
         error_span,
     ]);
