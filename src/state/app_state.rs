@@ -51,10 +51,9 @@ pub struct UsageRecord {
     pub request_id: String,
 }
 
-/// Aggregated session/project summary
+/// Aggregated model summary
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
-    pub project: String,
     pub model: String,
     pub total_input: u64,
     pub total_output: u64,
@@ -126,11 +125,9 @@ impl AppState {
 
     fn rebuild_claude_sessions(&mut self) {
         use std::collections::BTreeMap;
-        let mut map: BTreeMap<(String, String), SessionSummary> = BTreeMap::new();
+        let mut map: BTreeMap<String, SessionSummary> = BTreeMap::new();
         for r in &self.claude_records {
-            let key = (r.project.clone(), r.model.clone());
-            let entry = map.entry(key).or_insert_with(|| SessionSummary {
-                project: r.project.clone(),
+            let entry = map.entry(r.model.clone()).or_insert_with(|| SessionSummary {
                 model: r.model.clone(),
                 total_input: 0,
                 total_output: 0,
@@ -155,11 +152,9 @@ impl AppState {
 
     fn rebuild_codex_sessions(&mut self) {
         use std::collections::BTreeMap;
-        let mut map: BTreeMap<(String, String), SessionSummary> = BTreeMap::new();
+        let mut map: BTreeMap<String, SessionSummary> = BTreeMap::new();
         for r in &self.codex_records {
-            let key = (r.project.clone(), r.model.clone());
-            let entry = map.entry(key).or_insert_with(|| SessionSummary {
-                project: r.project.clone(),
+            let entry = map.entry(r.model.clone()).or_insert_with(|| SessionSummary {
                 model: r.model.clone(),
                 total_input: 0,
                 total_output: 0,

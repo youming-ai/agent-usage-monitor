@@ -10,7 +10,6 @@ pub fn session_table(sessions: &[SessionSummary], total_calls: usize) -> Table<'
         .iter()
         .map(|s| {
             Row::new(vec![
-                Cell::from(s.project.clone()),
                 Cell::from(s.model.clone()),
                 Cell::from(format_tokens(s.total_input)),
                 Cell::from(format_tokens(s.total_output)),
@@ -21,21 +20,18 @@ pub fn session_table(sessions: &[SessionSummary], total_calls: usize) -> Table<'
         })
         .collect();
 
-    let header = Row::new(vec![
-        "Project", "Model", "Input", "Output", "Cache", "Cost", "#",
-    ])
-    .style(Style::default().fg(Color::Yellow));
+    let header = Row::new(vec!["Model", "Input", "Output", "Cache", "Cost", "#"])
+        .style(Style::default().fg(Color::Yellow));
 
     Table::new(
         rows,
         [
-            Constraint::Percentage(25),
-            Constraint::Percentage(20),
-            Constraint::Percentage(13),
-            Constraint::Percentage(13),
-            Constraint::Percentage(13),
+            Constraint::Percentage(30),
+            Constraint::Percentage(16),
+            Constraint::Percentage(16),
+            Constraint::Percentage(16),
+            Constraint::Percentage(12),
             Constraint::Percentage(10),
-            Constraint::Percentage(6),
         ],
     )
     .header(header)
