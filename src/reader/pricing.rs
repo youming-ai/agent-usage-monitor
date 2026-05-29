@@ -26,7 +26,12 @@ const OPENAI_PRICING: &[PricingEntry] = &[
 ];
 
 fn find_price<'a>(model: &str, table: &'a [PricingEntry]) -> Option<&'a PricingEntry> {
-    table.iter().find(|e| model.contains(e.pattern))
+    // Pick the most specific match: a model like "gpt-4.1-mini" contains both
+    // "gpt-4.1" and "gpt-4.1-mini", and the longer (more specific) pattern wins.
+    table
+        .iter()
+        .filter(|e| model.contains(e.pattern))
+        .max_by_key(|e| e.pattern.len())
 }
 
 /// Calculate cost in USD for a single request.
@@ -49,4 +54,27 @@ pub fn calculate_cost(
     let cache_cost = (cache_read_tokens as f64 / 1_000_000.0) * e.cache_read;
 
     input_cost + output_cost + cache_cost
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mini_models_are_not_matched_by_their_base_pattern() {
+        // gpt-4.1-mini must use mini pricing (0.40 + 1.60), not gpt-4.1 (2.00 + 8.00).
+        let mini = calculate_cost("gpt-4.1-mini", 1_000_000, 1_000_000, 0, 0);
+        assert!(
+            (mini - 2.00).abs() < 1e-9,
+            "gpt-4.1-mini priced as {mini}, expected 2.00"
+        );
+
+        let base = calculate_cost("gpt-4.1", 1_000_000, 1_000_000, 0, 0);
+        assert!((base - 10.00).abs() < 1e-9, "gpt-4.1 priced as {base}, expected 10.00");
+    }
+
+    #[test]
+    fn unknown_model_is_free() {
+        assert_eq!(calculate_cost("totally-unknown", 1_000_000, 1_000_000, 0, 0), 0.0);
+    }
 }

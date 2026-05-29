@@ -1,11 +1,19 @@
 use super::{QuotaInfo, QuotaWindow};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
-/// Read Claude OAuth credentials from macOS Keychain
+/// Read Claude OAuth credentials, preferring the macOS Keychain and falling
+/// back to the `~/.claude/.credentials.json` file used on Linux (and some
+/// macOS setups).
 fn read_oauth_credentials() -> Option<Value> {
+    read_keychain_credentials().or_else(read_credentials_file)
+}
+
+/// Read Claude OAuth credentials from the macOS Keychain.
+fn read_keychain_credentials() -> Option<Value> {
     let output = Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
         .output()
@@ -17,6 +25,19 @@ fn read_oauth_credentials() -> Option<Value> {
 
     let raw = String::from_utf8(output.stdout).ok()?;
     serde_json::from_str(raw.trim()).ok()
+}
+
+fn credentials_file_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".claude")
+        .join(".credentials.json")
+}
+
+/// Read Claude OAuth credentials from `~/.claude/.credentials.json`.
+fn read_credentials_file() -> Option<Value> {
+    let raw = std::fs::read_to_string(credentials_file_path()).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 /// Extract access token from Keychain credentials
