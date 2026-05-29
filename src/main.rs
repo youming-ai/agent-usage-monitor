@@ -4,6 +4,7 @@ mod quota;
 mod reader;
 mod state;
 mod ui;
+mod updater;
 
 use crate::event::{AppEvent, EventLoop};
 use crate::reader::claude::ClaudeReader;
@@ -18,6 +19,17 @@ use tokio::task;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = cli::Cli::parse();
+
+    // Handle subcommands
+    match args.command {
+        Some(cli::Commands::Update { force, dry_run }) => {
+            return handle_update(force, dry_run);
+        }
+        None => {
+            // Continue with normal monitor mode
+        }
+    }
+
     let app_state = Arc::new(RwLock::new(AppState::new()));
 
     // Claude reader task (usage records)
@@ -132,6 +144,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     quota_handle.abort();
 
     Ok(())
+}
+
+fn handle_update(force: bool, dry_run: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("Usage Monitor Updater");
+    println!("====================");
+    println!("Current version: v{}", updater::current_version());
+    println!();
+
+    match updater::check_and_update(force, dry_run) {
+        Ok(result) => {
+            if result.updated {
+                println!("✓ {}", result.message);
+                println!();
+                println!("Please restart the application to use the new version.");
+            } else if dry_run {
+                println!("Dry run result:");
+                println!("  Current: v{}", result.old_version);
+                println!("  Latest:  v{}", result.new_version);
+                println!();
+                println!("{}", result.message);
+            } else {
+                println!("✓ {}", result.message);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn run_tui(

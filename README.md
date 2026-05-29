@@ -43,6 +43,15 @@ usage-monitor --claude-path /path/to/.claude/projects --codex-path /path/to/.cod
 
 # Adjust refresh rate (seconds)
 usage-monitor --refresh 2
+
+# Check for updates
+usage-monitor update
+
+# Check for updates without installing
+usage-monitor update --dry-run
+
+# Force update even if already on latest
+usage-monitor update --force
 ```
 
 ### CLI Options
@@ -53,6 +62,14 @@ usage-monitor --refresh 2
 | `--codex-path` | `~/.codex` | Codex data directory |
 | `-r, --refresh` | `5` | Polling interval in seconds |
 | `-h, --help` | | Print help |
+
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `update` | Check for updates and install the latest version |
+| `update --dry-run` | Show what would be updated without installing |
+| `update --force` | Force update even if already on latest version |
 
 ### Keybindings
 
