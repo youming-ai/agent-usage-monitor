@@ -6,7 +6,6 @@ use ratatui::{
 };
 
 pub fn session_table(active_tab: Tab, sessions: &[SessionSummary], total_calls: usize) -> Table<'static> {
-    let primary_color = active_tab.primary_color();
     let icon = active_tab.icon();
     let label = active_tab.label();
 
@@ -47,8 +46,8 @@ pub fn session_table(active_tab: Tab, sessions: &[SessionSummary], total_calls: 
         })
         .collect();
 
-    let header = Row::new(vec!["Model", "Input", "Output", "Cache", "Cost", "Level", "#"])
-        .style(Style::default().fg(primary_color).add_modifier(Modifier::BOLD));
+    let header = Row::new(vec!["MODEL", "INPUT", "OUTPUT", "CACHE", "COST", "LEVEL", "#"])
+        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
 
     Table::new(
         rows,
@@ -65,10 +64,8 @@ pub fn session_table(active_tab: Tab, sessions: &[SessionSummary], total_calls: 
     .header(header)
     .block(
         Block::default()
-            .title(format!(" {icon} {label} Sessions ({}) ", total_calls))
-            .title_style(Style::default().fg(primary_color).add_modifier(Modifier::BOLD))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(primary_color)),
+            .title(format!(" {icon} {label} SESSIONS ({}) ", total_calls))
+            .borders(Borders::ALL),
     )
     .row_highlight_style(Style::default().bg(Color::DarkGray))
 }

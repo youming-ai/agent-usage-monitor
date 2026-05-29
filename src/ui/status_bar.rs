@@ -43,7 +43,7 @@ pub fn status_bar(
         ),
         Span::raw("  "),
         Span::styled(
-            format!("{} calls", total_calls),
+            format!("{} CALLS", total_calls),
             Style::default().fg(Color::White),
         ),
         Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
@@ -54,7 +54,7 @@ pub fn status_bar(
         error_span,
         Span::raw("  "),
         Span::styled(
-            "Tab:switch │ r:clear │ q:quit",
+            "TAB:SWITCH │ R:CLEAR │ Q:QUIT",
             Style::default().fg(Color::DarkGray),
         ),
     ]);
@@ -62,7 +62,6 @@ pub fn status_bar(
     Paragraph::new(line).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(primary_color))
-            .title(" Status "),
+            .title(" STATUS "),
     )
 }

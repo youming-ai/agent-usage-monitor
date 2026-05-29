@@ -43,7 +43,7 @@ pub fn quota_bar(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'stati
                 let reset = window
                     .reset_in
                     .as_deref()
-                    .map(|r| format!("reset {r}"))
+                    .map(|r| format!("RESET {r}"))
                     .unwrap_or_default();
 
                 spans.push(Span::styled(
@@ -71,14 +71,14 @@ pub fn quota_bar(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'stati
 
             if !has_content {
                 spans.push(Span::styled(
-                    "No quota data",
+                    "NO QUOTA DATA",
                     Style::default().fg(Color::DarkGray),
                 ));
             }
         }
         None => {
             spans.push(Span::styled(
-                "Loading quota...",
+                "LOADING...",
                 Style::default().fg(Color::DarkGray),
             ));
         }
@@ -88,7 +88,6 @@ pub fn quota_bar(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'stati
     Paragraph::new(line).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(primary_color))
-            .title(" Quota Info "),
+            .title(" QUOTA INFO "),
     )
 }

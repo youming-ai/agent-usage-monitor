@@ -25,20 +25,18 @@ pub fn progress_bar(active_tab: Tab, remaining_percent: Option<f64>) -> Gauge<'s
     };
 
     let status_text = if remaining_percent.is_some() {
-        format!("{icon} {} {} {}% remaining", label, status_icon, percent_display)
+        format!("{icon} {} {} {}% REMAINING", label, status_icon, percent_display)
     } else {
-        format!("{icon} {}: No quota data", label)
+        format!("{icon} {}: NO QUOTA DATA", label)
     };
 
     Gauge::default()
         .block(
             Block::default()
-                .title(" Usage Progress ")
-                .title_style(Style::default().fg(primary_color).add_modifier(Modifier::BOLD))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(primary_color)),
+                .title(" USAGE PROGRESS ")
+                .borders(Borders::ALL),
         )
-        .gauge_style(Style::default().fg(gauge_color).bg(Color::DarkGray))
+        .gauge_style(Style::default().fg(Color::Green).bg(Color::DarkGray))
         .percent(percent_display)
         .label(Span::styled(status_text, Style::default().fg(Color::White)))
 }

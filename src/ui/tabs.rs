@@ -10,12 +10,14 @@ pub fn tab_bar(active: Tab) -> Tabs<'static> {
     let codex_color = Tab::Codex.primary_color();
     let claude_icon = Tab::ClaudeCode.icon();
     let codex_icon = Tab::Codex.icon();
+    let claude_label = Tab::ClaudeCode.label();
+    let codex_label = Tab::Codex.label();
 
     let titles = vec![
         Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                format!("{claude_icon} Claude Code "),
+                format!("{claude_icon} {claude_label} "),
                 Style::default()
                     .fg(claude_color)
                     .add_modifier(Modifier::BOLD),
@@ -24,7 +26,7 @@ pub fn tab_bar(active: Tab) -> Tabs<'static> {
         Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                format!("{codex_icon} Codex "),
+                format!("{codex_icon} {codex_label} "),
                 Style::default()
                     .fg(codex_color)
                     .add_modifier(Modifier::BOLD),
