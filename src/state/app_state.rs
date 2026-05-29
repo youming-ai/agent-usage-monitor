@@ -1,3 +1,4 @@
+use crate::quota::QuotaInfo;
 use chrono::{DateTime, Utc};
 
 pub const MAX_RECORDS: usize = 100;
@@ -38,16 +39,21 @@ impl Tab {
 #[derive(Debug, Clone)]
 pub struct UsageRecord {
     pub timestamp: DateTime<Utc>,
+    #[allow(dead_code)]
     pub platform: Platform,
     pub model: String,
+    #[allow(dead_code)]
     pub project: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cost_usd: f64,
+    #[allow(dead_code)]
     pub service_tier: String,
+    #[allow(dead_code)]
     pub message_id: String,
+    #[allow(dead_code)]
     pub request_id: String,
 }
 
@@ -71,12 +77,14 @@ pub struct AppState {
     pub claude_sessions: Vec<SessionSummary>,
     pub claude_total_calls: usize,
     pub claude_total_cost: f64,
+    pub claude_quota: Option<QuotaInfo>,
 
     // Codex
     pub codex_records: Vec<UsageRecord>,
     pub codex_sessions: Vec<SessionSummary>,
     pub codex_total_calls: usize,
     pub codex_total_cost: f64,
+    pub codex_quota: Option<QuotaInfo>,
 
     // Shared
     pub active_tab: Tab,
@@ -90,10 +98,12 @@ impl AppState {
             claude_sessions: Vec::new(),
             claude_total_calls: 0,
             claude_total_cost: 0.0,
+            claude_quota: None,
             codex_records: Vec::with_capacity(MAX_RECORDS),
             codex_sessions: Vec::new(),
             codex_total_calls: 0,
             codex_total_cost: 0.0,
+            codex_quota: None,
             active_tab: Tab::ClaudeCode,
             last_error: None,
         }

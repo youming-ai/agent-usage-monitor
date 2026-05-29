@@ -1,14 +1,15 @@
 # LLM Usage Monitor
 
-Real-time terminal monitoring tool for Claude Code & Codex API usage. Reads local JSONL files — no proxy, no API key, no interception.
+Real-time terminal monitoring tool for Claude Code & Codex API usage. Shows quota limits and token usage from local JSONL files.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Features
 
-- **Claude Code** — parses `~/.claude/projects/**/*.jsonl`
-- **Codex** — parses `~/.codex/sessions/**/rollout-*.jsonl`
+- **Claude Code** — parses `~/.claude/projects/**/*.jsonl` and shows quota from Anthropic API
+- **Codex** — parses `~/.codex/sessions/**/rollout-*.jsonl` and shows quota from OpenAI API
+- **Quota monitoring** — displays remaining usage percentage and reset times
 - **Dual-tab TUI** — switch between Claude Code / Codex views
 - **Token tracking** — input, output, cache read/creation tokens
 - **Cost calculation** — built-in pricing tables for Anthropic & OpenAI models
@@ -62,21 +63,42 @@ usage-monitor --refresh 2
 
 ## How it works
 
+### Quota Information
+
+The tool reads quota information from the official APIs:
+
+- **Claude Code**: Reads OAuth credentials from macOS Keychain (`Claude Code-credentials`) and calls `https://api.anthropic.com/api/oauth/usage`
+- **Codex**: Reads access token from `~/.codex/auth.json` and calls `https://chatgpt.com/backend-api/wham/usage`
+
+### Usage Records
+
 Claude Code and Codex automatically write usage data to local files:
 
 - **Claude Code**: Each API call is logged as a JSONL entry in `~/.claude/projects/<project>/<session>.jsonl`, containing token counts, model name, and timestamps.
 - **Codex**: Session rollouts are logged in `~/.codex/sessions/YYYY/MM/DD/rollout-<id>.jsonl`, with `token_count` events tracking cumulative usage.
 
-This tool reads those files directly — no network calls, no API keys, no proxy needed.
+This tool reads those files directly — no network calls for usage records, no API keys needed.
 
 ## Supported Platforms
 
-| Platform | Data Source |
-|----------|-------------|
-| Claude Code | `~/.claude/projects/**/*.jsonl` |
-| Codex | `~/.codex/sessions/**/rollout-*.jsonl` |
+| Platform | Data Source | Quota API |
+|----------|-------------|-----------|
+| Claude Code | `~/.claude/projects/**/*.jsonl` | `api.anthropic.com/api/oauth/usage` |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl` | `chatgpt.com/backend-api/wham/usage` |
 
 Cost is calculated from built-in pricing tables for Anthropic and OpenAI models. Unknown models show $0.00.
+
+## Quota Display
+
+The quota bar shows:
+- **Remaining percentage** — how much quota is left
+- **Reset time** — when the quota window resets
+- **Account info** — authenticated email address
+
+Example:
+```
+Claude Code │ ✓ youmin.tang@elestyle.jp │ 5h remain 84% · reset 1h19m │ 7d remain 97% · reset 6d
+```
 
 ## License
 

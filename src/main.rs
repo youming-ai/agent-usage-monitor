@@ -1,5 +1,6 @@
 mod cli;
 mod event;
+mod quota;
 mod reader;
 mod state;
 mod ui;
@@ -19,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = cli::Cli::parse();
     let app_state = Arc::new(RwLock::new(AppState::new()));
 
-    // Claude reader task
+    // Claude reader task (usage records)
     let claude_state = app_state.clone();
     let mut claude_reader = ClaudeReader::new(args.claude_path.clone());
     let refresh = args.refresh;
@@ -43,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
-    // Codex reader task
+    // Codex reader task (usage records)
     let codex_state = app_state.clone();
     let mut codex_reader = CodexReader::new(args.codex_path.clone());
     let codex_handle = task::spawn(async move {
@@ -66,6 +67,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
+    // Quota reader task (Claude Code & Codex limits)
+    let quota_state = app_state.clone();
+    let quota_handle = task::spawn(async move {
+        // Initial fetch
+        {
+            if let Some(quota) = quota::claude::fetch_quota() {
+                if let Ok(mut state) = quota_state.write() {
+                    state.claude_quota = Some(quota);
+                }
+            }
+            if let Some(quota) = quota::codex::fetch_quota() {
+                if let Ok(mut state) = quota_state.write() {
+                    state.codex_quota = Some(quota);
+                }
+            }
+        }
+
+        // Refresh every 2 minutes
+        let mut interval = tokio::time::interval(Duration::from_secs(120));
+        loop {
+            interval.tick().await;
+
+            // Only refresh if stale
+            let needs_refresh = {
+                let state = quota_state.read().unwrap();
+                state
+                    .claude_quota
+                    .as_ref()
+                    .map_or(true, |q| q.is_stale())
+                    || state
+                        .codex_quota
+                        .as_ref()
+                        .map_or(true, |q| q.is_stale())
+            };
+
+            if needs_refresh {
+                if let Some(quota) = quota::claude::fetch_quota() {
+                    if let Ok(mut state) = quota_state.write() {
+                        state.claude_quota = Some(quota);
+                    }
+                }
+                if let Some(quota) = quota::codex::fetch_quota() {
+                    if let Ok(mut state) = quota_state.write() {
+                        state.codex_quota = Some(quota);
+                    }
+                }
+            }
+        }
+    });
+
     // TUI task
     let tui_state = app_state.clone();
     let tui_handle = task::spawn_blocking(move || {
@@ -78,6 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tui_handle.await??;
     claude_handle.abort();
     codex_handle.abort();
+    quota_handle.abort();
 
     Ok(())
 }
