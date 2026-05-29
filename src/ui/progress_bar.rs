@@ -1,6 +1,6 @@
 use crate::state::Tab;
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::Span,
     widgets::{Block, Borders, Gauge},
 };
@@ -8,12 +8,8 @@ use ratatui::{
 pub fn progress_bar(active_tab: Tab, remaining_percent: Option<f64>) -> Gauge<'static> {
     let label = active_tab.label();
     let icon = active_tab.icon();
-    let primary_color = active_tab.primary_color();
     let percent = remaining_percent.unwrap_or(0.0);
     let percent_display = (percent * 100.0).round() as u16;
-
-    // Use platform-specific color for the gauge
-    let gauge_color = primary_color;
 
     // Status indicator based on remaining percentage
     let status_icon = if percent >= 0.5 {

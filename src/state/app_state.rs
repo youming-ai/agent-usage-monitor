@@ -43,6 +43,7 @@ impl Tab {
     }
 
     /// Secondary color (lighter, for backgrounds)
+    #[allow(dead_code)]
     pub fn secondary_color(self) -> ratatui::style::Color {
         match self {
             Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 200, 100),  // Light Orange
