@@ -6,27 +6,53 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+const SEPARATOR: &str = " │ ";
+
 pub fn quota_bar(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'static> {
     let label = active_tab.label();
 
-    let (status_text, _status_color) = match quota {
+    let mut spans = vec![
+        Span::styled(format!("  {label}  "), Style::default().fg(Color::Yellow)),
+        Span::styled(SEPARATOR, Style::default().fg(Color::DarkGray)),
+    ];
+
+    match quota {
         Some(quota) => {
-            let mut parts = Vec::new();
+            let mut has_content = false;
 
             // Add email/account info
             if let Some(email) = &quota.email {
-                parts.push(Span::styled(
+                spans.push(Span::styled(
                     format!("✓ {email}"),
                     Style::default().fg(Color::Green),
                 ));
+                has_content = true;
             }
 
             // Add quota windows
             for window in &quota.windows {
+                if has_content {
+                    spans.push(Span::styled(SEPARATOR, Style::default().fg(Color::DarkGray)));
+                }
+
                 let percent = window
                     .remaining_percent
                     .map(|p| format!("{}%", (p * 100.0).round() as u64))
                     .unwrap_or_else(|| "?%".to_string());
+
+                // Color based on remaining percentage
+                let percent_color = window
+                    .remaining_percent
+                    .map(|p| {
+                        if p >= 0.5 {
+                            Color::Green
+                        } else if p >= 0.2 {
+                            Color::Yellow
+                        } else {
+                            Color::Red
+                        }
+                    })
+                    .unwrap_or(Color::White);
 
                 let reset = window
                     .reset_in
@@ -34,42 +60,43 @@ pub fn quota_bar(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'stati
                     .map(|r| format!(" · reset {r}"))
                     .unwrap_or_default();
 
-                parts.push(Span::raw(format!(
-                    "{} remain {percent}{reset}",
-                    window.label
-                )));
+                spans.push(Span::styled(
+                    format!("{} remain ", window.label),
+                    Style::default().fg(Color::White),
+                ));
+                spans.push(Span::styled(percent, Style::default().fg(percent_color)));
+                if !reset.is_empty() {
+                    spans.push(Span::styled(reset, Style::default().fg(Color::DarkGray)));
+                }
+
+                has_content = true;
             }
 
+            // Add error if present
             if let Some(err) = &quota.error {
-                parts.push(Span::styled(
+                if has_content {
+                    spans.push(Span::styled(SEPARATOR, Style::default().fg(Color::DarkGray)));
+                }
+                spans.push(Span::styled(
                     format!("✗ {err}"),
                     Style::default().fg(Color::Red),
                 ));
             }
 
-            if parts.is_empty() {
-                (
-                    vec![Span::raw("No quota data")],
-                    Color::DarkGray,
-                )
-            } else {
-                (parts, Color::Cyan)
+            if !has_content {
+                spans.push(Span::styled(
+                    "No quota data",
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
         }
-        None => (
-            vec![Span::styled(
+        None => {
+            spans.push(Span::styled(
                 "Loading quota...",
                 Style::default().fg(Color::DarkGray),
-            )],
-            Color::DarkGray,
-        ),
-    };
-
-    let mut spans = vec![
-        Span::styled(format!("  {label}  "), Style::default().fg(Color::Yellow)),
-        Span::raw("│ "),
-    ];
-    spans.extend(status_text);
+            ));
+        }
+    }
 
     let line = Line::from(spans);
     Paragraph::new(line).block(
