@@ -12,17 +12,20 @@ pub fn progress_bar(active_tab: Tab, remaining_percent: Option<f64>) -> Gauge<'s
     let percent = remaining_percent.unwrap_or(0.0);
     let percent_display = (percent * 100.0).round() as u16;
 
-    // Color based on remaining percentage
-    let gauge_color = if percent >= 0.5 {
-        Color::Green
+    // Use platform-specific color for the gauge
+    let gauge_color = primary_color;
+
+    // Status indicator based on remaining percentage
+    let status_icon = if percent >= 0.5 {
+        "✓"
     } else if percent >= 0.2 {
-        Color::Yellow
+        "⚠"
     } else {
-        Color::Red
+        "✗"
     };
 
     let status_text = if remaining_percent.is_some() {
-        format!("{icon} {}: {}% remaining", label, percent_display)
+        format!("{icon} {} {} {}% remaining", label, status_icon, percent_display)
     } else {
         format!("{icon} {}: No quota data", label)
     };

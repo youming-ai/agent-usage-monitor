@@ -110,13 +110,14 @@ Cost is calculated from built-in pricing tables for Anthropic and OpenAI models.
 
 ```
 ┌─────────────────────────────────────┐
-│ Ollama Monitor                      │ ← Tab bar (Claude Code / Codex)
+│ Usage Monitor                       │ ← Tab bar
+│ [☁ CLAUDE] │ [⚡ CODEX]            │
 ├─────────────────────────────────────┤
 │ Quota Info                          │ ← Account & quota window info
 ├─────────────────────────────────────┤
 │ Usage Progress ████████░░ 84%       │ ← Visual progress bar
 ├─────────────────────────────────────┤
-│ Sessions (12)                       │ ← Model usage table
+│ ☁ CLAUDE Sessions (12)             │ ← Model usage table
 │ Model      Input  Output  Cost      │
 │ claude-3   1.2M   340k    $2.45     │
 │ gpt-4      890k   120k    $1.23     │
@@ -124,6 +125,12 @@ Cost is calculated from built-in pricing tables for Anthropic and OpenAI models.
 │ Status  12 calls │ $3.68           │ ← Status bar
 └─────────────────────────────────────┘
 ```
+
+### Color Themes
+
+Each platform has its own color theme:
+- **CLAUDE**: Orange (RGB 255, 165, 0) — borders, headers, badges
+- **CODEX**: Blue (RGB 59, 130, 246) — borders, headers, badges
 
 ### Quota Display
 
@@ -139,8 +146,8 @@ The progress bar shows:
 
 Example:
 ```
-Quota Info:  ✓ youmin.tang@elestyle.jp │ 5h window reset 1h19m │ 7d window reset 6d
-Usage Progress: Claude Code: 84% remaining  ████████████████░░░░░░░░░░░░░░░░░░░░░░░░
+☁ CLAUDE │ ✓ youmin.tang@elestyle.jp │ 5h window reset 1h19m │ 7d window reset 6d
+☁ CLAUDE: 84% remaining  ████████████████░░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
 ## License
