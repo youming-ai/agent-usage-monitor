@@ -35,37 +35,18 @@ pub fn quota_bar(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'stati
                     spans.push(Span::styled(SEPARATOR, Style::default().fg(Color::DarkGray)));
                 }
 
-                let percent = window
-                    .remaining_percent
-                    .map(|p| format!("{}%", (p * 100.0).round() as u64))
-                    .unwrap_or_else(|| "?%".to_string());
-
-                // Color based on remaining percentage
-                let percent_color = window
-                    .remaining_percent
-                    .map(|p| {
-                        if p >= 0.5 {
-                            Color::Green
-                        } else if p >= 0.2 {
-                            Color::Yellow
-                        } else {
-                            Color::Red
-                        }
-                    })
-                    .unwrap_or(Color::White);
-
                 let reset = window
                     .reset_in
                     .as_deref()
-                    .map(|r| format!(" · reset {r}"))
+                    .map(|r| format!("reset {r}"))
                     .unwrap_or_default();
 
                 spans.push(Span::styled(
-                    format!("{} remain ", window.label),
+                    format!("{}", window.label),
                     Style::default().fg(Color::White),
                 ));
-                spans.push(Span::styled(percent, Style::default().fg(percent_color)));
                 if !reset.is_empty() {
+                    spans.push(Span::raw(" "));
                     spans.push(Span::styled(reset, Style::default().fg(Color::DarkGray)));
                 }
 
@@ -102,6 +83,6 @@ pub fn quota_bar(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'stati
     Paragraph::new(line).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Quota "),
+            .title(" Quota Info "),
     )
 }

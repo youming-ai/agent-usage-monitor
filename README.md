@@ -10,8 +10,9 @@ Real-time terminal monitoring tool for Claude Code & Codex API usage. Shows quot
 - **Claude Code** — parses `~/.claude/projects/**/*.jsonl` and shows quota from Anthropic API
 - **Codex** — parses `~/.codex/sessions/**/rollout-*.jsonl` and shows quota from OpenAI API
 - **Quota monitoring** — displays remaining usage percentage and reset times
+- **Progress bar** — visual gauge showing quota usage with color-coded warnings
 - **Dual-tab TUI** — switch between Claude Code / Codex views
-- **Token tracking** — input, output, cache read/creation tokens
+- **Token tracking** — input, output, cache read/creation tokens with cost level indicators
 - **Cost calculation** — built-in pricing tables for Anthropic & OpenAI models
 - **Real-time polling** — configurable refresh interval
 
@@ -88,16 +89,41 @@ This tool reads those files directly — no network calls for usage records, no 
 
 Cost is calculated from built-in pricing tables for Anthropic and OpenAI models. Unknown models show $0.00.
 
-## Quota Display
+## TUI Layout
 
-The quota bar shows:
-- **Remaining percentage** — how much quota is left
-- **Reset time** — when the quota window resets
+```
+┌─────────────────────────────────────┐
+│ Ollama Monitor                      │ ← Tab bar (Claude Code / Codex)
+├─────────────────────────────────────┤
+│ Quota Info                          │ ← Account & quota window info
+├─────────────────────────────────────┤
+│ Usage Progress ████████░░ 84%       │ ← Visual progress bar
+├─────────────────────────────────────┤
+│ Sessions (12)                       │ ← Model usage table
+│ Model      Input  Output  Cost      │
+│ claude-3   1.2M   340k    $2.45     │
+│ gpt-4      890k   120k    $1.23     │
+├─────────────────────────────────────┤
+│ Status  12 calls │ $3.68           │ ← Status bar
+└─────────────────────────────────────┘
+```
+
+### Quota Display
+
+The quota info bar shows:
 - **Account info** — authenticated email address
+- **Reset time** — when the quota window resets
+
+The progress bar shows:
+- **Remaining percentage** — visual gauge with color coding
+  - 🟢 Green: ≥50% remaining
+  - 🟡 Yellow: ≥20% remaining
+  - 🔴 Red: <20% remaining
 
 Example:
 ```
-Claude Code │ ✓ youmin.tang@elestyle.jp │ 5h remain 84% · reset 1h19m │ 7d remain 97% · reset 6d
+Quota Info:  ✓ youmin.tang@elestyle.jp │ 5h window reset 1h19m │ 7d window reset 6d
+Usage Progress: Claude Code: 84% remaining  ████████████████░░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
 ## License
