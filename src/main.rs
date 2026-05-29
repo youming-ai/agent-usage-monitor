@@ -38,21 +38,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let refresh = args.refresh;
     let claude_handle = task::spawn(async move {
         let initial = claude_reader.scan_all();
-        if !initial.is_empty() {
-            if let Ok(mut state) = claude_state.write() {
+        if !initial.is_empty()
+            && let Ok(mut state) = claude_state.write() {
                 state.add_claude_records(initial);
             }
-        }
 
         let mut interval = tokio::time::interval(Duration::from_secs(refresh));
         loop {
             interval.tick().await;
             let new_records = claude_reader.poll_delta();
-            if !new_records.is_empty() {
-                if let Ok(mut state) = claude_state.write() {
+            if !new_records.is_empty()
+                && let Ok(mut state) = claude_state.write() {
                     state.add_claude_records(new_records);
                 }
-            }
         }
     });
 
@@ -61,21 +59,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut codex_reader = CodexReader::new(args.codex_path.clone());
     let codex_handle = task::spawn(async move {
         let initial = codex_reader.scan_all();
-        if !initial.is_empty() {
-            if let Ok(mut state) = codex_state.write() {
+        if !initial.is_empty()
+            && let Ok(mut state) = codex_state.write() {
                 state.add_codex_records(initial);
             }
-        }
 
         let mut interval = tokio::time::interval(Duration::from_secs(refresh));
         loop {
             interval.tick().await;
             let new_records = codex_reader.poll_delta();
-            if !new_records.is_empty() {
-                if let Ok(mut state) = codex_state.write() {
+            if !new_records.is_empty()
+                && let Ok(mut state) = codex_state.write() {
                     state.add_codex_records(new_records);
                 }
-            }
         }
     });
 
@@ -84,16 +80,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let quota_handle = task::spawn(async move {
         // Initial fetch
         {
-            if let Some(quota) = quota::claude::fetch_quota() {
-                if let Ok(mut state) = quota_state.write() {
+            if let Some(quota) = quota::claude::fetch_quota()
+                && let Ok(mut state) = quota_state.write() {
                     state.claude_quota = Some(quota);
                 }
-            }
-            if let Some(quota) = quota::codex::fetch_quota() {
-                if let Ok(mut state) = quota_state.write() {
+            if let Some(quota) = quota::codex::fetch_quota()
+                && let Ok(mut state) = quota_state.write() {
                     state.codex_quota = Some(quota);
                 }
-            }
         }
 
         // Refresh every 2 minutes
@@ -107,24 +101,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 state
                     .claude_quota
                     .as_ref()
-                    .map_or(true, |q| q.is_stale())
+                    .is_none_or(|q| q.is_stale())
                     || state
                         .codex_quota
                         .as_ref()
-                        .map_or(true, |q| q.is_stale())
+                        .is_none_or(|q| q.is_stale())
             };
 
             if needs_refresh {
-                if let Some(quota) = quota::claude::fetch_quota() {
-                    if let Ok(mut state) = quota_state.write() {
+                if let Some(quota) = quota::claude::fetch_quota()
+                    && let Ok(mut state) = quota_state.write() {
                         state.claude_quota = Some(quota);
                     }
-                }
-                if let Some(quota) = quota::codex::fetch_quota() {
-                    if let Ok(mut state) = quota_state.write() {
+                if let Some(quota) = quota::codex::fetch_quota()
+                    && let Ok(mut state) = quota_state.write() {
                         state.codex_quota = Some(quota);
                     }
-                }
             }
         }
     });

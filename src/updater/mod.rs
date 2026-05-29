@@ -1,7 +1,7 @@
 mod platform;
 
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const REPO: &str = "youming-ai/llm-usage-monitor";
 const BINARY_NAME: &str = "usage-monitor";
@@ -102,7 +102,7 @@ fn fetch_latest_release() -> Result<Release, String> {
 }
 
 /// Download and install the new binary
-fn download_and_install(url: &str, target_path: &PathBuf) -> Result<(), String> {
+fn download_and_install(url: &str, target_path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     
     // Create a temporary directory
@@ -170,14 +170,13 @@ fn download_and_install(url: &str, target_path: &PathBuf) -> Result<(), String> 
 }
 
 /// Check if a path is writable
-fn is_writable(path: &PathBuf) -> bool {
-    if let Some(parent) = path.parent() {
-        if let Ok(metadata) = std::fs::metadata(parent) {
+fn is_writable(path: &Path) -> bool {
+    if let Some(parent) = path.parent()
+        && let Ok(metadata) = std::fs::metadata(parent) {
             use std::os::unix::fs::MetadataExt;
             // Check if we own the directory or have write permission
             let uid = unsafe { libc::getuid() };
             return metadata.uid() == uid || (metadata.mode() & 0o002) != 0;
         }
-    }
     false
 }

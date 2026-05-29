@@ -9,10 +9,9 @@ Real-time terminal monitoring tool for Claude Code & Codex API usage. Shows quot
 
 - **Claude Code** — parses `~/.claude/projects/**/*.jsonl` and shows quota from Anthropic API
 - **Codex** — parses `~/.codex/sessions/**/rollout-*.jsonl` and shows quota from OpenAI API
-- **Quota monitoring** — displays remaining usage percentage and reset times
-- **Progress bar** — visual gauge showing quota usage with color-coded warnings
+- **Quota monitoring** — one bar per quota window showing remaining usage and reset time
 - **Dual-tab TUI** — switch between Claude Code / Codex views
-- **Token tracking** — input, output, cache read/creation tokens with cost level indicators
+- **Token tracking** — input, output, and cache tokens per model
 - **Cost calculation** — built-in pricing tables for Anthropic & OpenAI models
 - **Real-time polling** — configurable refresh interval
 
@@ -109,48 +108,43 @@ Cost is calculated from built-in pricing tables for Anthropic and OpenAI models.
 ## TUI Layout
 
 ```
-┌─────────────────────────────────────┐
-│ USAGE MONITOR                       │ ← Tab bar
-│ [☁ CLAUDE] │ [⚡ CODEX]            │
-├─────────────────────────────────────┤
-│ QUOTA INFO                          │ ← Account & quota window info
-├─────────────────────────────────────┤
-│ USAGE PROGRESS ████████░░ 84%       │ ← Visual progress bar
-├─────────────────────────────────────┤
-│ ☁ CLAUDE SESSIONS (12)              │ ← Model usage table
-│ MODEL    INPUT  OUTPUT  COST        │
-│ claude-3 1.2M   340k    $2.45       │
-│ gpt-4    890k   120k    $1.23       │
-├─────────────────────────────────────┤
-│ ☁ CLAUDE │ 12 CALLS │ $3.68        │ ← Status bar
-└─────────────────────────────────────┘
+ ☁ CLAUDE   ⚡ codex                        ✓ you@mail.com   ← tabs + account
+────────────────────────────────────────────────────────   ← accent rule
+ ✓ 5h ▓▓▓▓▓▓▓▓▓▓░░  82%  resets 2h30m                        ← quota window
+ ✓ 7d ▓▓▓▓▓▓░░░░░░  54%  resets 4d6h                         ← quota window
+┌ ☁ CLAUDE sessions (42) ──────────────────────────────────┐
+│ MODEL          INPUT   OUTPUT   CACHE     COST     #       │ ← per-model totals
+│ claude-opus-4  1.2M    340.0k   8.1M      $12.34   42      │
+└────────────────────────────────────────────────────────────┘
+┌ ☁ recent calls ──────────────────────────────────────────┐
+│ TIME      MODEL            IN      OUT     COST            │ ← real-time feed
+│ 19:45:23  claude-opus-4    8.4k    512     $0.044          │   (newest first)
+│ 19:45:21  claude-opus-4    1.2k    340     $0.018          │
+└────────────────────────────────────────────────────────────┘
+ 42 calls · $12.34                              tab·r·q       ← status line
 ```
 
-### Color Themes
+### Colors
 
-Only the tab bar uses platform-specific colors:
-- **CLAUDE**: Orange (RGB 255, 165, 0) — tab highlight & border
-- **CODEX**: Blue (RGB 59, 130, 246) — tab highlight & border
+The palette is intentionally minimal: a single platform accent color plus the
+terminal's default foreground, with secondary text dimmed.
 
-All other UI components use default colors for reduced visual noise.
+- **CLAUDE**: Orange (RGB 255, 165, 0)
+- **CODEX**: Blue (RGB 59, 130, 246)
+
+The accent is used only for the active tab, the header rule, and the filled
+portion of the quota bars. Everything else uses default/dim colors.
 
 ### Quota Display
 
-The quota info bar shows:
-- **Account info** — authenticated email address
-- **Reset time** — when the quota window resets
+Each quota window is shown as its own bar with the remaining fraction filled in
+the accent color, plus a status glyph (color is not relied on for status):
 
-The progress bar shows:
-- **Remaining percentage** — visual gauge with green fill
-  - ✓ ≥50% remaining
-  - ⚠ ≥20% remaining
-  - ✗ <20% remaining
+- ✓ ≥50% remaining
+- ⚠ ≥20% remaining
+- ✗ <20% remaining
 
-Example:
-```
-☁ CLAUDE │ ✓ youmin.tang@elestyle.jp │ 5H RESET 1H19M │ 7D RESET 6D
-☁ CLAUDE ✓ 84% REMAINING  ████████████████░░░░░░░░░░░░░░░░░░░░░░░░
-```
+The header shows the authenticated account; each bar shows its reset time.
 
 ## License
 

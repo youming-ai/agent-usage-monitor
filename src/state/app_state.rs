@@ -113,7 +113,6 @@ pub struct AppState {
 
     // Shared
     pub active_tab: Tab,
-    pub last_error: Option<String>,
 }
 
 impl AppState {
@@ -130,7 +129,6 @@ impl AppState {
             codex_total_cost: 0.0,
             codex_quota: None,
             active_tab: Tab::ClaudeCode,
-            last_error: None,
         }
     }
 
