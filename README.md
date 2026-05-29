@@ -110,27 +110,29 @@ Cost is calculated from built-in pricing tables for Anthropic and OpenAI models.
 
 ```
 ┌─────────────────────────────────────┐
-│ Usage Monitor                       │ ← Tab bar
+│ USAGE MONITOR                       │ ← Tab bar
 │ [☁ CLAUDE] │ [⚡ CODEX]            │
 ├─────────────────────────────────────┤
-│ Quota Info                          │ ← Account & quota window info
+│ QUOTA INFO                          │ ← Account & quota window info
 ├─────────────────────────────────────┤
-│ Usage Progress ████████░░ 84%       │ ← Visual progress bar
+│ USAGE PROGRESS ████████░░ 84%       │ ← Visual progress bar
 ├─────────────────────────────────────┤
-│ ☁ CLAUDE Sessions (12)             │ ← Model usage table
-│ Model      Input  Output  Cost      │
-│ claude-3   1.2M   340k    $2.45     │
-│ gpt-4      890k   120k    $1.23     │
+│ ☁ CLAUDE SESSIONS (12)              │ ← Model usage table
+│ MODEL    INPUT  OUTPUT  COST        │
+│ claude-3 1.2M   340k    $2.45       │
+│ gpt-4    890k   120k    $1.23       │
 ├─────────────────────────────────────┤
-│ Status  12 calls │ $3.68           │ ← Status bar
+│ ☁ CLAUDE │ 12 CALLS │ $3.68        │ ← Status bar
 └─────────────────────────────────────┘
 ```
 
 ### Color Themes
 
-Each platform has its own color theme:
-- **CLAUDE**: Orange (RGB 255, 165, 0) — borders, headers, badges
-- **CODEX**: Blue (RGB 59, 130, 246) — borders, headers, badges
+Only the tab bar uses platform-specific colors:
+- **CLAUDE**: Orange (RGB 255, 165, 0) — tab highlight & border
+- **CODEX**: Blue (RGB 59, 130, 246) — tab highlight & border
+
+All other UI components use default colors for reduced visual noise.
 
 ### Quota Display
 
@@ -139,15 +141,15 @@ The quota info bar shows:
 - **Reset time** — when the quota window resets
 
 The progress bar shows:
-- **Remaining percentage** — visual gauge with color coding
-  - 🟢 Green: ≥50% remaining
-  - 🟡 Yellow: ≥20% remaining
-  - 🔴 Red: <20% remaining
+- **Remaining percentage** — visual gauge with green fill
+  - ✓ ≥50% remaining
+  - ⚠ ≥20% remaining
+  - ✗ <20% remaining
 
 Example:
 ```
-☁ CLAUDE │ ✓ youmin.tang@elestyle.jp │ 5h window reset 1h19m │ 7d window reset 6d
-☁ CLAUDE: 84% remaining  ████████████████░░░░░░░░░░░░░░░░░░░░░░░░
+☁ CLAUDE │ ✓ youmin.tang@elestyle.jp │ 5H RESET 1H19M │ 7D RESET 6D
+☁ CLAUDE ✓ 84% REMAINING  ████████████████░░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
 ## License
