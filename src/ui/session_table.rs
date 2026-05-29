@@ -1,11 +1,15 @@
-use crate::state::SessionSummary;
+use crate::state::{SessionSummary, Tab};
 use ratatui::{
     layout::Constraint,
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Row, Table},
 };
 
-pub fn session_table(sessions: &[SessionSummary], total_calls: usize) -> Table<'static> {
+pub fn session_table(active_tab: Tab, sessions: &[SessionSummary], total_calls: usize) -> Table<'static> {
+    let primary_color = active_tab.primary_color();
+    let icon = active_tab.icon();
+    let label = active_tab.label();
+
     let rows: Vec<Row> = sessions
         .iter()
         .map(|s| {
@@ -20,20 +24,31 @@ pub fn session_table(sessions: &[SessionSummary], total_calls: usize) -> Table<'
                 "○○○"
             };
 
+            // Color cost indicator based on level
+            let indicator_color = if s.total_cost >= 10.0 {
+                Color::Red
+            } else if s.total_cost >= 1.0 {
+                Color::Yellow
+            } else if s.total_cost >= 0.1 {
+                Color::Green
+            } else {
+                Color::DarkGray
+            };
+
             Row::new(vec![
                 Cell::from(s.model.clone()),
                 Cell::from(format_tokens(s.total_input)),
                 Cell::from(format_tokens(s.total_output)),
                 Cell::from(format_tokens(s.total_cache_read)),
                 Cell::from(format!("${:.2}", s.total_cost)),
-                Cell::from(cost_indicator),
+                Cell::from(cost_indicator).style(Style::default().fg(indicator_color)),
                 Cell::from(s.request_count.to_string()),
             ])
         })
         .collect();
 
     let header = Row::new(vec!["Model", "Input", "Output", "Cache", "Cost", "Level", "#"])
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        .style(Style::default().fg(primary_color).add_modifier(Modifier::BOLD));
 
     Table::new(
         rows,
@@ -50,9 +65,10 @@ pub fn session_table(sessions: &[SessionSummary], total_calls: usize) -> Table<'
     .header(header)
     .block(
         Block::default()
-            .title(format!(" Sessions ({}) ", total_calls))
+            .title(format!(" {icon} {label} Sessions ({}) ", total_calls))
+            .title_style(Style::default().fg(primary_color).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default().fg(primary_color)),
     )
     .row_highlight_style(Style::default().bg(Color::DarkGray))
 }

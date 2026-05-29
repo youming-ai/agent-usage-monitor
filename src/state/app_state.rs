@@ -33,6 +33,30 @@ impl Tab {
             Tab::Codex => "Codex",
         }
     }
+
+    /// Primary color for the tab (used for borders and accents)
+    pub fn primary_color(self) -> ratatui::style::Color {
+        match self {
+            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 165, 0),  // Orange
+            Tab::Codex => ratatui::style::Color::Rgb(138, 43, 226),     // Purple
+        }
+    }
+
+    /// Secondary color (lighter, for backgrounds)
+    pub fn secondary_color(self) -> ratatui::style::Color {
+        match self {
+            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 200, 100),  // Light Orange
+            Tab::Codex => ratatui::style::Color::Rgb(180, 120, 255),      // Light Purple
+        }
+    }
+
+    /// Icon for the tab
+    pub fn icon(self) -> &'static str {
+        match self {
+            Tab::ClaudeCode => "☁",
+            Tab::Codex => "⚡",
+        }
+    }
 }
 
 /// Single API call record

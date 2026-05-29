@@ -56,7 +56,7 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     );
 
     // Render session table
-    frame.render_widget(session_table::session_table(sessions, total_calls), chunks[3]);
+    frame.render_widget(session_table::session_table(state.active_tab, sessions, total_calls), chunks[3]);
 
     // Render status bar
     frame.render_widget(

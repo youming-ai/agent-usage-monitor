@@ -1,7 +1,7 @@
 use crate::quota::QuotaInfo;
 use crate::state::Tab;
 use ratatui::{
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -10,9 +10,14 @@ const SEPARATOR: &str = " │ ";
 
 pub fn quota_bar(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'static> {
     let label = active_tab.label();
+    let icon = active_tab.icon();
+    let primary_color = active_tab.primary_color();
 
     let mut spans = vec![
-        Span::styled(format!("  {label}  "), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            format!(" {icon} {label} "),
+            Style::default().fg(Color::Black).bg(primary_color).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(SEPARATOR, Style::default().fg(Color::DarkGray)),
     ];
 
@@ -83,6 +88,7 @@ pub fn quota_bar(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'stati
     Paragraph::new(line).block(
         Block::default()
             .borders(Borders::ALL)
+            .border_style(Style::default().fg(primary_color))
             .title(" Quota Info "),
     )
 }

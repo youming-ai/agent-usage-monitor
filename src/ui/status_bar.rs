@@ -12,10 +12,12 @@ pub fn status_bar(
     last_error: &Option<String>,
 ) -> Paragraph<'static> {
     let tab_label = active_tab.label();
+    let icon = active_tab.icon();
+    let primary_color = active_tab.primary_color();
 
     let error_span = if let Some(err) = last_error.as_ref() {
         Span::styled(
-            format!(" │ ERROR: {}", err),
+            format!(" │ ✗ {}", err),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )
     } else {
@@ -33,10 +35,10 @@ pub fn status_bar(
 
     let line = Line::from(vec![
         Span::styled(
-            format!("  {}  ", tab_label),
+            format!(" {icon} {} ", tab_label),
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Rgb(100, 100, 100))
+                .bg(primary_color)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
@@ -44,7 +46,7 @@ pub fn status_bar(
             format!("{} calls", total_calls),
             Style::default().fg(Color::White),
         ),
-        Span::raw("  "),
+        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("${:.2}", total_cost),
             Style::default().fg(cost_color).add_modifier(Modifier::BOLD),
@@ -60,7 +62,7 @@ pub fn status_bar(
     Paragraph::new(line).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(primary_color))
             .title(" Status "),
     )
 }

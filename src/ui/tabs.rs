@@ -6,22 +6,27 @@ use ratatui::{
 };
 
 pub fn tab_bar(active: Tab) -> Tabs<'static> {
+    let claude_color = Tab::ClaudeCode.primary_color();
+    let codex_color = Tab::Codex.primary_color();
+    let claude_icon = Tab::ClaudeCode.icon();
+    let codex_icon = Tab::Codex.icon();
+
     let titles = vec![
         Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                "☁ Claude Code ",
+                format!("{claude_icon} Claude Code "),
                 Style::default()
-                    .fg(Color::Rgb(255, 165, 0))
+                    .fg(claude_color)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                "⚡ Codex ",
+                format!("{codex_icon} Codex "),
                 Style::default()
-                    .fg(Color::Rgb(138, 43, 226))
+                    .fg(codex_color)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -32,24 +37,26 @@ pub fn tab_bar(active: Tab) -> Tabs<'static> {
         Tab::Codex => 1,
     };
 
+    let active_color = active.primary_color();
+
     Tabs::new(titles)
         .block(
             Block::default()
-                .title(" Ollama Monitor ")
+                .title(" Usage Monitor ")
                 .title_style(
                     Style::default()
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD),
                 )
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default().fg(active_color)),
         )
         .select(selected)
         .highlight_style(
             Style::default()
                 .add_modifier(Modifier::BOLD)
-                .bg(Color::DarkGray)
-                .fg(Color::White),
+                .bg(active_color)
+                .fg(Color::Black),
         )
         .divider(Span::styled(
             " │ ",
