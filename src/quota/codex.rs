@@ -170,14 +170,23 @@ fn format_window_value(label: &str, window: &Value) -> Option<QuotaWindow> {
 fn parse_usage_response(data: &Value, email: Option<String>, account_id: String) -> Option<QuotaInfo> {
     let mut windows = Vec::new();
 
+    // Prefer email from API response over JWT
+    let email = data
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or(email);
+
     if let Some(rate_limit) = data.get("rate_limit") {
         if let Some(primary) = rate_limit.get("primary_window") {
-            if let Some(window) = format_window_value("5h", primary) {
+            let label = format_window_label(primary).unwrap_or_else(|| "5h".to_string());
+            if let Some(window) = format_window_value(&label, primary) {
                 windows.push(window);
             }
         }
         if let Some(secondary) = rate_limit.get("secondary_window") {
-            if let Some(window) = format_window_value("7d", secondary) {
+            let label = format_window_label(secondary).unwrap_or_else(|| "7d".to_string());
+            if let Some(window) = format_window_value(&label, secondary) {
                 windows.push(window);
             }
         }
@@ -191,6 +200,21 @@ fn parse_usage_response(data: &Value, email: Option<String>, account_id: String)
         fetched_at: Instant::now(),
         error: None,
     })
+}
+
+/// Format window label from limit_window_seconds
+fn format_window_label(window: &Value) -> Option<String> {
+    let seconds = window.get("limit_window_seconds").and_then(|v| v.as_i64())?;
+    let hours = seconds / 3600;
+    let days = seconds / 86400;
+    
+    if days >= 1 {
+        Some(format!("{days}d"))
+    } else if hours >= 1 {
+        Some(format!("{hours}h"))
+    } else {
+        Some(format!("{}m", seconds / 60))
+    }
 }
 
 /// Main function to fetch Codex quota info
