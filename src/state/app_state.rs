@@ -29,8 +29,8 @@ impl Tab {
 
     pub fn label(self) -> &'static str {
         match self {
-            Tab::ClaudeCode => "Claude Code",
-            Tab::Codex => "Codex",
+            Tab::ClaudeCode => "CLAUDE",
+            Tab::Codex => "CODEX",
         }
     }
 
@@ -38,7 +38,7 @@ impl Tab {
     pub fn primary_color(self) -> ratatui::style::Color {
         match self {
             Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 165, 0),  // Orange
-            Tab::Codex => ratatui::style::Color::Rgb(138, 43, 226),     // Purple
+            Tab::Codex => ratatui::style::Color::Rgb(59, 130, 246),     // Blue
         }
     }
 
@@ -46,7 +46,7 @@ impl Tab {
     pub fn secondary_color(self) -> ratatui::style::Color {
         match self {
             Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 200, 100),  // Light Orange
-            Tab::Codex => ratatui::style::Color::Rgb(180, 120, 255),      // Light Purple
+            Tab::Codex => ratatui::style::Color::Rgb(147, 197, 253),      // Light Blue
         }
     }
 
