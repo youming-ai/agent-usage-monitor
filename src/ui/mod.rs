@@ -1,5 +1,5 @@
+mod model_table;
 mod quota_bar;
-mod recent_calls;
 mod session_table;
 mod status_bar;
 mod tabs;
@@ -62,15 +62,15 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
 
     frame.render_widget(quota_bar::quota_panel(active, quota), chunks[1]);
 
-    // Split the main area: a sessions table sized to its rows on top, with the
-    // real-time recent-calls feed filling the remaining space below.
-    let sessions_h = (sessions.len() as u16 + 3).clamp(3, chunks[2].height.saturating_sub(3));
-    let main = Layout::vertical([Constraint::Length(sessions_h), Constraint::Min(3)]).split(chunks[2]);
+    // Split the main area: the per-model table sized to its rows on top, with
+    // the per-session usage table filling the remaining space below.
+    let models_h = (sessions.len() as u16 + 3).clamp(3, chunks[2].height.saturating_sub(3));
+    let main = Layout::vertical([Constraint::Length(models_h), Constraint::Min(3)]).split(chunks[2]);
     frame.render_widget(
-        session_table::session_table(active, sessions, total_calls),
+        model_table::model_table(active, sessions, total_calls),
         main[0],
     );
-    frame.render_widget(recent_calls::recent_calls(active, records), main[1]);
+    frame.render_widget(session_table::session_table(active, records), main[1]);
 
     frame.render_widget(status_bar::status_bar(total_calls, total_cost), chunks[3]);
 }
@@ -132,24 +132,24 @@ mod tests {
             request_count: 42,
             last_active: Utc::now(),
         }];
-        let mk = |model: &str, input: u64, output: u64, cost: f64| UsageRecord {
+        let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
             timestamp: Utc::now(),
             platform: Platform::ClaudeCode,
             model: model.into(),
-            project: "demo".into(),
+            session: session.into(),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
-            cost_usd: cost,
+            cost_usd: 0.0,
             service_tier: "standard".into(),
             message_id: String::new(),
             request_id: String::new(),
         };
         s.claude_records = vec![
-            mk("claude-opus-4", 1200, 340, 0.018),
-            mk("claude-opus-4", 8400, 512, 0.044),
-            mk("claude-sonnet-4", 2100, 180, 0.0009),
+            mk("ollama-monitor", "claude-opus-4", 1200, 340),
+            mk("ollama-monitor", "claude-opus-4", 8400, 512),
+            mk("my-web-app", "claude-sonnet-4", 2100, 180),
         ];
         s.claude_total_calls = 42;
         s.claude_total_cost = 12.34;
@@ -164,8 +164,9 @@ mod tests {
         // Header tab, a quota bar, both tables, and the status line are present.
         assert!(out.contains("CLAUDE"));
         assert!(out.contains("82%"));
-        assert!(out.contains("claude-opus-4"));
-        assert!(out.contains("recent calls"));
+        assert!(out.contains("claude-opus-4")); // model table
+        assert!(out.contains("ollama-monitor")); // session table
+        assert!(out.contains("sessions"));
         assert!(out.contains("42 calls"));
     }
 }

@@ -6,14 +6,20 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Per-file running state. A rollout file declares its model and working
+/// directory in events at the top, which are skipped on later polls — so this
+/// must persist per file rather than in a single shared field that would leak
+/// between sessions.
+#[derive(Clone)]
+struct FileState {
+    model: String,
+    session: String,
+}
+
 pub struct CodexReader {
     sessions_dir: PathBuf,
     file_positions: HashMap<PathBuf, u64>,
-    // The "current model" is per rollout file: a session sets its model via a
-    // `turn_context`/`task_started` event at the top, and that line is skipped
-    // on subsequent polls — so the model must persist per file rather than in a
-    // single shared field (which would leak between sessions).
-    file_models: HashMap<PathBuf, String>,
+    file_state: HashMap<PathBuf, FileState>,
 }
 
 impl CodexReader {
@@ -22,7 +28,7 @@ impl CodexReader {
         Self {
             sessions_dir,
             file_positions: HashMap::new(),
-            file_models: HashMap::new(),
+            file_state: HashMap::new(),
         }
     }
 
@@ -79,44 +85,53 @@ impl CodexReader {
             Err(_) => return (Vec::new(), skip_lines),
         };
 
-        let project = extract_codex_project(path);
-
         let complete_lines = if content.ends_with('\n') {
             content.lines().count()
         } else {
             content.lines().count().saturating_sub(1)
         };
 
-        // Resume this file's running model (persists across polls).
-        let mut model = self
-            .file_models
-            .get(path)
-            .cloned()
-            .unwrap_or_else(|| "unknown".to_string());
+        // Resume this file's running state (persists across polls). The session
+        // label falls back to the rollout filename until a `session_meta`/
+        // `turn_context` event provides the working directory.
+        let mut st = self.file_state.get(path).cloned().unwrap_or_else(|| FileState {
+            model: "unknown".to_string(),
+            session: extract_codex_project(path),
+        });
 
         let records = content
             .lines()
             .take(complete_lines)
             .skip(skip_lines as usize)
-            .filter_map(|line| parse_codex_line(line, &project, &mut model))
+            .filter_map(|line| parse_codex_line(line, &mut st))
             .collect();
 
-        self.file_models.insert(path.to_path_buf(), model);
+        self.file_state.insert(path.to_path_buf(), st);
 
         (records, complete_lines as u64)
     }
 }
 
-/// Parse one rollout line. `model` carries the session's running model across
-/// lines and polls; `turn_context`/`task_started` events update it in place.
-fn parse_codex_line(line: &str, project: &str, model: &mut String) -> Option<UsageRecord> {
+/// Parse one rollout line. `st` carries the session's running model and working
+/// directory across lines and polls; meta events update it in place.
+fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
     let event_type = v.get("type")?.as_str()?;
 
-    // turn_context is a top-level event (not wrapped in event_msg)
+    // session_meta and turn_context are top-level events (not in event_msg)
+    if event_type == "session_meta" {
+        if let Some(cwd) = v.get("payload").and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
+            st.session = crate::reader::basename(cwd);
+        }
+        return None;
+    }
+
     if event_type == "turn_context" {
         if let Some(m) = v.get("payload").and_then(|p| p.get("model")).and_then(|m| m.as_str()) {
-            *model = m.to_string();
+            st.model = m.to_string();
+        }
+        if let Some(cwd) = v.get("payload").and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
+            st.session = crate::reader::basename(cwd);
         }
         return None;
     }
@@ -136,7 +151,7 @@ fn parse_codex_line(line: &str, project: &str, model: &mut String) -> Option<Usa
             .and_then(|s| s.get("model"))
             .and_then(|m| m.as_str())
         {
-            *model = m.to_string();
+            st.model = m.to_string();
         }
         return None;
     }
@@ -179,13 +194,13 @@ fn parse_codex_line(line: &str, project: &str, model: &mut String) -> Option<Usa
     let timestamp_str = v.get("timestamp")?.as_str()?;
     let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
 
-    let cost_usd = pricing::calculate_cost(model, delta_input, delta_output, delta_cached, 0);
+    let cost_usd = pricing::calculate_cost(&st.model, delta_input, delta_output, delta_cached, 0);
 
     Some(UsageRecord {
         timestamp,
         platform: Platform::Codex,
-        model: model.clone(),
-        project: project.to_string(),
+        model: st.model.clone(),
+        session: st.session.clone(),
         input_tokens: delta_input,
         output_tokens: delta_output,
         cache_read_tokens: delta_cached,

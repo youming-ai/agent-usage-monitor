@@ -71,8 +71,6 @@ impl ClaudeReader {
             Err(_) => return (Vec::new(), skip_lines),
         };
 
-        let project = extract_project_name(path, &self.data_dir);
-
         let complete_lines = if content.ends_with('\n') {
             content.lines().count()
         } else {
@@ -83,14 +81,14 @@ impl ClaudeReader {
             .lines()
             .take(complete_lines)
             .skip(skip_lines as usize)
-            .filter_map(|line| parse_claude_line(line, &project))
+            .filter_map(parse_claude_line)
             .collect();
 
         (records, complete_lines as u64)
     }
 }
 
-fn parse_claude_line(line: &str, project: &str) -> Option<UsageRecord> {
+fn parse_claude_line(line: &str) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
 
     if v.get("type")?.as_str()? != "assistant" {
@@ -124,6 +122,12 @@ fn parse_claude_line(line: &str, project: &str) -> Option<UsageRecord> {
     let timestamp_str = v.get("timestamp")?.as_str()?;
     let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
 
+    let session = v
+        .get("cwd")
+        .and_then(|c| c.as_str())
+        .map(crate::reader::basename)
+        .unwrap_or_else(|| "unknown".to_string());
+
     let request_id = v
         .get("requestId")
         .and_then(|v| v.as_str())
@@ -153,7 +157,7 @@ fn parse_claude_line(line: &str, project: &str) -> Option<UsageRecord> {
         timestamp,
         platform: Platform::ClaudeCode,
         model,
-        project: project.to_string(),
+        session,
         input_tokens,
         output_tokens,
         cache_read_tokens: cache_read,
@@ -163,20 +167,6 @@ fn parse_claude_line(line: &str, project: &str) -> Option<UsageRecord> {
         message_id,
         request_id,
     })
-}
-
-fn extract_project_name(path: &Path, data_dir: &Path) -> String {
-    path.parent()
-        .and_then(|p| p.strip_prefix(data_dir).ok())
-        .and_then(|p| p.to_str())
-        .map(|s| {
-            s.trim_start_matches('-')
-                .split('-')
-                .next_back()
-                .unwrap_or(s)
-                .to_string()
-        })
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn find_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>) {

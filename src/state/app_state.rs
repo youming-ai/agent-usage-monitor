@@ -67,8 +67,8 @@ pub struct UsageRecord {
     #[allow(dead_code)]
     pub platform: Platform,
     pub model: String,
-    #[allow(dead_code)]
-    pub project: String,
+    /// Conversation/session label (basename of the working directory).
+    pub session: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
