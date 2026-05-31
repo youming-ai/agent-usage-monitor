@@ -147,9 +147,11 @@ mod tests {
             request_id: String::new(),
         };
         s.claude_records = vec![
-            mk("ollama-monitor", "claude-opus-4", 1200, 340),
-            mk("ollama-monitor", "claude-opus-4", 8400, 512),
-            mk("my-web-app", "claude-sonnet-4", 2100, 180),
+            // Same project, two distinct conversations + a third project.
+            mk("ollama-monitor a3f2c1d8", "claude-opus-4", 1200, 340),
+            mk("ollama-monitor a3f2c1d8", "claude-opus-4", 8400, 512),
+            mk("ollama-monitor 9b4e7f02", "claude-sonnet-4", 2100, 180),
+            mk("my-web-app 1c2d3e4f", "claude-opus-4", 5000, 600),
         ];
         s.claude_total_calls = 42;
         s.claude_total_cost = 12.34;

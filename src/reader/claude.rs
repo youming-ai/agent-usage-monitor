@@ -122,11 +122,13 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
     let timestamp_str = v.get("timestamp")?.as_str()?;
     let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
 
-    let session = v
+    let dir = v
         .get("cwd")
         .and_then(|c| c.as_str())
         .map(crate::reader::basename)
         .unwrap_or_else(|| "unknown".to_string());
+    let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
+    let session = crate::reader::session_label(&dir, session_id);
 
     let request_id = v
         .get("requestId")

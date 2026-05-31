@@ -13,7 +13,14 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 struct FileState {
     model: String,
-    session: String,
+    dir: String,
+    sid: String,
+}
+
+impl FileState {
+    fn session(&self) -> String {
+        crate::reader::session_label(&self.dir, &self.sid)
+    }
 }
 
 pub struct CodexReader {
@@ -96,7 +103,8 @@ impl CodexReader {
         // `turn_context` event provides the working directory.
         let mut st = self.file_state.get(path).cloned().unwrap_or_else(|| FileState {
             model: "unknown".to_string(),
-            session: extract_codex_project(path),
+            dir: "codex".to_string(),
+            sid: extract_codex_project(path),
         });
 
         let records = content
@@ -120,8 +128,12 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
 
     // session_meta and turn_context are top-level events (not in event_msg)
     if event_type == "session_meta" {
-        if let Some(cwd) = v.get("payload").and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
-            st.session = crate::reader::basename(cwd);
+        let payload = v.get("payload");
+        if let Some(cwd) = payload.and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
+            st.dir = crate::reader::basename(cwd);
+        }
+        if let Some(id) = payload.and_then(|p| p.get("id")).and_then(|i| i.as_str()) {
+            st.sid = id.to_string();
         }
         return None;
     }
@@ -131,7 +143,7 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
             st.model = m.to_string();
         }
         if let Some(cwd) = v.get("payload").and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
-            st.session = crate::reader::basename(cwd);
+            st.dir = crate::reader::basename(cwd);
         }
         return None;
     }
@@ -200,7 +212,7 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         timestamp,
         platform: Platform::Codex,
         model: st.model.clone(),
-        session: st.session.clone(),
+        session: st.session(),
         input_tokens: delta_input,
         output_tokens: delta_output,
         cache_read_tokens: delta_cached,
