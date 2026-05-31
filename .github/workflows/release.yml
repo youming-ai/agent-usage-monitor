@@ -16,18 +16,18 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            name: usage-monitor-darwin-arm64
+            name: aum-darwin-arm64
           # Cross-compile the Intel build on the Apple Silicon runner; the
           # scarce macos-13 (Intel) runners used to leave releases hanging.
           - os: macos-latest
             target: x86_64-apple-darwin
-            name: usage-monitor-darwin-amd64
+            name: aum-darwin-amd64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            name: usage-monitor-linux-amd64
+            name: aum-linux-amd64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            name: usage-monitor-linux-arm64
+            name: aum-linux-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -45,7 +45,7 @@ jobs:
       - name: Package binary
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.name }}.tar.gz usage-monitor
+          tar czf ../../../${{ matrix.name }}.tar.gz aum
           cd ../../..
 
       - name: Upload artifact

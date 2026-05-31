@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "usage-monitor")]
+#[command(name = "aum")]
 #[command(version)]
 #[command(about = "Real-time Claude Code & Codex usage monitor")]
 pub struct Cli {

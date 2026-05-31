@@ -1,6 +1,6 @@
-# LLM Usage Monitor
+# Agent Usage Monitor
 
-Real-time terminal monitoring tool for Claude Code & Codex API usage. Shows quota limits and token usage from local JSONL files.
+Real-time terminal monitoring tool for Claude Code & Codex API usage. Shows quota limits and token usage from local JSONL files. The command is `aum`.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -18,16 +18,16 @@ Real-time terminal monitoring tool for Claude Code & Codex API usage. Shows quot
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/youming-ai/llm-usage-monitor/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/youming-ai/agent-usage-monitor/main/install.sh | sh
 ```
 
-Or download manually from [Releases](https://github.com/youming-ai/llm-usage-monitor/releases).
+Or download manually from [Releases](https://github.com/youming-ai/agent-usage-monitor/releases).
 
 ### Build from source
 
 ```bash
-git clone https://github.com/youming-ai/llm-usage-monitor.git
-cd llm-usage-monitor
+git clone https://github.com/youming-ai/agent-usage-monitor.git
+cd agent-usage-monitor
 cargo build --release
 ```
 
@@ -35,22 +35,22 @@ cargo build --release
 
 ```bash
 # Default (reads from ~/.claude/projects and ~/.codex)
-usage-monitor
+aum
 
 # Custom paths
-usage-monitor --claude-path /path/to/.claude/projects --codex-path /path/to/.codex
+aum --claude-path /path/to/.claude/projects --codex-path /path/to/.codex
 
 # Adjust refresh rate (seconds)
-usage-monitor --refresh 2
+aum --refresh 2
 
 # Check for updates
-usage-monitor update
+aum update
 
 # Check for updates without installing
-usage-monitor update --dry-run
+aum update --dry-run
 
 # Force update even if already on latest
-usage-monitor update --force
+aum update --force
 ```
 
 ### CLI Options
@@ -112,14 +112,14 @@ Cost is calculated from built-in pricing tables for Anthropic and OpenAI models.
 ────────────────────────────────────────────────────────   ← accent rule
  ✓ 5h ▓▓▓▓▓▓▓▓▓▓░░  82%  resets 2h30m                        ← quota window
  ✓ 7d ▓▓▓▓▓▓░░░░░░  54%  resets 4d6h                         ← quota window
-┌ ☁ CLAUDE sessions (42) ──────────────────────────────────┐
+┌ ☁ CLAUDE models (42) ─────────────────────────────────────┐
 │ MODEL          INPUT   OUTPUT   CACHE     COST     #       │ ← per-model totals
 │ claude-opus-4  1.2M    340.0k   8.1M      $12.34   42      │
 └────────────────────────────────────────────────────────────┘
-┌ ☁ recent calls ──────────────────────────────────────────┐
-│ TIME      MODEL            IN      OUT     COST            │ ← real-time feed
-│ 19:45:23  claude-opus-4    8.4k    512     $0.044          │   (newest first)
-│ 19:45:21  claude-opus-4    1.2k    340     $0.018          │
+┌ ☁ sessions ───────────────────────────────────────────────┐
+│ SESSION              TOKENS        REQUESTS                 │ ← per-session usage
+│ ollama-monitor       10.5k         42                       │   (by working dir)
+│ my-web-app           2.3k          11                       │
 └────────────────────────────────────────────────────────────┘
  42 calls · $12.34                              tab·r·q       ← status line
 ```

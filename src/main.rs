@@ -139,8 +139,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 fn handle_update(force: bool, dry_run: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("Usage Monitor Updater");
-    println!("====================");
+    println!("agent-usage-monitor (aum) updater");
+    println!("=================================");
     println!("Current version: v{}", updater::current_version());
     println!();
 

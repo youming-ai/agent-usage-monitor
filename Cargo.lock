@@ -3,6 +3,25 @@
 version = 4
 
 [[package]]
+name = "agent-usage-monitor"
+version = "0.6.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "clap",
+ "crossterm",
+ "dirs",
+ "humansize",
+ "libc",
+ "ratatui",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1816,25 +1835,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "usage-monitor"
-version = "0.5.0"
-dependencies = [
- "base64",
- "chrono",
- "clap",
- "crossterm",
- "dirs",
- "humansize",
- "libc",
- "ratatui",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
 
 [[package]]
 name = "utf8parse"

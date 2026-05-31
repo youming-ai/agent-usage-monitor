@@ -15,5 +15,5 @@ pub fn asset_name() -> Result<String, String> {
         _ => return Err(format!("Unsupported architecture: {}", arch)),
     };
     
-    Ok(format!("usage-monitor-{}-{}.tar.gz", os_name, arch_name))
+    Ok(format!("aum-{}-{}.tar.gz", os_name, arch_name))
 }

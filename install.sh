@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 
-REPO="youming-ai/llm-usage-monitor"
-BINARY_NAME="usage-monitor"
+REPO="youming-ai/agent-usage-monitor"
+BINARY_NAME="aum"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
 # Detect OS
@@ -21,7 +21,7 @@ case "$ARCH" in
     *)             echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-ASSET_NAME="usage-monitor-${OS_NAME}-${ARCH_NAME}.tar.gz"
+ASSET_NAME="aum-${OS_NAME}-${ARCH_NAME}.tar.gz"
 
 # Get latest release URL
 if command -v curl >/dev/null 2>&1; then

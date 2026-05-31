@@ -3,8 +3,8 @@ mod platform;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-const REPO: &str = "youming-ai/llm-usage-monitor";
-const BINARY_NAME: &str = "usage-monitor";
+const REPO: &str = "youming-ai/agent-usage-monitor";
+const BINARY_NAME: &str = "aum";
 
 #[derive(Debug, Deserialize)]
 struct Release {
