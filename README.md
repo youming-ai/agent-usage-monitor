@@ -17,6 +17,14 @@ Real-time terminal monitoring tool for Claude Code & Codex API usage. Shows quot
 
 ## Installation
 
+### Homebrew
+
+```bash
+brew install youming-ai/tap/aum
+```
+
+### Install script
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/youming-ai/agent-usage-monitor/main/install.sh | sh
 ```
