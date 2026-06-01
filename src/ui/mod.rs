@@ -70,7 +70,7 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
         model_table::model_table(active, sessions, total_calls),
         main[0],
     );
-    frame.render_widget(session_table::session_table(active, records), main[1]);
+    frame.render_widget(session_table::session_table(records), main[1]);
 
     frame.render_widget(status_bar::status_bar(total_calls, total_cost), chunks[3]);
 }

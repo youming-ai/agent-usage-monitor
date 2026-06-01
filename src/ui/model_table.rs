@@ -8,7 +8,6 @@ use ratatui::{
 
 /// Per-model totals (input/output/cache tokens, cost, request count).
 pub fn model_table(active_tab: Tab, models: &[SessionSummary], total_calls: usize) -> Table<'static> {
-    let icon = active_tab.icon();
     let label = active_tab.label();
 
     let rows: Vec<Row> = models
@@ -42,7 +41,7 @@ pub fn model_table(active_tab: Tab, models: &[SessionSummary], total_calls: usiz
     .header(header)
     .block(
         Block::default()
-            .title(format!(" {icon} {label} models ({total_calls}) "))
+            .title(format!(" {label} models ({total_calls}) "))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)),
     )

@@ -1,5 +1,5 @@
 use super::util::format_tokens;
-use crate::state::{Tab, UsageRecord};
+use crate::state::UsageRecord;
 use ratatui::{
     layout::Constraint,
     style::{Color, Modifier, Style},
@@ -14,9 +14,7 @@ struct SessionAgg {
 
 /// Per-session usage: total tokens and request count for each conversation,
 /// aggregated from the recent records. Highest usage first.
-pub fn session_table(active_tab: Tab, records: &[UsageRecord]) -> Table<'static> {
-    let icon = active_tab.icon();
-
+pub fn session_table(records: &[UsageRecord]) -> Table<'static> {
     let mut by_session: HashMap<&str, SessionAgg> = HashMap::new();
     for r in records {
         let agg = by_session
@@ -58,7 +56,7 @@ pub fn session_table(active_tab: Tab, records: &[UsageRecord]) -> Table<'static>
     .header(header)
     .block(
         Block::default()
-            .title(format!(" {icon} sessions "))
+            .title(" sessions ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)),
     )

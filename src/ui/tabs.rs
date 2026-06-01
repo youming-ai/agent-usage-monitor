@@ -8,7 +8,7 @@ use ratatui::{
 
 /// One tab entry, styled by whether it is active.
 fn tab_span(tab: Tab, active: bool) -> Span<'static> {
-    let text = format!(" {} {} ", tab.icon(), tab.label());
+    let text = format!(" {} ", tab.label());
     if active {
         Span::styled(
             text,
@@ -22,7 +22,7 @@ fn tab_span(tab: Tab, active: bool) -> Span<'static> {
     }
 }
 
-/// The header tab row: ` ☁ CLAUDE   ⚡ codex` with the active tab accented.
+/// The header tab row: ` CLAUDE   codex` with the active tab accented.
 pub fn tab_line(active: Tab) -> Paragraph<'static> {
     let line = Line::from(vec![
         tab_span(Tab::ClaudeCode, active == Tab::ClaudeCode),

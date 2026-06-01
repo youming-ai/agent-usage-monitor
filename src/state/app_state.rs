@@ -50,14 +50,6 @@ impl Tab {
             Tab::Codex => ratatui::style::Color::Rgb(147, 197, 253),      // Light Blue
         }
     }
-
-    /// Icon for the tab
-    pub fn icon(self) -> &'static str {
-        match self {
-            Tab::ClaudeCode => "☁",
-            Tab::Codex => "⚡",
-        }
-    }
 }
 
 /// Single API call record

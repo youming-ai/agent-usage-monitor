@@ -36,15 +36,15 @@ aum update         # self-update to the latest release (--dry-run / --force)
 ## Layout
 
 ```
- ☁ CLAUDE   ⚡ codex                              ✓ you@mail.com
+ CLAUDE   codex                                   ✓ you@mail.com
 ────────────────────────────────────────────────────────────────
  ✓ 5h ▓▓▓▓▓▓▓▓▓▓░░  82%  resets 2h30m
  ✓ 7d ▓▓▓▓▓▓░░░░░░  54%  resets 4d6h
-┌ ☁ CLAUDE models (42) ────────────────────────────────────────┐
+┌ CLAUDE models (42) ──────────────────────────────────────────┐
 │ MODEL          INPUT   OUTPUT   CACHE     COST     #          │
 │ claude-opus-4  1.2M    340.0k   8.1M      $12.34   42         │
 └───────────────────────────────────────────────────────────────┘
-┌ ☁ sessions ──────────────────────────────────────────────────┐
+┌ sessions ────────────────────────────────────────────────────┐
 │ SESSION                       TOKENS    REQUESTS             │
 │ agent-usage-monitor a3f2c1d8  10.5k     2                    │
 │ my-web-app 9b4e7f02           2.3k      1                    │
