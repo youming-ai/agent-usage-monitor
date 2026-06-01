@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::jsonl_reader::JsonlReader;
+
 pub struct ClaudeReader {
     data_dir: PathBuf,
     file_positions: HashMap<PathBuf, u64>,
@@ -24,67 +26,23 @@ impl ClaudeReader {
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".claude/projects")
     }
+}
 
-    fn find_jsonl_files(&self) -> Vec<PathBuf> {
+impl JsonlReader for ClaudeReader {
+    fn file_positions(&mut self) -> &mut HashMap<PathBuf, u64> {
+        &mut self.file_positions
+    }
+    
+    fn find_files(&self) -> Vec<PathBuf> {
         let mut files = Vec::new();
         if self.data_dir.exists() {
             find_jsonl_recursive(&self.data_dir, &mut files);
         }
         files
     }
-
-    pub fn scan_all(&mut self) -> Vec<UsageRecord> {
-        let files = self.find_jsonl_files();
-        let mut records = Vec::new();
-        for file in files {
-            let (entries, lines_read) = self.read_file_from(&file, 0);
-            self.file_positions.insert(file, lines_read);
-            records.extend(entries);
-        }
-        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        records
-    }
-
-    pub fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        let files = self.find_jsonl_files();
-        let mut new_records = Vec::new();
-        for file in files {
-            let offset = self.file_positions.get(&file).copied().unwrap_or(0);
-            let (entries, lines_read) = self.read_file_from(&file, offset);
-            // Always advance the cursor past consumed lines, even when none of
-            // them produced a record, so non-record lines are not re-scanned.
-            self.file_positions.insert(file, lines_read);
-            new_records.extend(entries);
-        }
-        new_records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        new_records
-    }
-
-    /// Parse records from `path`, skipping the first `skip_lines` lines.
-    /// Returns the parsed records and the number of *complete* lines in the
-    /// file (the cursor to store). A trailing line without a newline is
-    /// treated as still being written and is left for the next poll.
-    fn read_file_from(&self, path: &Path, skip_lines: u64) -> (Vec<UsageRecord>, u64) {
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            // Keep the existing cursor on a transient read error.
-            Err(_) => return (Vec::new(), skip_lines),
-        };
-
-        let complete_lines = if content.ends_with('\n') {
-            content.lines().count()
-        } else {
-            content.lines().count().saturating_sub(1)
-        };
-
-        let records = content
-            .lines()
-            .take(complete_lines)
-            .skip(skip_lines as usize)
-            .filter_map(parse_claude_line)
-            .collect();
-
-        (records, complete_lines as u64)
+    
+    fn parse_line(&self, line: &str) -> Option<UsageRecord> {
+        parse_claude_line(line)
     }
 }
 

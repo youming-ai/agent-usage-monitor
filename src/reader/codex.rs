@@ -2,9 +2,11 @@ use crate::reader::pricing;
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use super::jsonl_reader::JsonlReader;
 
 /// Per-file running state. A rollout file declares its model and working
 /// directory in events at the top, which are skipped on later polls — so this
@@ -45,78 +47,104 @@ impl CodexReader {
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".codex")
     }
+}
 
-    fn find_rollout_files(&self) -> Vec<PathBuf> {
+impl JsonlReader for CodexReader {
+    fn file_positions(&mut self) -> &mut HashMap<PathBuf, u64> {
+        &mut self.file_positions
+    }
+    
+    fn find_files(&self) -> Vec<PathBuf> {
         let mut files = Vec::new();
         if self.sessions_dir.exists() {
             find_rollout_recursive(&self.sessions_dir, &mut files);
         }
         files
     }
-
-    pub fn scan_all(&mut self) -> Vec<UsageRecord> {
-        let files = self.find_rollout_files();
+    
+    fn parse_line(&self, _line: &str) -> Option<UsageRecord> {
+        // Codex needs special handling for file state, so we override scan_all and poll_delta
+        None
+    }
+    
+    fn scan_all(&mut self) -> Vec<UsageRecord> {
+        let files = self.find_files();
         let mut records = Vec::new();
         for file in files {
-            let (entries, lines_read) = self.read_file_from(&file, 0);
-            self.file_positions.insert(file, lines_read);
-            records.extend(entries);
+            let content = match fs::read_to_string(&file) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let complete_lines = if content.ends_with('\n') {
+                content.lines().count()
+            } else {
+                content.lines().count().saturating_sub(1)
+            };
+
+            // Initialize file state
+            let mut st = FileState {
+                model: "unknown".to_string(),
+                dir: "codex".to_string(),
+                sid: extract_codex_project(&file),
+            };
+
+            let file_records: Vec<UsageRecord> = content
+                .lines()
+                .take(complete_lines)
+                .filter_map(|line| parse_codex_line(line, &mut st))
+                .collect();
+
+            self.file_positions.insert(file.clone(), complete_lines as u64);
+            self.file_state.insert(file, st);
+            records.extend(file_records);
         }
         records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
         records
     }
-
-    pub fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        let files = self.find_rollout_files();
+    
+    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+        let files = self.find_files();
+        
+        // Clean up positions and state for files that no longer exist
+        let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
+        self.file_positions.retain(|path, _| current_files.contains(path));
+        self.file_state.retain(|path, _| current_files.contains(path));
+        
         let mut new_records = Vec::new();
         for file in files {
             let offset = self.file_positions.get(&file).copied().unwrap_or(0);
-            let (entries, lines_read) = self.read_file_from(&file, offset);
-            // Always advance the cursor past consumed lines, even when none of
-            // them produced a record, so non-record lines are not re-scanned.
-            self.file_positions.insert(file, lines_read);
-            new_records.extend(entries);
+            let content = match fs::read_to_string(&file) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let complete_lines = if content.ends_with('\n') {
+                content.lines().count()
+            } else {
+                content.lines().count().saturating_sub(1)
+            };
+
+            // Resume this file's running state
+            let mut st = self.file_state.get(&file).cloned().unwrap_or_else(|| FileState {
+                model: "unknown".to_string(),
+                dir: "codex".to_string(),
+                sid: extract_codex_project(&file),
+            });
+
+            let records: Vec<UsageRecord> = content
+                .lines()
+                .take(complete_lines)
+                .skip(offset as usize)
+                .filter_map(|line| parse_codex_line(line, &mut st))
+                .collect();
+
+            self.file_positions.insert(file.clone(), complete_lines as u64);
+            self.file_state.insert(file, st);
+            new_records.extend(records);
         }
         new_records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
         new_records
-    }
-
-    /// Parse records from `path`, skipping the first `skip_lines` lines.
-    /// Returns the parsed records and the number of *complete* lines in the
-    /// file (the cursor to store). A trailing line without a newline is
-    /// treated as still being written and is left for the next poll.
-    fn read_file_from(&mut self, path: &Path, skip_lines: u64) -> (Vec<UsageRecord>, u64) {
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            // Keep the existing cursor on a transient read error.
-            Err(_) => return (Vec::new(), skip_lines),
-        };
-
-        let complete_lines = if content.ends_with('\n') {
-            content.lines().count()
-        } else {
-            content.lines().count().saturating_sub(1)
-        };
-
-        // Resume this file's running state (persists across polls). The session
-        // label falls back to the rollout filename until a `session_meta`/
-        // `turn_context` event provides the working directory.
-        let mut st = self.file_state.get(path).cloned().unwrap_or_else(|| FileState {
-            model: "unknown".to_string(),
-            dir: "codex".to_string(),
-            sid: extract_codex_project(path),
-        });
-
-        let records = content
-            .lines()
-            .take(complete_lines)
-            .skip(skip_lines as usize)
-            .filter_map(|line| parse_codex_line(line, &mut st))
-            .collect();
-
-        self.file_state.insert(path.to_path_buf(), st);
-
-        (records, complete_lines as u64)
     }
 }
 

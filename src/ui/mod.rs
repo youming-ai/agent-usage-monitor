@@ -15,7 +15,10 @@ use ratatui::{
 use std::sync::{Arc, RwLock};
 
 pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
-    let state = app_state.read().unwrap();
+    let state = match app_state.try_read() {
+        Ok(state) => state,
+        Err(_) => return,
+    };
     let active = state.active_tab;
     let accent = active.primary_color();
 
@@ -152,7 +155,7 @@ mod tests {
             mk("ollama-monitor a3f2c1d8", "claude-opus-4", 8400, 512),
             mk("ollama-monitor 9b4e7f02", "claude-sonnet-4", 2100, 180),
             mk("my-web-app 1c2d3e4f", "claude-opus-4", 5000, 600),
-        ];
+        ].into();
         s.claude_total_calls = 42;
         s.claude_total_cost = 12.34;
         s

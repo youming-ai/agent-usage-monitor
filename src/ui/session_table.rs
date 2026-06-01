@@ -5,7 +5,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Row, Table},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 struct SessionAgg {
     tokens: u64,
@@ -14,7 +14,7 @@ struct SessionAgg {
 
 /// Per-session usage: total tokens and request count for each conversation,
 /// aggregated from the recent records. Highest usage first.
-pub fn session_table(records: &[UsageRecord]) -> Table<'static> {
+pub fn session_table(records: &VecDeque<UsageRecord>) -> Table<'static> {
     let mut by_session: HashMap<&str, SessionAgg> = HashMap::new();
     for r in records {
         let agg = by_session

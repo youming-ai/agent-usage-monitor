@@ -1,5 +1,6 @@
 use crate::quota::QuotaInfo;
 use chrono::{DateTime, Utc};
+use std::collections::VecDeque;
 
 pub const MAX_RECORDS: usize = 100;
 
@@ -90,14 +91,14 @@ pub struct SessionSummary {
 /// Global application state
 pub struct AppState {
     // Claude Code
-    pub claude_records: Vec<UsageRecord>,
+    pub claude_records: VecDeque<UsageRecord>,
     pub claude_sessions: Vec<SessionSummary>,
     pub claude_total_calls: usize,
     pub claude_total_cost: f64,
     pub claude_quota: Option<QuotaInfo>,
 
     // Codex
-    pub codex_records: Vec<UsageRecord>,
+    pub codex_records: VecDeque<UsageRecord>,
     pub codex_sessions: Vec<SessionSummary>,
     pub codex_total_calls: usize,
     pub codex_total_cost: f64,
@@ -110,12 +111,12 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
-            claude_records: Vec::with_capacity(MAX_RECORDS),
+            claude_records: VecDeque::with_capacity(MAX_RECORDS),
             claude_sessions: Vec::new(),
             claude_total_calls: 0,
             claude_total_cost: 0.0,
             claude_quota: None,
-            codex_records: Vec::with_capacity(MAX_RECORDS),
+            codex_records: VecDeque::with_capacity(MAX_RECORDS),
             codex_sessions: Vec::new(),
             codex_total_calls: 0,
             codex_total_cost: 0.0,
@@ -127,11 +128,11 @@ impl AppState {
     pub fn add_claude_records(&mut self, records: Vec<UsageRecord>) {
         for r in records {
             if self.claude_records.len() >= MAX_RECORDS {
-                self.claude_records.remove(0);
+                self.claude_records.pop_front();
             }
             self.claude_total_cost += r.cost_usd;
             self.claude_total_calls += 1;
-            self.claude_records.push(r);
+            self.claude_records.push_back(r);
         }
         self.rebuild_claude_sessions();
     }
@@ -139,11 +140,11 @@ impl AppState {
     pub fn add_codex_records(&mut self, records: Vec<UsageRecord>) {
         for r in records {
             if self.codex_records.len() >= MAX_RECORDS {
-                self.codex_records.remove(0);
+                self.codex_records.pop_front();
             }
             self.codex_total_cost += r.cost_usd;
             self.codex_total_calls += 1;
-            self.codex_records.push(r);
+            self.codex_records.push_back(r);
         }
         self.rebuild_codex_sessions();
     }
@@ -151,7 +152,7 @@ impl AppState {
     fn rebuild_claude_sessions(&mut self) {
         use std::collections::BTreeMap;
         let mut map: BTreeMap<String, SessionSummary> = BTreeMap::new();
-        for r in &self.claude_records {
+        for r in self.claude_records.iter() {
             let entry = map.entry(r.model.clone()).or_insert_with(|| SessionSummary {
                 model: r.model.clone(),
                 total_input: 0,
@@ -178,7 +179,7 @@ impl AppState {
     fn rebuild_codex_sessions(&mut self) {
         use std::collections::BTreeMap;
         let mut map: BTreeMap<String, SessionSummary> = BTreeMap::new();
-        for r in &self.codex_records {
+        for r in self.codex_records.iter() {
             let entry = map.entry(r.model.clone()).or_insert_with(|| SessionSummary {
                 model: r.model.clone(),
                 total_input: 0,

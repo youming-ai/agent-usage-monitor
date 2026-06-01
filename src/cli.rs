@@ -34,6 +34,30 @@ pub enum Commands {
         #[arg(short, long)]
         dry_run: bool,
     },
+    
+    /// Show or edit configuration
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Show current configuration
+    Show,
+    
+    /// Set a configuration value
+    Set {
+        /// Configuration key (e.g., claude_path, codex_path, refresh, max_records)
+        key: String,
+        
+        /// Configuration value
+        value: String,
+    },
+    
+    /// Reset configuration to defaults
+    Reset,
 }
 
 fn default_claude_path() -> PathBuf {

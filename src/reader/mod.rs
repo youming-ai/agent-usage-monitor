@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod jsonl_reader;
 pub mod pricing;
 
 /// Last non-empty path component, e.g. `/Users/me/repo` -> `repo`.

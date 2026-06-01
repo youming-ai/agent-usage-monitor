@@ -23,6 +23,9 @@ Also available from [Releases](https://github.com/youming-ai/agent-usage-monitor
 aum                # start monitoring (defaults below)
 aum -r 2           # refresh every 2 seconds
 aum update         # self-update to the latest release (--dry-run / --force)
+aum config         # show current configuration
+aum config set <key> <value>  # set a configuration value
+aum config reset   # reset configuration to defaults
 ```
 
 | Flag | Default | Description |
@@ -32,6 +35,21 @@ aum update         # self-update to the latest release (--dry-run / --force)
 | `-r, --refresh` | `5` | Poll interval, in seconds |
 
 **Keys:** `Tab` / `←` / `→` switch tab · `r` clear current tab · `q` quit
+
+### Configuration
+
+Configuration is stored in `~/.config/aum/config.toml` (or platform equivalent). Available keys:
+
+- `claude_path` - Path to Claude Code data directory
+- `codex_path` - Path to Codex data directory
+- `refresh` - Polling interval in seconds
+- `max_records` - Maximum number of records to keep in memory
+
+Example:
+```bash
+aum config set refresh 2
+aum config set max_records 200
+```
 
 ## Layout
 
