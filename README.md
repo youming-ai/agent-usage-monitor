@@ -8,10 +8,6 @@ Real-time terminal dashboard for **Claude Code** & **Codex** usage — quota win
 ## Install
 
 ```bash
-# Homebrew (macOS / Linux)
-brew install youming-ai/tap/aum
-
-# or the install script
 curl -fsSL https://raw.githubusercontent.com/youming-ai/agent-usage-monitor/main/install.sh | sh
 ```
 
