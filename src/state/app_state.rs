@@ -1,8 +1,6 @@
 use crate::quota::QuotaInfo;
 use chrono::{DateTime, Utc};
-use std::collections::VecDeque;
-
-pub const MAX_RECORDS: usize = 100;
+use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
@@ -67,15 +65,11 @@ pub struct UsageRecord {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cost_usd: f64,
-    #[allow(dead_code)]
-    pub service_tier: String,
-    #[allow(dead_code)]
-    pub message_id: String,
-    #[allow(dead_code)]
-    pub request_id: String,
 }
 
-/// Aggregated model summary
+/// Aggregated per-model totals. Stored in a `HashMap` keyed by model name so
+/// the model aggregate can be updated incrementally (O(1) per new record)
+/// instead of being rebuilt on every batch insert.
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
     pub model: String,
@@ -85,122 +79,91 @@ pub struct SessionSummary {
     pub total_cache_creation: u64,
     pub total_cost: f64,
     pub request_count: u64,
-    pub last_active: DateTime<Utc>,
 }
 
 /// Global application state
 pub struct AppState {
     // Claude Code
     pub claude_records: VecDeque<UsageRecord>,
-    pub claude_sessions: Vec<SessionSummary>,
+    pub claude_sessions: HashMap<String, SessionSummary>,
     pub claude_total_calls: usize,
     pub claude_total_cost: f64,
     pub claude_quota: Option<QuotaInfo>,
+    pub claude_max_records: usize,
 
     // Codex
     pub codex_records: VecDeque<UsageRecord>,
-    pub codex_sessions: Vec<SessionSummary>,
+    pub codex_sessions: HashMap<String, SessionSummary>,
     pub codex_total_calls: usize,
     pub codex_total_cost: f64,
     pub codex_quota: Option<QuotaInfo>,
+    pub codex_max_records: usize,
 
     // Shared
     pub active_tab: Tab,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    /// Build an `AppState` sized for `max_records` entries per platform.
+    /// Picked up from `Config::max_records` so the user-configured cap is
+    /// actually honored (previously this used a hard-coded `MAX_RECORDS = 100`).
+    pub fn with_capacity(max_records: usize) -> Self {
+        // A zero (or accidentally tiny) cap makes the bounded ring degenerate
+        // — the eviction guard would keep exactly one record forever — so keep
+        // at least one slot.
+        let max_records = max_records.max(1);
         Self {
-            claude_records: VecDeque::with_capacity(MAX_RECORDS),
-            claude_sessions: Vec::new(),
+            claude_records: VecDeque::with_capacity(max_records),
+            claude_sessions: HashMap::new(),
             claude_total_calls: 0,
             claude_total_cost: 0.0,
             claude_quota: None,
-            codex_records: VecDeque::with_capacity(MAX_RECORDS),
-            codex_sessions: Vec::new(),
+            codex_records: VecDeque::with_capacity(max_records),
+            codex_sessions: HashMap::new(),
             codex_total_calls: 0,
             codex_total_cost: 0.0,
             codex_quota: None,
+            claude_max_records: max_records,
+            codex_max_records: max_records,
             active_tab: Tab::ClaudeCode,
         }
     }
 
+    /// Capacity used when no config is available (matches `Config::default()`).
+    pub fn new() -> Self {
+        Self::with_capacity(100)
+    }
+
     pub fn add_claude_records(&mut self, records: Vec<UsageRecord>) {
         for r in records {
-            if self.claude_records.len() >= MAX_RECORDS {
-                self.claude_records.pop_front();
-            }
+            // Evict the oldest record if we're at capacity, reversing its
+            // contribution to the per-model (windowed) aggregate. The lifetime
+            // claude_total_cost/claude_total_calls counters are cumulative and
+            // intentionally NOT decremented on eviction.
+            if self.claude_records.len() >= self.claude_max_records
+                && let Some(old) = self.claude_records.pop_front() {
+                    reverse_model_aggregate(&mut self.claude_sessions, &old);
+                }
             self.claude_total_cost += r.cost_usd;
             self.claude_total_calls += 1;
+            upsert_model_aggregate(&mut self.claude_sessions, &r);
             self.claude_records.push_back(r);
         }
-        self.rebuild_claude_sessions();
     }
 
     pub fn add_codex_records(&mut self, records: Vec<UsageRecord>) {
         for r in records {
-            if self.codex_records.len() >= MAX_RECORDS {
-                self.codex_records.pop_front();
-            }
+            // Lifetime totals stay cumulative; only the windowed per-model
+            // aggregate is reversed on eviction (see add_claude_records).
+            if self.codex_records.len() >= self.codex_max_records
+                && let Some(old) = self.codex_records.pop_front() {
+                    reverse_model_aggregate(&mut self.codex_sessions, &old);
+                }
             self.codex_total_cost += r.cost_usd;
             self.codex_total_calls += 1;
+            upsert_model_aggregate(&mut self.codex_sessions, &r);
             self.codex_records.push_back(r);
         }
-        self.rebuild_codex_sessions();
-    }
-
-    fn rebuild_claude_sessions(&mut self) {
-        use std::collections::BTreeMap;
-        let mut map: BTreeMap<String, SessionSummary> = BTreeMap::new();
-        for r in self.claude_records.iter() {
-            let entry = map.entry(r.model.clone()).or_insert_with(|| SessionSummary {
-                model: r.model.clone(),
-                total_input: 0,
-                total_output: 0,
-                total_cache_read: 0,
-                total_cache_creation: 0,
-                total_cost: 0.0,
-                request_count: 0,
-                last_active: r.timestamp,
-            });
-            entry.total_input += r.input_tokens;
-            entry.total_output += r.output_tokens;
-            entry.total_cache_read += r.cache_read_tokens;
-            entry.total_cache_creation += r.cache_creation_tokens;
-            entry.total_cost += r.cost_usd;
-            entry.request_count += 1;
-            if r.timestamp > entry.last_active {
-                entry.last_active = r.timestamp;
-            }
-        }
-        self.claude_sessions = map.into_values().collect();
-    }
-
-    fn rebuild_codex_sessions(&mut self) {
-        use std::collections::BTreeMap;
-        let mut map: BTreeMap<String, SessionSummary> = BTreeMap::new();
-        for r in self.codex_records.iter() {
-            let entry = map.entry(r.model.clone()).or_insert_with(|| SessionSummary {
-                model: r.model.clone(),
-                total_input: 0,
-                total_output: 0,
-                total_cache_read: 0,
-                total_cache_creation: 0,
-                total_cost: 0.0,
-                request_count: 0,
-                last_active: r.timestamp,
-            });
-            entry.total_input += r.input_tokens;
-            entry.total_output += r.output_tokens;
-            entry.total_cache_read += r.cache_read_tokens;
-            entry.total_cache_creation += r.cache_creation_tokens;
-            entry.total_cost += r.cost_usd;
-            entry.request_count += 1;
-            if r.timestamp > entry.last_active {
-                entry.last_active = r.timestamp;
-            }
-        }
-        self.codex_sessions = map.into_values().collect();
     }
 
     pub fn clear_claude(&mut self) {
@@ -218,8 +181,101 @@ impl AppState {
     }
 }
 
+/// Add (or sum into) a record's contribution to the per-model aggregate.
+fn upsert_model_aggregate(map: &mut HashMap<String, SessionSummary>, r: &UsageRecord) {
+    let entry = map.entry(r.model.clone()).or_insert_with(|| SessionSummary {
+        model: r.model.clone(),
+        total_input: 0,
+        total_output: 0,
+        total_cache_read: 0,
+        total_cache_creation: 0,
+        total_cost: 0.0,
+        request_count: 0,
+    });
+    entry.total_input += r.input_tokens;
+    entry.total_output += r.output_tokens;
+    entry.total_cache_read += r.cache_read_tokens;
+    entry.total_cache_creation += r.cache_creation_tokens;
+    entry.total_cost += r.cost_usd;
+    entry.request_count += 1;
+}
+
+/// Subtract a record's contribution (called when the record is evicted from
+/// the bounded ring). Removes the entry entirely once `request_count` hits
+/// zero so the model table doesn't show empty rows for stale models.
+fn reverse_model_aggregate(map: &mut HashMap<String, SessionSummary>, r: &UsageRecord) {
+    if let Some(entry) = map.get_mut(&r.model) {
+        entry.total_input = entry.total_input.saturating_sub(r.input_tokens);
+        entry.total_output = entry.total_output.saturating_sub(r.output_tokens);
+        entry.total_cache_read = entry.total_cache_read.saturating_sub(r.cache_read_tokens);
+        entry.total_cache_creation = entry.total_cache_creation.saturating_sub(r.cache_creation_tokens);
+        // Floating-point cost; could drift slightly negative under heavy
+        // churn but `clear_*` is the recovery path so it's not user-visible.
+        entry.total_cost -= r.cost_usd;
+        entry.request_count = entry.request_count.saturating_sub(1);
+        if entry.request_count == 0 {
+            map.remove(&r.model);
+        }
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(model: &str, input: u64, output: u64, cost: f64) -> UsageRecord {
+        UsageRecord {
+            timestamp: Utc::now(),
+            platform: Platform::ClaudeCode,
+            model: model.into(),
+            session: "test".into(),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cost_usd: cost,
+        }
+    }
+
+    #[test]
+    fn eviction_reverses_aggregate() {
+        // Three records, capacity 2: the first must be evicted when the third
+        // arrives, and its contribution must be subtracted from the model
+        // aggregate — not silently double-counted.
+        let mut s = AppState::with_capacity(2);
+        s.add_claude_records(vec![
+            rec("opus-4", 100, 50, 1.0),
+            rec("opus-4", 200, 80, 2.0),
+            rec("opus-4", 300, 90, 3.0),
+        ]);
+        let m = s.claude_sessions.get("opus-4").expect("model present");
+        // Records 2 and 3 remain in the bounded ring (200+300, 80+90, 2+3);
+        // record 1 was evicted and its contribution reversed.
+        assert_eq!(m.total_input, 500);
+        assert_eq!(m.total_output, 170);
+        assert_eq!(m.total_cost, 5.0);
+        assert_eq!(m.request_count, 2);
+        // Lifetime totals are cumulative across all three records, not just the
+        // two still held in the bounded ring.
+        assert_eq!(s.claude_total_cost, 6.0);
+        assert_eq!(s.claude_total_calls, 3);
+    }
+
+    #[test]
+    fn evictions_drop_models_at_zero_count() {
+        // Capacity 1, two different models: the first model's entry must be
+        // removed from the map once its only record is evicted.
+        let mut s = AppState::with_capacity(1);
+        s.add_claude_records(vec![rec("opus-4", 100, 50, 1.0)]);
+        s.add_claude_records(vec![rec("sonnet-4", 200, 80, 2.0)]);
+        assert!(!s.claude_sessions.contains_key("opus-4"));
+        assert!(s.claude_sessions.contains_key("sonnet-4"));
+        assert_eq!(s.claude_sessions.len(), 1);
     }
 }
