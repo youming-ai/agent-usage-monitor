@@ -133,8 +133,7 @@ mod tests {
             total_cache_creation: 0,
             total_cost: 12.34,
             request_count: 42,
-            last_active: Utc::now(),
-        }];
+        }].into_iter().map(|m| (m.model.clone(), m)).collect();
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
             timestamp: Utc::now(),
             platform: Platform::ClaudeCode,
@@ -145,9 +144,6 @@ mod tests {
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             cost_usd: 0.0,
-            service_tier: "standard".into(),
-            message_id: String::new(),
-            request_id: String::new(),
         };
         s.claude_records = vec![
             // Same project, two distinct conversations + a third project.

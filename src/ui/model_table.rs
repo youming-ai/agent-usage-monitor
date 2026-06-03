@@ -5,13 +5,29 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Row, Table},
 };
+use std::collections::HashMap;
 
 /// Per-model totals (input/output/cache tokens, cost, request count).
-pub fn model_table(active_tab: Tab, models: &[SessionSummary], total_calls: usize) -> Table<'static> {
+/// Takes a map keyed by model name; rows are sorted by cost descending (then
+/// model name) so the order is stable across frames and process runs — a bare
+/// `HashMap` iteration would reshuffle on rehash / key removal.
+pub fn model_table(
+    active_tab: Tab,
+    models: &HashMap<String, SessionSummary>,
+    total_calls: usize,
+) -> Table<'static> {
     let label = active_tab.label();
 
+    let mut models: Vec<&SessionSummary> = models.values().collect();
+    models.sort_by(|a, b| {
+        b.total_cost
+            .partial_cmp(&a.total_cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.model.cmp(&b.model))
+    });
+
     let rows: Vec<Row> = models
-        .iter()
+        .into_iter()
         .map(|s| {
             Row::new(vec![
                 Cell::from(s.model.clone()),
