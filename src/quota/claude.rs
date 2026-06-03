@@ -1,4 +1,5 @@
-use super::{QuotaInfo, QuotaWindow};
+use super::util::format_duration_short;
+use super::{QuotaError, QuotaInfo, QuotaWindow};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -83,24 +84,6 @@ fn format_reset_time(iso_str: &str) -> Option<String> {
     format_duration_short(diff)
 }
 
-fn format_duration_short(total_seconds: i64) -> Option<String> {
-    if total_seconds <= 0 {
-        return None;
-    }
-
-    let days = total_seconds / 86_400;
-    let hours = (total_seconds % 86_400) / 3_600;
-    let minutes = (total_seconds % 3_600) / 60;
-
-    if days > 0 {
-        Some(format!("{days}d{hours}h"))
-    } else if hours > 0 {
-        Some(format!("{hours}h{minutes}m"))
-    } else {
-        Some(format!("{minutes}m"))
-    }
-}
-
 /// Fetch usage data from Claude API
 fn fetch_usage_json(access_token: &str) -> Option<Value> {
     let output = Command::new("/usr/bin/curl")
@@ -171,15 +154,30 @@ fn parse_usage_response(data: &Value, email: Option<String>) -> Option<QuotaInfo
         });
     }
 
-    // Check for error
-    let error = data.get("error").and_then(|e| {
-        let error_type = e.get("type").and_then(|v| v.as_str());
-        if error_type == Some("authentication_error") {
-            Some("Re-auth required".to_string())
-        } else {
-            e.get("message").and_then(|v| v.as_str()).map(String::from)
-        }
-    });
+    // Surface an API error only when we have no windows to show. A stray
+    // `error` key alongside valid windows must NOT hide real quota (the UI
+    // renders the error arm before the windows arm), and `.map` would set
+    // `Some` for any `error` key — so gate it on the windows being empty.
+    let error = if windows.is_empty() {
+        // `data.get("error")` is `Some` for an explicit `"error": null` (a
+        // common success sentinel) — filter that out so it isn't surfaced as a
+        // bogus parse error that would also force a re-fetch every tick.
+        data.get("error").filter(|e| !e.is_null()).map(|e| {
+            let error_type = e.get("type").and_then(|v| v.as_str());
+            let message = e
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            if error_type == Some("authentication_error") {
+                QuotaError::Auth(message)
+            } else {
+                QuotaError::Parse(format!("{}: {message}", error_type.unwrap_or("error")))
+            }
+        })
+    } else {
+        None
+    };
 
     Some(QuotaInfo {
         tool_name: "Claude Code".to_string(),
@@ -197,4 +195,43 @@ pub fn fetch_quota() -> Option<QuotaInfo> {
     let email = read_email();
     let data = fetch_usage_json(&access_token)?;
     parse_usage_response(&data, email)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn empty_windows_no_error_is_none() {
+        let q = parse_usage_response(&json!({}), None).unwrap();
+        assert!(q.windows.is_empty());
+        assert!(q.error.is_none()); // renders as "no quota data", not a failure
+    }
+
+    #[test]
+    fn explicit_null_error_is_ignored() {
+        let q = parse_usage_response(&json!({ "error": null }), None).unwrap();
+        assert!(q.error.is_none());
+    }
+
+    #[test]
+    fn auth_error_classified_when_no_windows() {
+        let data = json!({ "error": { "type": "authentication_error", "message": "expired" } });
+        let q = parse_usage_response(&data, None).unwrap();
+        assert_eq!(q.error, Some(QuotaError::Auth("expired".into())));
+    }
+
+    #[test]
+    fn stray_error_does_not_hide_valid_windows() {
+        // A present `five_hour` block yields a window; a stray error must not
+        // suppress it (the UI renders the error arm before the windows arm).
+        let data = json!({
+            "five_hour": { "utilization": 10.0 },
+            "error": { "type": "x", "message": "y" },
+        });
+        let q = parse_usage_response(&data, None).unwrap();
+        assert!(!q.windows.is_empty());
+        assert!(q.error.is_none());
+    }
 }
