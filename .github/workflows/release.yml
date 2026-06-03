@@ -1,15 +1,34 @@
 name: Release
 
+# release-please watches main: it keeps a "release PR" up to date (next
+# version computed from conventional commits + CHANGELOG). Merging that PR
+# cuts the tag + GitHub Release, and the SAME run then builds and attaches the
+# per-platform binaries. Versioning and building share one workflow, so the
+# tag created with GITHUB_TOKEN doesn't need a PAT to trigger the build.
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   build:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -54,8 +73,9 @@ jobs:
           name: ${{ matrix.name }}
           path: ${{ matrix.name }}.tar.gz
 
-  release:
-    needs: build
+  upload:
+    needs: [release-please, build]
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
@@ -63,8 +83,8 @@ jobs:
         with:
           merge-multiple: true
 
-      - name: Create GitHub Release
+      - name: Attach binaries to the release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: '*.tar.gz'
