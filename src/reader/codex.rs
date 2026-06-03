@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::find_recursive;
 use super::jsonl_reader::JsonlReader;
 
 /// Per-file running state. A rollout file declares its model and working
@@ -57,7 +58,12 @@ impl JsonlReader for CodexReader {
     fn find_files(&self) -> Vec<PathBuf> {
         let mut files = Vec::new();
         if self.sessions_dir.exists() {
-            find_rollout_recursive(&self.sessions_dir, &mut files);
+            find_recursive(&self.sessions_dir, &mut files, &|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
+                    .unwrap_or(false)
+            });
         }
         files
     }
@@ -246,9 +252,6 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         cache_read_tokens: delta_cached,
         cache_creation_tokens: 0,
         cost_usd,
-        service_tier: String::new(),
-        message_id: String::new(),
-        request_id: String::new(),
     })
 }
 
@@ -257,24 +260,6 @@ fn extract_codex_project(path: &Path) -> String {
         .and_then(|s| s.to_str())
         .map(|s| s.split('-').next_back().unwrap_or(s).to_string())
         .unwrap_or_else(|| "codex".to_string())
-}
-
-fn find_rollout_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                find_rollout_recursive(&path, files);
-            } else if path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
-                .unwrap_or(false)
-            {
-                files.push(path);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
