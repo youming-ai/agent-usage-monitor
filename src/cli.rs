@@ -10,16 +10,16 @@ pub struct Cli {
     pub command: Option<Commands>,
 
     /// Path to Claude Code data directory
-    #[arg(long, default_value_os_t = default_claude_path())]
-    pub claude_path: PathBuf,
+    #[arg(long)]
+    pub claude_path: Option<PathBuf>,
 
     /// Path to Codex data directory
-    #[arg(long, default_value_os_t = default_codex_path())]
-    pub codex_path: PathBuf,
+    #[arg(long)]
+    pub codex_path: Option<PathBuf>,
 
     /// Polling interval in seconds
-    #[arg(short, long, default_value_t = 5)]
-    pub refresh: u64,
+    #[arg(short, long)]
+    pub refresh: Option<u64>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -46,28 +46,16 @@ pub enum Commands {
 pub enum ConfigAction {
     /// Show current configuration
     Show,
-    
+
     /// Set a configuration value
     Set {
         /// Configuration key (e.g., claude_path, codex_path, refresh, max_records)
         key: String,
-        
+
         /// Configuration value
         value: String,
     },
-    
+
     /// Reset configuration to defaults
     Reset,
-}
-
-fn default_claude_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude/projects")
-}
-
-fn default_codex_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".codex")
 }
