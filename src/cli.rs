@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(long)]
     pub codex_path: Option<PathBuf>,
 
+    /// Path to opencode data directory
+    #[arg(long)]
+    pub opencode_path: Option<PathBuf>,
+
     /// Polling interval in seconds
     #[arg(short, long)]
     pub refresh: Option<u64>,

@@ -12,6 +12,10 @@ pub struct Config {
     #[serde(default = "default_codex_path")]
     pub codex_path: PathBuf,
 
+    /// Path to opencode data directory (contains opencode.db)
+    #[serde(default = "default_opencode_path")]
+    pub opencode_path: PathBuf,
+
     /// Polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -26,6 +30,7 @@ impl Default for Config {
         Self {
             claude_path: default_claude_path(),
             codex_path: default_codex_path(),
+            opencode_path: default_opencode_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -42,6 +47,20 @@ fn default_codex_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".codex")
+}
+
+fn default_opencode_path() -> PathBuf {
+    // opencode uses the XDG data dir on every platform (NOT macOS's
+    // ~/Library/Application Support), so we resolve it ourselves rather than
+    // via dirs::data_dir().
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".local/share")
+        })
+        .join("opencode")
 }
 
 fn default_refresh() -> u64 {
@@ -100,6 +119,12 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.refresh, 5);
         assert_eq!(config.max_records, 100);
+    }
+
+    #[test]
+    fn default_opencode_path_ends_with_opencode() {
+        let p = default_opencode_path();
+        assert!(p.ends_with("opencode"), "got {p:?}");
     }
 
     #[test]

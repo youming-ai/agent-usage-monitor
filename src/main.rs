@@ -66,12 +66,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // provide it" signal — and we fall back to the config value.
     let claude_path = args.claude_path.unwrap_or(config.claude_path);
     let codex_path = args.codex_path.unwrap_or(config.codex_path);
+    let opencode_path = args.opencode_path.unwrap_or(config.opencode_path);
     // Clamp to at least 1s: tokio::time::interval panics on a zero period, so
     // `--refresh 0` (or refresh = 0 in config) would crash the reader tasks.
     let refresh = args.refresh.unwrap_or(config.refresh).max(1);
 
     info!("Monitoring Claude Code at {:?}", claude_path);
     info!("Monitoring Codex at {:?}", codex_path);
+    info!("Monitoring opencode at {:?}", opencode_path);
     info!("Refresh interval: {} seconds", refresh);
 
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
@@ -83,6 +85,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )),
         Arc::new(std::sync::Mutex::new(
             Box::new(CodexReader::new(codex_path.clone())) as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(reader::opencode::OpencodeReader::new(opencode_path.clone()))
+                as Box<dyn UsageSource>,
         )),
     ];
     let mut reader_handles = Vec::new();
@@ -247,11 +253,12 @@ fn handle_config(action: Option<cli::ConfigAction>) -> Result<(), Box<dyn std::e
             match key.as_str() {
                 "claude_path" => config.claude_path = std::path::PathBuf::from(value),
                 "codex_path" => config.codex_path = std::path::PathBuf::from(value),
+                "opencode_path" => config.opencode_path = std::path::PathBuf::from(value),
                 "refresh" => config.refresh = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
                 "max_records" => config.max_records = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
                 _ => {
                     eprintln!("Unknown configuration key: {}", key);
-                    eprintln!("Available keys: claude_path, codex_path, refresh, max_records");
+                    eprintln!("Available keys: claude_path, codex_path, opencode_path, refresh, max_records");
                     std::process::exit(1);
                 }
             }
