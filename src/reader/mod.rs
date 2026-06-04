@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex;
 pub mod jsonl_reader;
+pub mod opencode;
 pub mod pricing;
 
 use crate::state::{Platform, UsageRecord};
