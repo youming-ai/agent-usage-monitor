@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::event::{AppEvent, EventLoop};
 use crate::reader::claude::ClaudeReader;
 use crate::reader::codex::CodexReader;
-use crate::reader::jsonl_reader::JsonlReader;
+use crate::reader::UsageSource;
 use crate::state::AppState;
 use clap::Parser;
 use crossterm::event::KeyCode;
@@ -66,92 +66,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // provide it" signal — and we fall back to the config value.
     let claude_path = args.claude_path.unwrap_or(config.claude_path);
     let codex_path = args.codex_path.unwrap_or(config.codex_path);
+    let opencode_path = args.opencode_path.unwrap_or(config.opencode_path);
     // Clamp to at least 1s: tokio::time::interval panics on a zero period, so
     // `--refresh 0` (or refresh = 0 in config) would crash the reader tasks.
     let refresh = args.refresh.unwrap_or(config.refresh).max(1);
 
     info!("Monitoring Claude Code at {:?}", claude_path);
     info!("Monitoring Codex at {:?}", codex_path);
+    info!("Monitoring opencode at {:?}", opencode_path);
     info!("Refresh interval: {} seconds", refresh);
 
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
 
-    // Claude reader task (usage records). The reader's scan_all / poll_delta
-    // do synchronous file IO, so we wrap each call in spawn_blocking to keep
-    // large JSONL files from stalling the tokio runtime worker.
-    let claude_state = app_state.clone();
-    let claude_reader = Arc::new(std::sync::Mutex::new(ClaudeReader::new(claude_path.clone())));
-    let refresh_interval = refresh;
-    let claude_handle = task::spawn(async move {
-        // Initial scan
-        {
-            let r = claude_reader.clone();
+    // Reader tasks: one per usage source, all driven uniformly via UsageSource.
+    let sources: Vec<Arc<std::sync::Mutex<Box<dyn UsageSource>>>> = vec![
+        Arc::new(std::sync::Mutex::new(
+            Box::new(ClaudeReader::new(claude_path.clone())) as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(CodexReader::new(codex_path.clone())) as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(reader::opencode::OpencodeReader::new(opencode_path.clone()))
+                as Box<dyn UsageSource>,
+        )),
+    ];
+    let mut reader_handles = Vec::new();
+    for source in &sources {
+        let source = source.clone();
+        let reader_state = app_state.clone();
+        let refresh_interval = refresh;
+        let platform = source.lock().unwrap_or_else(|e| e.into_inner()).platform();
+        reader_handles.push(task::spawn(async move {
+            // Initial scan
+            let s = source.clone();
             let initial = task::spawn_blocking(move || {
-                r.lock().unwrap_or_else(|e| e.into_inner()).scan_all()
+                s.lock().unwrap_or_else(|e| e.into_inner()).scan_all()
             })
             .await
             .unwrap_or_default();
-            info!("Claude: Found {} initial records", initial.len());
+            info!("{:?}: Found {} initial records", platform, initial.len());
             if !initial.is_empty()
-                && let Ok(mut state) = claude_state.write() {
-                    state.add_claude_records(initial);
+                && let Ok(mut state) = reader_state.write() {
+                    state.add_records(platform, initial);
                 }
-        }
 
-        let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
-        loop {
-            interval.tick().await;
-            let r = claude_reader.clone();
-            let new_records = task::spawn_blocking(move || {
-                r.lock().unwrap_or_else(|e| e.into_inner()).poll_delta()
-            })
-            .await
-            .unwrap_or_default();
-            if !new_records.is_empty() {
-                info!("Claude: Found {} new records", new_records.len());
-                if let Ok(mut state) = claude_state.write() {
-                    state.add_claude_records(new_records);
+            let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
+            loop {
+                interval.tick().await;
+                let s = source.clone();
+                let new_records = task::spawn_blocking(move || {
+                    s.lock().unwrap_or_else(|e| e.into_inner()).poll_delta()
+                })
+                .await
+                .unwrap_or_default();
+                if !new_records.is_empty() {
+                    info!("{:?}: Found {} new records", platform, new_records.len());
+                    if let Ok(mut state) = reader_state.write() {
+                        state.add_records(platform, new_records);
+                    }
                 }
             }
-        }
-    });
-
-    // Codex reader task (usage records) — same spawn_blocking pattern.
-    let codex_state = app_state.clone();
-    let codex_reader = Arc::new(std::sync::Mutex::new(CodexReader::new(codex_path.clone())));
-    let codex_handle = task::spawn(async move {
-        // Initial scan
-        {
-            let r = codex_reader.clone();
-            let initial = task::spawn_blocking(move || {
-                r.lock().unwrap_or_else(|e| e.into_inner()).scan_all()
-            })
-            .await
-            .unwrap_or_default();
-            info!("Codex: Found {} initial records", initial.len());
-            if !initial.is_empty()
-                && let Ok(mut state) = codex_state.write() {
-                    state.add_codex_records(initial);
-                }
-        }
-
-        let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
-        loop {
-            interval.tick().await;
-            let r = codex_reader.clone();
-            let new_records = task::spawn_blocking(move || {
-                r.lock().unwrap_or_else(|e| e.into_inner()).poll_delta()
-            })
-            .await
-            .unwrap_or_default();
-            if !new_records.is_empty() {
-                info!("Codex: Found {} new records", new_records.len());
-                if let Ok(mut state) = codex_state.write() {
-                    state.add_codex_records(new_records);
-                }
-            }
-        }
-    });
+        }));
+    }
 
     // Quota reader task (Claude Code & Codex limits)
     let quota_state = app_state.clone();
@@ -223,8 +200,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     tui_handle.await??;
-    claude_handle.abort();
-    codex_handle.abort();
+    for handle in &reader_handles {
+        handle.abort();
+    }
     quota_handle.abort();
 
     Ok(())
@@ -275,11 +253,12 @@ fn handle_config(action: Option<cli::ConfigAction>) -> Result<(), Box<dyn std::e
             match key.as_str() {
                 "claude_path" => config.claude_path = std::path::PathBuf::from(value),
                 "codex_path" => config.codex_path = std::path::PathBuf::from(value),
+                "opencode_path" => config.opencode_path = std::path::PathBuf::from(value),
                 "refresh" => config.refresh = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
                 "max_records" => config.max_records = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
                 _ => {
                     eprintln!("Unknown configuration key: {}", key);
-                    eprintln!("Available keys: claude_path, codex_path, refresh, max_records");
+                    eprintln!("Available keys: claude_path, codex_path, opencode_path, refresh, max_records");
                     std::process::exit(1);
                 }
             }
@@ -337,6 +316,7 @@ fn run_tui(
                             match state.active_tab {
                                 state::Tab::ClaudeCode => state.clear_claude(),
                                 state::Tab::Codex => state.clear_codex(),
+                                state::Tab::OpenCode => state.clear_opencode(),
                             }
                         }
                     }

@@ -46,6 +46,13 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
             state.codex_total_calls,
             state.codex_total_cost,
         ),
+        crate::state::Tab::OpenCode => (
+            state.opencode_quota.as_ref(),
+            &state.opencode_sessions,
+            &state.opencode_records,
+            state.opencode_total_calls,
+            state.opencode_total_cost,
+        ),
     };
 
     // Header: a bottom rule in the accent color, with tabs left and the
@@ -63,7 +70,11 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     frame.render_widget(tabs::tab_line(active), header_cols[0]);
     frame.render_widget(tabs::account(email), header_cols[1]);
 
-    frame.render_widget(quota_bar::quota_panel(active, quota), chunks[1]);
+    let quota_widget = match active {
+        crate::state::Tab::OpenCode => quota_bar::no_quota_source(),
+        _ => quota_bar::quota_panel(active, quota),
+    };
+    frame.render_widget(quota_widget, chunks[1]);
 
     // Split the main area: the per-model table sized to its rows on top, with
     // the per-session usage table filling the remaining space below.
@@ -169,5 +180,14 @@ mod tests {
         assert!(out.contains("ollama-monitor")); // session table
         assert!(out.contains("sessions"));
         assert!(out.contains("42 calls"));
+    }
+
+    #[test]
+    fn renders_opencode_tab_empty_with_no_quota() {
+        let mut s = sample_state();
+        s.active_tab = crate::state::Tab::OpenCode;
+        let out = dump(80, 18, s);
+        assert!(out.contains("OPENCODE")); // third tab is present
+        assert!(out.contains("no quota data")); // opencode has no quota source
     }
 }

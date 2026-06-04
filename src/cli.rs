@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "aum")]
 #[command(version)]
-#[command(about = "Real-time Claude Code & Codex usage monitor")]
+#[command(about = "Real-time Claude Code, Codex & opencode usage monitor")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -16,6 +16,10 @@ pub struct Cli {
     /// Path to Codex data directory
     #[arg(long)]
     pub codex_path: Option<PathBuf>,
+
+    /// Path to opencode data directory
+    #[arg(long)]
+    pub opencode_path: Option<PathBuf>,
 
     /// Polling interval in seconds
     #[arg(short, long)]
@@ -49,7 +53,7 @@ pub enum ConfigAction {
 
     /// Set a configuration value
     Set {
-        /// Configuration key (e.g., claude_path, codex_path, refresh, max_records)
+        /// Configuration key (e.g., claude_path, codex_path, opencode_path, refresh, max_records)
         key: String,
 
         /// Configuration value

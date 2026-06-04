@@ -1,8 +1,11 @@
 pub mod claude;
 pub mod codex;
 pub mod jsonl_reader;
+pub mod opencode;
 pub mod pricing;
 
+use crate::state::{Platform, UsageRecord};
+use jsonl_reader::JsonlReader;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -42,6 +45,39 @@ pub(crate) fn find_recursive(dir: &Path, files: &mut Vec<PathBuf>, keep: &dyn Fn
         } else if keep(&path) {
             files.push(path);
         }
+    }
+}
+
+/// A source of usage records, abstracting over the backing store (JSONL files
+/// for Claude/Codex, SQLite for opencode). `main.rs` drives every source the
+/// same way: an initial `scan_all`, then a `poll_delta` loop.
+pub trait UsageSource: Send {
+    fn platform(&self) -> Platform;
+    fn scan_all(&mut self) -> Vec<UsageRecord>;
+    fn poll_delta(&mut self) -> Vec<UsageRecord>;
+}
+
+impl UsageSource for claude::ClaudeReader {
+    fn platform(&self) -> Platform {
+        Platform::ClaudeCode
+    }
+    fn scan_all(&mut self) -> Vec<UsageRecord> {
+        JsonlReader::scan_all(self)
+    }
+    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+        JsonlReader::poll_delta(self)
+    }
+}
+
+impl UsageSource for codex::CodexReader {
+    fn platform(&self) -> Platform {
+        Platform::Codex
+    }
+    fn scan_all(&mut self) -> Vec<UsageRecord> {
+        JsonlReader::scan_all(self)
+    }
+    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+        JsonlReader::poll_delta(self)
     }
 }
 
