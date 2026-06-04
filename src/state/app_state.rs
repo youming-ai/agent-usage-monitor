@@ -166,6 +166,15 @@ impl AppState {
         }
     }
 
+    /// Route a batch of records to the bucket for `platform`. Every batch from
+    /// a single reader is one platform, so this just dispatches.
+    pub fn add_records(&mut self, platform: Platform, records: Vec<UsageRecord>) {
+        match platform {
+            Platform::ClaudeCode => self.add_claude_records(records),
+            Platform::Codex => self.add_codex_records(records),
+        }
+    }
+
     pub fn clear_claude(&mut self) {
         self.claude_records.clear();
         self.claude_sessions.clear();
@@ -241,6 +250,17 @@ mod tests {
             cache_creation_tokens: 0,
             cost_usd: cost,
         }
+    }
+
+    #[test]
+    fn add_records_dispatches_by_platform() {
+        let mut s = AppState::with_capacity(10);
+        s.add_records(Platform::ClaudeCode, vec![rec("opus-4", 100, 50, 1.0)]);
+        s.add_records(Platform::Codex, vec![rec("gpt-5", 200, 80, 2.0)]);
+        assert_eq!(s.claude_total_calls, 1);
+        assert_eq!(s.codex_total_calls, 1);
+        assert!(s.claude_sessions.contains_key("opus-4"));
+        assert!(s.codex_sessions.contains_key("gpt-5"));
     }
 
     #[test]
