@@ -54,6 +54,7 @@ fn default_opencode_path() -> PathBuf {
     // ~/Library/Application Support), so we resolve it ourselves rather than
     // via dirs::data_dir().
     std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             dirs::home_dir()
