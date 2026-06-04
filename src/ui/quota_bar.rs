@@ -84,6 +84,15 @@ pub fn quota_panel(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'sta
     Paragraph::new(lines)
 }
 
+/// Quota line for a tab that has no quota source at all (opencode today).
+/// Distinct from the `loading…` shown while a Claude/Codex quota is in flight.
+pub fn no_quota_source() -> Paragraph<'static> {
+    Paragraph::new(Line::from(Span::styled(
+        " no quota data",
+        Style::default().fg(Color::DarkGray),
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

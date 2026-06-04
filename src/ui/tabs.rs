@@ -22,12 +22,14 @@ fn tab_span(tab: Tab, active: bool) -> Span<'static> {
     }
 }
 
-/// The header tab row: ` CLAUDE   codex` with the active tab accented.
+/// The header tab row: ` CLAUDE   codex   opencode` with the active tab accented.
 pub fn tab_line(active: Tab) -> Paragraph<'static> {
     let line = Line::from(vec![
         tab_span(Tab::ClaudeCode, active == Tab::ClaudeCode),
         Span::raw("  "),
         tab_span(Tab::Codex, active == Tab::Codex),
+        Span::raw("  "),
+        tab_span(Tab::OpenCode, active == Tab::OpenCode),
     ]);
     Paragraph::new(line)
 }

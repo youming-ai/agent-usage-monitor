@@ -309,6 +309,7 @@ fn run_tui(
                             match state.active_tab {
                                 state::Tab::ClaudeCode => state.clear_claude(),
                                 state::Tab::Codex => state.clear_codex(),
+                                state::Tab::OpenCode => state.clear_opencode(),
                             }
                         }
                     }

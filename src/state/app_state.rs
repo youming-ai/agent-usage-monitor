@@ -6,38 +6,47 @@ use std::collections::{HashMap, VecDeque};
 pub enum Platform {
     ClaudeCode,
     Codex,
+    OpenCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     ClaudeCode,
     Codex,
+    OpenCode,
 }
 
 impl Tab {
     pub fn next(self) -> Self {
         match self {
             Tab::ClaudeCode => Tab::Codex,
-            Tab::Codex => Tab::ClaudeCode,
+            Tab::Codex => Tab::OpenCode,
+            Tab::OpenCode => Tab::ClaudeCode,
         }
     }
 
     pub fn prev(self) -> Self {
-        self.next()
+        match self {
+            Tab::ClaudeCode => Tab::OpenCode,
+            Tab::Codex => Tab::ClaudeCode,
+            Tab::OpenCode => Tab::Codex,
+        }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::ClaudeCode => "CLAUDE",
             Tab::Codex => "CODEX",
+            Tab::OpenCode => "OPENCODE",
         }
     }
 
     /// Primary color for the tab (used for borders and accents)
     pub fn primary_color(self) -> ratatui::style::Color {
         match self {
-            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 165, 0),  // Orange
-            Tab::Codex => ratatui::style::Color::Rgb(59, 130, 246),     // Blue
+            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 165, 0),
+            Tab::Codex => ratatui::style::Color::Rgb(59, 130, 246),
+            Tab::OpenCode => ratatui::style::Color::Rgb(16, 185, 129),
         }
     }
 
@@ -45,8 +54,9 @@ impl Tab {
     #[allow(dead_code)]
     pub fn secondary_color(self) -> ratatui::style::Color {
         match self {
-            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 200, 100),  // Light Orange
-            Tab::Codex => ratatui::style::Color::Rgb(147, 197, 253),      // Light Blue
+            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 200, 100),
+            Tab::Codex => ratatui::style::Color::Rgb(147, 197, 253),
+            Tab::OpenCode => ratatui::style::Color::Rgb(110, 231, 183),
         }
     }
 }
@@ -99,6 +109,14 @@ pub struct AppState {
     pub codex_quota: Option<QuotaInfo>,
     pub codex_max_records: usize,
 
+    // opencode
+    pub opencode_records: VecDeque<UsageRecord>,
+    pub opencode_sessions: HashMap<String, SessionSummary>,
+    pub opencode_total_calls: usize,
+    pub opencode_total_cost: f64,
+    pub opencode_quota: Option<QuotaInfo>,
+    pub opencode_max_records: usize,
+
     // Shared
     pub active_tab: Tab,
 }
@@ -125,6 +143,12 @@ impl AppState {
             codex_quota: None,
             claude_max_records: max_records,
             codex_max_records: max_records,
+            opencode_records: VecDeque::with_capacity(max_records),
+            opencode_sessions: HashMap::new(),
+            opencode_total_calls: 0,
+            opencode_total_cost: 0.0,
+            opencode_quota: None,
+            opencode_max_records: max_records,
             active_tab: Tab::ClaudeCode,
         }
     }
@@ -166,12 +190,28 @@ impl AppState {
         }
     }
 
+    pub fn add_opencode_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            // Lifetime totals stay cumulative; only the windowed per-model
+            // aggregate is reversed on eviction (see add_claude_records).
+            if self.opencode_records.len() >= self.opencode_max_records
+                && let Some(old) = self.opencode_records.pop_front() {
+                    reverse_model_aggregate(&mut self.opencode_sessions, &old);
+                }
+            self.opencode_total_cost += r.cost_usd;
+            self.opencode_total_calls += 1;
+            upsert_model_aggregate(&mut self.opencode_sessions, &r);
+            self.opencode_records.push_back(r);
+        }
+    }
+
     /// Route a batch of records to the bucket for `platform`. Every batch from
     /// a single reader is one platform, so this just dispatches.
     pub fn add_records(&mut self, platform: Platform, records: Vec<UsageRecord>) {
         match platform {
             Platform::ClaudeCode => self.add_claude_records(records),
             Platform::Codex => self.add_codex_records(records),
+            Platform::OpenCode => self.add_opencode_records(records),
         }
     }
 
@@ -187,6 +227,13 @@ impl AppState {
         self.codex_sessions.clear();
         self.codex_total_calls = 0;
         self.codex_total_cost = 0.0;
+    }
+
+    pub fn clear_opencode(&mut self) {
+        self.opencode_records.clear();
+        self.opencode_sessions.clear();
+        self.opencode_total_calls = 0;
+        self.opencode_total_cost = 0.0;
     }
 }
 
