@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "aum")]
 #[command(version)]
-#[command(about = "Real-time Claude Code & Codex usage monitor")]
+#[command(about = "Real-time Claude Code, Codex & opencode usage monitor")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
