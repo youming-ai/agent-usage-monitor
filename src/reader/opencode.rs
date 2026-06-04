@@ -4,6 +4,7 @@ use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::path::PathBuf;
+use tracing::warn;
 
 /// Reads per-call usage from opencode's local SQLite DB (`opencode.db`). Each
 /// assistant `message` row becomes one `UsageRecord`. Opened read-only; if the
@@ -39,14 +40,27 @@ impl OpencodeReader {
             return Vec::new();
         };
         let mut stmt = match conn.prepare(
-            "SELECT m.data, s.directory, m.session_id, m.time_created \
-             FROM message m JOIN session s ON m.session_id = s.id \
+            // LEFT JOIN so messages whose session row has been deleted ("orphan"
+            // sessions) are still counted — their tokens/cost are real usage.
+            // COALESCE maps a missing directory to "", and basename("") returns
+            // "unknown", giving a graceful label without special-casing.
+            //
+            // Strictly > (not >=) is deliberate: re-emitting the boundary row on
+            // every poll would double-count in the no-dedup aggregator. The rare
+            // trade-off is that two assistant messages written in the exact same
+            // millisecond straddling a poll boundary could drop the later one —
+            // negligible at second-granularity polling.
+            "SELECT m.data, COALESCE(s.directory, '') AS directory, m.session_id, m.time_created \
+             FROM message m LEFT JOIN session s ON m.session_id = s.id \
              WHERE json_extract(m.data, '$.role') = 'assistant' \
                AND m.time_created > ?1 \
              ORDER BY m.time_created",
         ) {
             Ok(s) => s,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                warn!("opencode: failed to prepare usage query: {e}");
+                return Vec::new();
+            }
         };
         let rows = stmt.query_map([cursor], |row| {
             Ok((
@@ -222,5 +236,24 @@ mod tests {
         let mut reader = OpencodeReader::new(PathBuf::from("/nonexistent/path"));
         assert!(reader.scan_all().is_empty());
         assert!(reader.poll_delta().is_empty());
+    }
+
+    #[test]
+    fn counts_messages_with_missing_session() {
+        let conn = setup();
+        // Assistant message whose session_id has no matching session row.
+        conn.execute(
+            "INSERT INTO message VALUES ('m_orphan', 'ses_missing', 3000, ?1)",
+            rusqlite::params![ASSISTANT_2],
+        )
+        .unwrap();
+        let mut reader = OpencodeReader::from_connection(conn);
+        let records = reader.scan_all();
+        assert_eq!(records.len(), 1);
+        assert!(
+            records[0].session.starts_with("unknown"),
+            "got {}",
+            records[0].session
+        );
     }
 }
