@@ -67,7 +67,7 @@ pub fn quota_panel(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'sta
             Style::default().fg(Color::DarkGray),
         ))],
         Some(q) if q.error.is_some() => vec![Line::from(Span::styled(
-            format!(" ✗ {}", q.error.as_deref().unwrap_or("error")),
+            format!(" ✗ {}", q.error.as_ref().unwrap().display()),
             Style::default().fg(Color::DarkGray),
         ))],
         Some(q) if q.windows.is_empty() => vec![Line::from(Span::styled(

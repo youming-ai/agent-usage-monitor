@@ -2,9 +2,9 @@ use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+use super::find_recursive;
 use super::jsonl_reader::JsonlReader;
 
 pub struct ClaudeReader {
@@ -32,15 +32,17 @@ impl JsonlReader for ClaudeReader {
     fn file_positions(&mut self) -> &mut HashMap<PathBuf, u64> {
         &mut self.file_positions
     }
-    
+
     fn find_files(&self) -> Vec<PathBuf> {
         let mut files = Vec::new();
         if self.data_dir.exists() {
-            find_jsonl_recursive(&self.data_dir, &mut files);
+            find_recursive(&self.data_dir, &mut files, &|p| {
+                p.extension().map(|e| e == "jsonl").unwrap_or(false)
+            });
         }
         files
     }
-    
+
     fn parse_line(&self, line: &str) -> Option<UsageRecord> {
         parse_claude_line(line)
     }
@@ -88,24 +90,6 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
     let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
     let session = crate::reader::session_label(&dir, session_id);
 
-    let request_id = v
-        .get("requestId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let message_id = message
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let service_tier = usage
-        .get("service_tier")
-        .and_then(|v| v.as_str())
-        .unwrap_or("standard")
-        .to_string();
-
     // Cost: read from JSONL only (comes from Anthropic API response)
     let cost_usd = v
         .get("cost_usd")
@@ -123,28 +107,13 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_creation,
         cost_usd,
-        service_tier,
-        message_id,
-        request_id,
     })
-}
-
-fn find_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                find_jsonl_recursive(&path, files);
-            } else if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-                files.push(path);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
 
     /// A Claude JSONL file mixes non-record lines (user, summary) with
@@ -162,7 +131,7 @@ mod tests {
         .join("\n")
     }
 
-    fn write_file(dir: &Path, name: &str, content: &str) -> PathBuf {
+    fn write_file(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
         let path = dir.join(name);
         let mut f = fs::File::create(&path).unwrap();
         f.write_all(content.as_bytes()).unwrap();

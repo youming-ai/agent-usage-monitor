@@ -59,45 +59,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    // Merge CLI args with config (CLI takes precedence)
-    let claude_path = if args.claude_path != Config::default().claude_path {
-        args.claude_path
-    } else {
-        config.claude_path
-    };
-    let codex_path = if args.codex_path != Config::default().codex_path {
-        args.codex_path
-    } else {
-        config.codex_path
-    };
-    let refresh = if args.refresh != 5 {
-        args.refresh
-    } else {
-        config.refresh
-    };
+    // Merge CLI args with config: CLI takes precedence, but we can no longer
+    // rely on "arg != default" to detect user input (the user may have
+    // explicitly set a value equal to the default in config). Instead, the
+    // CLI fields are `Option`, so `None` is the unambiguous "user didn't
+    // provide it" signal — and we fall back to the config value.
+    let claude_path = args.claude_path.unwrap_or(config.claude_path);
+    let codex_path = args.codex_path.unwrap_or(config.codex_path);
+    // Clamp to at least 1s: tokio::time::interval panics on a zero period, so
+    // `--refresh 0` (or refresh = 0 in config) would crash the reader tasks.
+    let refresh = args.refresh.unwrap_or(config.refresh).max(1);
 
     info!("Monitoring Claude Code at {:?}", claude_path);
     info!("Monitoring Codex at {:?}", codex_path);
     info!("Refresh interval: {} seconds", refresh);
 
-    let app_state = Arc::new(RwLock::new(AppState::new()));
+    let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
 
-    // Claude reader task (usage records)
+    // Claude reader task (usage records). The reader's scan_all / poll_delta
+    // do synchronous file IO, so we wrap each call in spawn_blocking to keep
+    // large JSONL files from stalling the tokio runtime worker.
     let claude_state = app_state.clone();
-    let mut claude_reader = ClaudeReader::new(claude_path.clone());
+    let claude_reader = Arc::new(std::sync::Mutex::new(ClaudeReader::new(claude_path.clone())));
     let refresh_interval = refresh;
     let claude_handle = task::spawn(async move {
-        let initial = claude_reader.scan_all();
-        info!("Claude: Found {} initial records", initial.len());
-        if !initial.is_empty()
-            && let Ok(mut state) = claude_state.write() {
-                state.add_claude_records(initial);
-            }
+        // Initial scan
+        {
+            let r = claude_reader.clone();
+            let initial = task::spawn_blocking(move || {
+                r.lock().unwrap_or_else(|e| e.into_inner()).scan_all()
+            })
+            .await
+            .unwrap_or_default();
+            info!("Claude: Found {} initial records", initial.len());
+            if !initial.is_empty()
+                && let Ok(mut state) = claude_state.write() {
+                    state.add_claude_records(initial);
+                }
+        }
 
         let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
         loop {
             interval.tick().await;
-            let new_records = claude_reader.poll_delta();
+            let r = claude_reader.clone();
+            let new_records = task::spawn_blocking(move || {
+                r.lock().unwrap_or_else(|e| e.into_inner()).poll_delta()
+            })
+            .await
+            .unwrap_or_default();
             if !new_records.is_empty() {
                 info!("Claude: Found {} new records", new_records.len());
                 if let Ok(mut state) = claude_state.write() {
@@ -107,21 +116,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
-    // Codex reader task (usage records)
+    // Codex reader task (usage records) — same spawn_blocking pattern.
     let codex_state = app_state.clone();
-    let mut codex_reader = CodexReader::new(codex_path.clone());
+    let codex_reader = Arc::new(std::sync::Mutex::new(CodexReader::new(codex_path.clone())));
     let codex_handle = task::spawn(async move {
-        let initial = codex_reader.scan_all();
-        info!("Codex: Found {} initial records", initial.len());
-        if !initial.is_empty()
-            && let Ok(mut state) = codex_state.write() {
-                state.add_codex_records(initial);
-            }
+        // Initial scan
+        {
+            let r = codex_reader.clone();
+            let initial = task::spawn_blocking(move || {
+                r.lock().unwrap_or_else(|e| e.into_inner()).scan_all()
+            })
+            .await
+            .unwrap_or_default();
+            info!("Codex: Found {} initial records", initial.len());
+            if !initial.is_empty()
+                && let Ok(mut state) = codex_state.write() {
+                    state.add_codex_records(initial);
+                }
+        }
 
         let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
         loop {
             interval.tick().await;
-            let new_records = codex_reader.poll_delta();
+            let r = codex_reader.clone();
+            let new_records = task::spawn_blocking(move || {
+                r.lock().unwrap_or_else(|e| e.into_inner()).poll_delta()
+            })
+            .await
+            .unwrap_or_default();
             if !new_records.is_empty() {
                 info!("Codex: Found {} new records", new_records.len());
                 if let Ok(mut state) = codex_state.write() {

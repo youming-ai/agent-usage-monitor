@@ -1,10 +1,22 @@
+//! Self-update: fetch the latest GitHub release, download the asset for this
+//! platform, extract it, and atomically replace the running binary.
+//!
+//! Replaces the previous implementation that shell'd out to `curl` and `tar`
+//! — those calls were non-portable and had `to_str().unwrap()` panics on
+//! non-UTF-8 paths. The new path uses `ureq` + `tar` + `flate2`, all pure
+//! Rust.
+
 mod platform;
 
+use flate2::read::GzDecoder;
 use serde::Deserialize;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const REPO: &str = "youming-ai/agent-usage-monitor";
 const BINARY_NAME: &str = "aum";
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Deserialize)]
 struct Release {
@@ -39,11 +51,11 @@ pub fn current_binary_path() -> Option<PathBuf> {
 /// Check for updates and optionally install
 pub fn check_and_update(force: bool, dry_run: bool) -> Result<UpdateResult, String> {
     let current_ver = current_version();
-    
+
     // Get latest release info
     let release = fetch_latest_release()?;
     let latest_ver = release.tag_name.trim_start_matches('v').to_string();
-    
+
     // Compare versions
     if !force && current_ver == latest_ver {
         return Ok(UpdateResult {
@@ -53,13 +65,15 @@ pub fn check_and_update(force: bool, dry_run: bool) -> Result<UpdateResult, Stri
             message: "Already on the latest version".to_string(),
         });
     }
-    
+
     // Find the correct asset for current platform
     let asset_name = platform::asset_name()?;
-    let asset = release.assets.iter()
+    let asset = release
+        .assets
+        .iter()
         .find(|a| a.name == asset_name)
-        .ok_or_else(|| format!("No release asset found for {}", asset_name))?;
-    
+        .ok_or_else(|| format!("No release asset found for {asset_name}"))?;
+
     if dry_run {
         return Ok(UpdateResult {
             updated: false,
@@ -68,115 +82,135 @@ pub fn check_and_update(force: bool, dry_run: bool) -> Result<UpdateResult, Stri
             message: format!("Would download: {}", asset.browser_download_url),
         });
     }
-    
+
     // Download and install
-    let binary_path = current_binary_path()
-        .ok_or("Could not determine current binary path")?;
-    
+    let binary_path = current_binary_path().ok_or("Could not determine current binary path")?;
+
     download_and_install(&asset.browser_download_url, &binary_path)?;
-    
+
     Ok(UpdateResult {
         updated: true,
         old_version: current_ver,
         new_version: latest_ver,
-        message: format!("Successfully updated to v{}", release.tag_name.trim_start_matches('v')),
+        message: format!(
+            "Successfully updated to v{}",
+            release.tag_name.trim_start_matches('v')
+        ),
     })
 }
 
-/// Fetch latest release info from GitHub API
+/// Fetch latest release info from GitHub API. GitHub requires a User-Agent
+/// header, and returns 302s to S3 for asset downloads — ureq follows both.
 fn fetch_latest_release() -> Result<Release, String> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
-    
-    let output = std::process::Command::new("curl")
-        .args(["-s", "-H", "Accept: application/vnd.github.v3+json", &url])
-        .output()
-        .map_err(|e| format!("Failed to execute curl: {}. Is curl installed?", e))?;
-    
-    if !output.status.success() {
-        return Err("Failed to fetch release info".to_string());
-    }
-    
-    let body = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse release info: {}", e))
+    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+
+    let body = ureq::get(&url)
+        .set("Accept", "application/vnd.github.v3+json")
+        .set("User-Agent", "aum-self-updater")
+        .timeout(HTTP_TIMEOUT)
+        .call()
+        .map_err(|e| format!("Failed to fetch release info: {e}. Check your network connection."))?
+        .into_string()
+        .map_err(|e| format!("Failed to read release response: {e}"))?;
+
+    serde_json::from_str(&body).map_err(|e| format!("Failed to parse release info: {e}"))
 }
 
-/// Download and install the new binary
-fn download_and_install(url: &str, target_path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    
-    // Create a temporary directory
-    let tmp_dir = tempfile::tempdir()
-        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
-    
+/// Download the tarball, extract it, and atomically replace `target` with the
+/// `aum` binary inside. The new binary is staged as a sibling of `target` so
+/// the final swap is a same-filesystem `rename` — atomic, safe to run on the
+/// live binary (the kernel keeps the old inode alive until exit), and free of
+/// the EXDEV failure a direct rename from the OS tempdir would hit.
+fn download_and_install(url: &str, target: &Path) -> Result<(), String> {
+    let tmp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp directory: {e}"))?;
     let archive_path = tmp_dir.path().join("update.tar.gz");
-    
-    // Download the archive
+
     println!("Downloading update...");
-    let status = std::process::Command::new("curl")
-        .args(["-fsSL", "-o", archive_path.to_str().unwrap(), url])
-        .status()
-        .map_err(|e| format!("Failed to download: {}", e))?;
-    
-    if !status.success() {
-        return Err("Download failed".to_string());
-    }
-    
-    // Extract the archive
+    download_to_path(url, &archive_path)
+        .map_err(|e| format!("Download failed: {e}"))?;
+
     println!("Extracting...");
-    let status = std::process::Command::new("tar")
-        .args(["xzf", archive_path.to_str().unwrap(), "-C", tmp_dir.path().to_str().unwrap()])
-        .status()
-        .map_err(|e| format!("Failed to extract: {}", e))?;
-    
-    if !status.success() {
-        return Err("Extraction failed".to_string());
-    }
-    
+    let archive_file = std::fs::File::open(&archive_path)
+        .map_err(|e| format!("Failed to open archive: {e}"))?;
+    let decoder = GzDecoder::new(archive_file);
+    let mut archive = tar::Archive::new(decoder);
+    archive
+        .unpack(tmp_dir.path())
+        .map_err(|e| format!("Extraction failed: {e}"))?;
+
     let new_binary = tmp_dir.path().join(BINARY_NAME);
-    
-    // Check if we need sudo
-    let needs_sudo = !is_writable(target_path);
-    
-    // Install the new binary
-    println!("Installing to {}...", target_path.display());
-    if needs_sudo {
-        let status = std::process::Command::new("sudo")
-            .args(["mv", new_binary.to_str().unwrap(), target_path.to_str().unwrap()])
-            .status()
-            .map_err(|e| format!("Failed to install with sudo: {}", e))?;
-        
-        if !status.success() {
-            return Err("Installation failed".to_string());
-        }
-        
-        let status = std::process::Command::new("sudo")
-            .args(["chmod", "755", target_path.to_str().unwrap()])
-            .status()
-            .map_err(|e| format!("Failed to set permissions: {}", e))?;
-        
-        if !status.success() {
-            return Err("Failed to set permissions".to_string());
-        }
-    } else {
-        std::fs::copy(&new_binary, target_path)
-            .map_err(|e| format!("Failed to copy binary: {}", e))?;
-        
-        std::fs::set_permissions(target_path, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("Failed to set permissions: {}", e))?;
+    if !new_binary.exists() {
+        return Err(format!(
+            "Archive did not contain a `{BINARY_NAME}` binary at the top level"
+        ));
     }
-    
+
+    println!("Installing to {}...", target.display());
+    // Stage the new binary as a sibling of the target, then atomically rename
+    // it into place. Renaming from the OS tempdir directly would fail with
+    // EXDEV when $TMPDIR is on a different mount (the common Linux layout), and
+    // copying *onto* the running binary would fail with ETXTBSY on Linux —
+    // staging next to the target then renaming avoids both.
+    let target_dir = target
+        .parent()
+        .ok_or_else(|| format!("Cannot determine parent directory of {}", target.display()))?;
+    let staged = target_dir.join(format!(".{BINARY_NAME}.update.tmp"));
+
+    // Remove any stale staged file from a previous interrupted run first. A
+    // foreign-owned leftover (e.g. from a killed `sudo aum update`) would make
+    // the copy below fail with EACCES and be misreported as "needs sudo" — but
+    // unlink permission depends on the (writable) directory, not the file, so
+    // removing it first succeeds. Clean up again if the copy itself fails.
+    let _ = std::fs::remove_file(&staged);
+    if let Err(e) = std::fs::copy(&new_binary, &staged) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(install_error(target, &e));
+    }
+    // Ensure the staged binary is executable; some tar archives / filesystems
+    // don't preserve the +x bit, so set it explicitly before the swap.
+    if let Err(e) = set_executable(&staged) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("Failed to set executable bit: {e}"));
+    }
+    if let Err(e) = std::fs::rename(&staged, target) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(install_error(target, &e));
+    }
+
     Ok(())
 }
 
-/// Check if a path is writable
-fn is_writable(path: &Path) -> bool {
-    if let Some(parent) = path.parent()
-        && let Ok(metadata) = std::fs::metadata(parent) {
-            use std::os::unix::fs::MetadataExt;
-            // Check if we own the directory or have write permission
-            let uid = unsafe { libc::getuid() };
-            return metadata.uid() == uid || (metadata.mode() & 0o002) != 0;
-        }
-    false
+/// Build an actionable install error, only pointing at `sudo` / a user-writable
+/// directory for a genuine permission failure — so we don't misdirect users
+/// there for, e.g., a full disk or other IO error.
+fn install_error(target: &Path, e: &io::Error) -> String {
+    let base = format!("Failed to install to {}: {e}", target.display());
+    if e.kind() == io::ErrorKind::PermissionDenied {
+        format!(
+            "{base}. The location needs elevated permissions — run `sudo aum update` \
+             or install to a user-writable directory like ~/.local/bin"
+        )
+    } else {
+        base
+    }
+}
+
+fn download_to_path(url: &str, dest: &Path) -> io::Result<()> {
+    let mut reader = ureq::get(url)
+        .set("User-Agent", "aum-self-updater")
+        .timeout(HTTP_TIMEOUT)
+        .call()
+        .map_err(|e| io::Error::other(format!("{e}")))?
+        .into_reader();
+    let mut file = std::fs::File::create(dest)?;
+    io::copy(&mut reader, &mut file)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_executable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms)
 }
