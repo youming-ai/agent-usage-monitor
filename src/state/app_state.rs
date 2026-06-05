@@ -8,6 +8,10 @@ pub enum Platform {
     Codex,
     OpenCode,
     KimiCode,
+    Pi,
+    OpenClaw,
+    Hermes,
+    Factory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +20,10 @@ pub enum Tab {
     Codex,
     OpenCode,
     KimiCode,
+    Pi,
+    OpenClaw,
+    Hermes,
+    Factory,
 }
 
 impl Tab {
@@ -24,17 +32,41 @@ impl Tab {
             Tab::ClaudeCode => Tab::Codex,
             Tab::Codex => Tab::OpenCode,
             Tab::OpenCode => Tab::KimiCode,
-            Tab::KimiCode => Tab::ClaudeCode,
+            Tab::KimiCode => Tab::Pi,
+            Tab::Pi => Tab::OpenClaw,
+            Tab::OpenClaw => Tab::Hermes,
+            Tab::Hermes => Tab::Factory,
+            Tab::Factory => Tab::ClaudeCode,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Tab::ClaudeCode => Tab::KimiCode,
+            Tab::ClaudeCode => Tab::Factory,
             Tab::Codex => Tab::ClaudeCode,
             Tab::OpenCode => Tab::Codex,
             Tab::KimiCode => Tab::OpenCode,
+            Tab::Pi => Tab::KimiCode,
+            Tab::OpenClaw => Tab::Pi,
+            Tab::Hermes => Tab::OpenClaw,
+            Tab::Factory => Tab::Hermes,
         }
+    }
+
+    pub fn next_in(self, available: &[Tab]) -> Self {
+        if available.is_empty() {
+            return self;
+        }
+        let pos = available.iter().position(|&t| t == self).unwrap_or(0);
+        available[(pos + 1) % available.len()]
+    }
+
+    pub fn prev_in(self, available: &[Tab]) -> Self {
+        if available.is_empty() {
+            return self;
+        }
+        let pos = available.iter().position(|&t| t == self).unwrap_or(0);
+        available[(pos + available.len() - 1) % available.len()]
     }
 
     pub fn label(self) -> &'static str {
@@ -43,6 +75,10 @@ impl Tab {
             Tab::Codex => "CODEX",
             Tab::OpenCode => "OPENCODE",
             Tab::KimiCode => "KIMI-CODE",
+            Tab::Pi => "PI",
+            Tab::OpenClaw => "OPENCLAW",
+            Tab::Hermes => "HERMES",
+            Tab::Factory => "FACTORY",
         }
     }
 
@@ -53,6 +89,10 @@ impl Tab {
             Tab::Codex => ratatui::style::Color::Rgb(59, 130, 246),
             Tab::OpenCode => ratatui::style::Color::Rgb(16, 185, 129),
             Tab::KimiCode => ratatui::style::Color::Rgb(139, 92, 246),
+            Tab::Pi => ratatui::style::Color::Rgb(236, 72, 153),
+            Tab::OpenClaw => ratatui::style::Color::Rgb(234, 88, 12),
+            Tab::Hermes => ratatui::style::Color::Rgb(168, 85, 247),
+            Tab::Factory => ratatui::style::Color::Rgb(34, 197, 94),
         }
     }
 
@@ -64,6 +104,50 @@ impl Tab {
             Tab::Codex => ratatui::style::Color::Rgb(147, 197, 253),
             Tab::OpenCode => ratatui::style::Color::Rgb(110, 231, 183),
             Tab::KimiCode => ratatui::style::Color::Rgb(196, 181, 253),
+            Tab::Pi => ratatui::style::Color::Rgb(249, 168, 212),
+            Tab::OpenClaw => ratatui::style::Color::Rgb(253, 186, 116),
+            Tab::Hermes => ratatui::style::Color::Rgb(216, 180, 254),
+            Tab::Factory => ratatui::style::Color::Rgb(134, 239, 172),
+        }
+    }
+
+    /// 所有 Tab 的列表
+    pub fn all() -> &'static [Tab] {
+        &[
+            Tab::ClaudeCode,
+            Tab::Codex,
+            Tab::OpenCode,
+            Tab::KimiCode,
+            Tab::Pi,
+            Tab::OpenClaw,
+            Tab::Hermes,
+            Tab::Factory,
+        ]
+    }
+
+    /// 对应的默认数据路径
+    pub fn default_path(self) -> std::path::PathBuf {
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        match self {
+            Tab::ClaudeCode => home.join(".claude/projects"),
+            Tab::Codex => home.join(".codex"),
+            Tab::OpenCode => dirs::data_dir()
+                .unwrap_or_else(|| home.join(".local/share"))
+                .join("opencode"),
+            Tab::KimiCode => home.join(".kimi-code"),
+            Tab::Pi => home.join(".pi/agent/sessions"),
+            Tab::OpenClaw => home.join(".openclaw/agents"),
+            Tab::Hermes => home.join(".hermes"),
+            Tab::Factory => home.join(".factory/projects"),
+        }
+    }
+
+    /// 检测该 agent 是否已安装（配置目录是否存在）
+    pub fn is_available(self) -> bool {
+        let path = self.default_path();
+        match self {
+            Tab::Hermes => path.join("state.db").exists(),
+            _ => path.exists(),
         }
     }
 }
@@ -132,8 +216,41 @@ pub struct AppState {
     pub kimi_code_quota: Option<QuotaInfo>,
     pub kimi_code_max_records: usize,
 
+    // pi
+    pub pi_records: VecDeque<UsageRecord>,
+    pub pi_sessions: HashMap<String, SessionSummary>,
+    pub pi_total_calls: usize,
+    pub pi_total_cost: f64,
+    pub pi_quota: Option<QuotaInfo>,
+    pub pi_max_records: usize,
+
+    // openclaw
+    pub openclaw_records: VecDeque<UsageRecord>,
+    pub openclaw_sessions: HashMap<String, SessionSummary>,
+    pub openclaw_total_calls: usize,
+    pub openclaw_total_cost: f64,
+    pub openclaw_quota: Option<QuotaInfo>,
+    pub openclaw_max_records: usize,
+
+    // hermes
+    pub hermes_records: VecDeque<UsageRecord>,
+    pub hermes_sessions: HashMap<String, SessionSummary>,
+    pub hermes_total_calls: usize,
+    pub hermes_total_cost: f64,
+    pub hermes_quota: Option<QuotaInfo>,
+    pub hermes_max_records: usize,
+
+    // factory
+    pub factory_records: VecDeque<UsageRecord>,
+    pub factory_sessions: HashMap<String, SessionSummary>,
+    pub factory_total_calls: usize,
+    pub factory_total_cost: f64,
+    pub factory_quota: Option<QuotaInfo>,
+    pub factory_max_records: usize,
+
     // Shared
     pub active_tab: Tab,
+    pub available_tabs: Vec<Tab>,
 }
 
 impl AppState {
@@ -170,7 +287,32 @@ impl AppState {
             kimi_code_total_cost: 0.0,
             kimi_code_quota: None,
             kimi_code_max_records: max_records,
+            pi_records: VecDeque::with_capacity(max_records),
+            pi_sessions: HashMap::new(),
+            pi_total_calls: 0,
+            pi_total_cost: 0.0,
+            pi_quota: None,
+            pi_max_records: max_records,
+            openclaw_records: VecDeque::with_capacity(max_records),
+            openclaw_sessions: HashMap::new(),
+            openclaw_total_calls: 0,
+            openclaw_total_cost: 0.0,
+            openclaw_quota: None,
+            openclaw_max_records: max_records,
+            hermes_records: VecDeque::with_capacity(max_records),
+            hermes_sessions: HashMap::new(),
+            hermes_total_calls: 0,
+            hermes_total_cost: 0.0,
+            hermes_quota: None,
+            hermes_max_records: max_records,
+            factory_records: VecDeque::with_capacity(max_records),
+            factory_sessions: HashMap::new(),
+            factory_total_calls: 0,
+            factory_total_cost: 0.0,
+            factory_quota: None,
+            factory_max_records: max_records,
             active_tab: Tab::ClaudeCode,
+            available_tabs: Vec::new(),
         }
     }
 
@@ -239,6 +381,58 @@ impl AppState {
         }
     }
 
+    pub fn add_pi_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.pi_records.len() >= self.pi_max_records
+                && let Some(old) = self.pi_records.pop_front() {
+                    reverse_model_aggregate(&mut self.pi_sessions, &old);
+                }
+            self.pi_total_cost += r.cost_usd;
+            self.pi_total_calls += 1;
+            upsert_model_aggregate(&mut self.pi_sessions, &r);
+            self.pi_records.push_back(r);
+        }
+    }
+
+    pub fn add_openclaw_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.openclaw_records.len() >= self.openclaw_max_records
+                && let Some(old) = self.openclaw_records.pop_front() {
+                    reverse_model_aggregate(&mut self.openclaw_sessions, &old);
+                }
+            self.openclaw_total_cost += r.cost_usd;
+            self.openclaw_total_calls += 1;
+            upsert_model_aggregate(&mut self.openclaw_sessions, &r);
+            self.openclaw_records.push_back(r);
+        }
+    }
+
+    pub fn add_hermes_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.hermes_records.len() >= self.hermes_max_records
+                && let Some(old) = self.hermes_records.pop_front() {
+                    reverse_model_aggregate(&mut self.hermes_sessions, &old);
+                }
+            self.hermes_total_cost += r.cost_usd;
+            self.hermes_total_calls += 1;
+            upsert_model_aggregate(&mut self.hermes_sessions, &r);
+            self.hermes_records.push_back(r);
+        }
+    }
+
+    pub fn add_factory_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.factory_records.len() >= self.factory_max_records
+                && let Some(old) = self.factory_records.pop_front() {
+                    reverse_model_aggregate(&mut self.factory_sessions, &old);
+                }
+            self.factory_total_cost += r.cost_usd;
+            self.factory_total_calls += 1;
+            upsert_model_aggregate(&mut self.factory_sessions, &r);
+            self.factory_records.push_back(r);
+        }
+    }
+
     /// Route a batch of records to the bucket for `platform`. Every batch from
     /// a single reader is one platform, so this just dispatches.
     pub fn add_records(&mut self, platform: Platform, records: Vec<UsageRecord>) {
@@ -247,6 +441,10 @@ impl AppState {
             Platform::Codex => self.add_codex_records(records),
             Platform::OpenCode => self.add_opencode_records(records),
             Platform::KimiCode => self.add_kimi_code_records(records),
+            Platform::Pi => self.add_pi_records(records),
+            Platform::OpenClaw => self.add_openclaw_records(records),
+            Platform::Hermes => self.add_hermes_records(records),
+            Platform::Factory => self.add_factory_records(records),
         }
     }
 
@@ -276,6 +474,47 @@ impl AppState {
         self.kimi_code_sessions.clear();
         self.kimi_code_total_calls = 0;
         self.kimi_code_total_cost = 0.0;
+    }
+
+    pub fn clear_pi(&mut self) {
+        self.pi_records.clear();
+        self.pi_sessions.clear();
+        self.pi_total_calls = 0;
+        self.pi_total_cost = 0.0;
+    }
+
+    pub fn clear_openclaw(&mut self) {
+        self.openclaw_records.clear();
+        self.openclaw_sessions.clear();
+        self.openclaw_total_calls = 0;
+        self.openclaw_total_cost = 0.0;
+    }
+
+    pub fn clear_hermes(&mut self) {
+        self.hermes_records.clear();
+        self.hermes_sessions.clear();
+        self.hermes_total_calls = 0;
+        self.hermes_total_cost = 0.0;
+    }
+
+    pub fn clear_factory(&mut self) {
+        self.factory_records.clear();
+        self.factory_sessions.clear();
+        self.factory_total_calls = 0;
+        self.factory_total_cost = 0.0;
+    }
+
+    pub fn detect_available_tabs(&mut self) {
+        self.available_tabs = Tab::all()
+            .iter()
+            .filter(|tab| tab.is_available())
+            .copied()
+            .collect();
+
+        // 如果当前 active_tab 不在可用列表中，切换到第一个可用 tab
+        if !self.available_tabs.contains(&self.active_tab) {
+            self.active_tab = self.available_tabs.first().copied().unwrap_or(Tab::ClaudeCode);
+        }
     }
 }
 

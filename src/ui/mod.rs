@@ -60,6 +60,34 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
             state.kimi_code_total_calls,
             state.kimi_code_total_cost,
         ),
+        crate::state::Tab::Pi => (
+            state.pi_quota.as_ref(),
+            &state.pi_sessions,
+            &state.pi_records,
+            state.pi_total_calls,
+            state.pi_total_cost,
+        ),
+        crate::state::Tab::OpenClaw => (
+            state.openclaw_quota.as_ref(),
+            &state.openclaw_sessions,
+            &state.openclaw_records,
+            state.openclaw_total_calls,
+            state.openclaw_total_cost,
+        ),
+        crate::state::Tab::Hermes => (
+            state.hermes_quota.as_ref(),
+            &state.hermes_sessions,
+            &state.hermes_records,
+            state.hermes_total_calls,
+            state.hermes_total_cost,
+        ),
+        crate::state::Tab::Factory => (
+            state.factory_quota.as_ref(),
+            &state.factory_sessions,
+            &state.factory_records,
+            state.factory_total_calls,
+            state.factory_total_cost,
+        ),
     };
 
     // Header: a bottom rule in the accent color, with tabs left and the

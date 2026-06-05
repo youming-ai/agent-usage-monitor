@@ -324,6 +324,10 @@ fn run_tui(
                                 state::Tab::Codex => state.clear_codex(),
                                 state::Tab::OpenCode => state.clear_opencode(),
                                 state::Tab::KimiCode => state.clear_kimi_code(),
+                                state::Tab::Pi => state.clear_pi(),
+                                state::Tab::OpenClaw => state.clear_openclaw(),
+                                state::Tab::Hermes => state.clear_hermes(),
+                                state::Tab::Factory => state.clear_factory(),
                             }
                         }
                     }
