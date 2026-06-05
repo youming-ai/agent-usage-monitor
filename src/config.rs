@@ -75,9 +75,15 @@ fn default_codex_path() -> PathBuf {
 }
 
 fn default_opencode_path() -> PathBuf {
-    // opencode uses the XDG data dir on every platform (NOT macOS's
-    // ~/Library/Application Support), so we resolve it ourselves rather than
-    // via dirs::data_dir().
+    xdg_data_dir().join("opencode")
+}
+
+/// Resolves the XDG data directory for agents that follow XDG on every
+/// platform (notably opencode, which does NOT use macOS's
+/// `~/Library/Application Support`). Honors `$XDG_DATA_HOME` if set and
+/// non-empty; otherwise falls back to `~/.local/share`. Centralized so the
+/// config default and the tab-detection path in `app_state.rs` can never drift.
+pub(crate) fn xdg_data_dir() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
@@ -86,7 +92,6 @@ fn default_opencode_path() -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".local/share")
         })
-        .join("opencode")
 }
 
 fn default_kimi_code_path() -> PathBuf {

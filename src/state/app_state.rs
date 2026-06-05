@@ -131,9 +131,9 @@ impl Tab {
         match self {
             Tab::ClaudeCode => home.join(".claude/projects"),
             Tab::Codex => home.join(".codex"),
-            Tab::OpenCode => dirs::data_dir()
-                .unwrap_or_else(|| home.join(".local/share"))
-                .join("opencode"),
+            // opencode follows XDG on every platform, NOT macOS's
+            // ~/Library/Application Support — see `config::xdg_data_dir`.
+            Tab::OpenCode => crate::config::xdg_data_dir().join("opencode"),
             Tab::KimiCode => home.join(".kimi-code"),
             Tab::Pi => home.join(".pi/agent/sessions"),
             Tab::OpenClaw => home.join(".openclaw/agents"),
@@ -625,5 +625,23 @@ mod tests {
         assert!(!s.claude_sessions.contains_key("opus-4"));
         assert!(s.claude_sessions.contains_key("sonnet-4"));
         assert_eq!(s.claude_sessions.len(), 1);
+    }
+
+    /// Regression test: opencode stores its data under `~/.local/share/opencode`
+    /// (XDG), NOT macOS's `~/Library/Application Support/opencode`. The
+    /// `default_path()` must resolve to the XDG location on every platform, and
+    /// `is_available()` must reflect that — otherwise a user with opencode
+    /// installed sees no OPENCODE tab in the TUI. Matches `config.rs`.
+    #[test]
+    fn opencode_default_path_uses_xdg_not_macos_app_support() {
+        let p = Tab::OpenCode.default_path();
+        assert!(
+            !p.to_string_lossy().contains("Application Support"),
+            "opencode should use XDG, got {p:?}"
+        );
+        assert!(
+            p.ends_with("opencode"),
+            "opencode default path should end with 'opencode', got {p:?}"
+        );
     }
 }
