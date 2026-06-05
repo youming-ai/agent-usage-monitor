@@ -23,17 +23,15 @@ fn tab_span(tab: Tab, active: bool) -> Span<'static> {
 }
 
 /// The header tab row: ` CLAUDE   codex   opencode` with the active tab accented.
-pub fn tab_line(active: Tab) -> Paragraph<'static> {
-    let line = Line::from(vec![
-        tab_span(Tab::ClaudeCode, active == Tab::ClaudeCode),
-        Span::raw("  "),
-        tab_span(Tab::Codex, active == Tab::Codex),
-        Span::raw("  "),
-        tab_span(Tab::OpenCode, active == Tab::OpenCode),
-        Span::raw("  "),
-        tab_span(Tab::KimiCode, active == Tab::KimiCode),
-    ]);
-    Paragraph::new(line)
+pub fn tab_line(active: Tab, available: &[Tab]) -> Paragraph<'static> {
+    let mut spans = Vec::new();
+    for (i, &tab) in available.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(tab_span(tab, active == tab));
+    }
+    Paragraph::new(Line::from(spans))
 }
 
 /// Right-aligned account indicator shown in the header.

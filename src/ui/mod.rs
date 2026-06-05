@@ -102,7 +102,7 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let acct_w = email.map(|e| e.chars().count() as u16 + 4).unwrap_or(15);
     let header_cols =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(acct_w)]).split(header_inner);
-    frame.render_widget(tabs::tab_line(active), header_cols[0]);
+    frame.render_widget(tabs::tab_line(active, &state.available_tabs), header_cols[0]);
     frame.render_widget(tabs::account(email), header_cols[1]);
 
     let quota_widget = match active {
