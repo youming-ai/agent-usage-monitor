@@ -25,6 +25,22 @@ pub struct Cli {
     #[arg(long)]
     pub kimi_code_path: Option<PathBuf>,
 
+    /// Path to pi data directory
+    #[arg(long)]
+    pub pi_path: Option<PathBuf>,
+
+    /// Path to openclaw data directory
+    #[arg(long)]
+    pub openclaw_path: Option<PathBuf>,
+
+    /// Path to hermes-agent data directory
+    #[arg(long)]
+    pub hermes_path: Option<PathBuf>,
+
+    /// Path to Factory AI data directory
+    #[arg(long)]
+    pub factory_path: Option<PathBuf>,
+
     /// Polling interval in seconds
     #[arg(short, long)]
     pub refresh: Option<u64>,

@@ -11,6 +11,10 @@ use crate::config::Config;
 use crate::event::{AppEvent, EventLoop};
 use crate::reader::claude::ClaudeReader;
 use crate::reader::codex::CodexReader;
+use crate::reader::factory::FactoryReader;
+use crate::reader::hermes::HermesReader;
+use crate::reader::openclaw::OpenClawReader;
+use crate::reader::pi::PiReader;
 use crate::reader::UsageSource;
 use crate::state::AppState;
 use clap::Parser;
@@ -68,6 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let codex_path = args.codex_path.unwrap_or(config.codex_path);
     let opencode_path = args.opencode_path.unwrap_or(config.opencode_path);
     let kimi_code_path = args.kimi_code_path.unwrap_or(config.kimi_code_path);
+    let pi_path = args.pi_path.unwrap_or(config.pi_path);
+    let openclaw_path = args.openclaw_path.unwrap_or(config.openclaw_path);
+    let hermes_path = args.hermes_path.unwrap_or(config.hermes_path);
+    let factory_path = args.factory_path.unwrap_or(config.factory_path);
     // Clamp to at least 1s: tokio::time::interval panics on a zero period, so
     // `--refresh 0` (or refresh = 0 in config) would crash the reader tasks.
     let refresh = args.refresh.unwrap_or(config.refresh).max(1);
@@ -76,6 +84,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Monitoring Codex at {:?}", codex_path);
     info!("Monitoring opencode at {:?}", opencode_path);
     info!("Monitoring Kimi Code at {:?}", kimi_code_path);
+    info!("Monitoring Pi at {:?}", pi_path);
+    info!("Monitoring OpenClaw at {:?}", openclaw_path);
+    info!("Monitoring Hermes at {:?}", hermes_path);
+    info!("Monitoring Factory at {:?}", factory_path);
     info!("Refresh interval: {} seconds", refresh);
 
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
@@ -96,6 +108,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Arc::new(std::sync::Mutex::new(
             Box::new(reader::kimi_code::KimiCodeReader::new(kimi_code_path.clone()))
                 as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(PiReader::new(pi_path.clone())) as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(OpenClawReader::new(openclaw_path.clone())) as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(HermesReader::new(hermes_path.clone())) as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(FactoryReader::new(factory_path.clone())) as Box<dyn UsageSource>,
         )),
     ];
     let mut reader_handles = Vec::new();
@@ -261,11 +285,16 @@ fn handle_config(action: Option<cli::ConfigAction>) -> Result<(), Box<dyn std::e
                 "claude_path" => config.claude_path = std::path::PathBuf::from(value),
                 "codex_path" => config.codex_path = std::path::PathBuf::from(value),
                 "opencode_path" => config.opencode_path = std::path::PathBuf::from(value),
+                "kimi_code_path" => config.kimi_code_path = std::path::PathBuf::from(value),
+                "pi_path" => config.pi_path = std::path::PathBuf::from(value),
+                "openclaw_path" => config.openclaw_path = std::path::PathBuf::from(value),
+                "hermes_path" => config.hermes_path = std::path::PathBuf::from(value),
+                "factory_path" => config.factory_path = std::path::PathBuf::from(value),
                 "refresh" => config.refresh = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
                 "max_records" => config.max_records = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
                 _ => {
                     eprintln!("Unknown configuration key: {}", key);
-                    eprintln!("Available keys: claude_path, codex_path, opencode_path, refresh, max_records");
+                    eprintln!("Available keys: claude_path, codex_path, opencode_path, kimi_code_path, pi_path, openclaw_path, hermes_path, factory_path, refresh, max_records");
                     std::process::exit(1);
                 }
             }

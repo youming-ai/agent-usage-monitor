@@ -1,5 +1,7 @@
 pub mod claude;
 pub mod codex;
+pub mod factory;
+pub mod hermes;
 pub mod jsonl_reader;
 pub mod kimi_code;
 pub mod opencode;
@@ -107,6 +109,20 @@ impl UsageSource for openclaw::OpenClawReader {
         JsonlReader::poll_delta(self)
     }
 }
+
+impl UsageSource for factory::FactoryReader {
+    fn platform(&self) -> Platform {
+        Platform::Factory
+    }
+    fn scan_all(&mut self) -> Vec<UsageRecord> {
+        JsonlReader::scan_all(self)
+    }
+    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+        JsonlReader::poll_delta(self)
+    }
+}
+
+
 
 #[cfg(test)]
 mod tests {

@@ -106,7 +106,12 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     frame.render_widget(tabs::account(email), header_cols[1]);
 
     let quota_widget = match active {
-        crate::state::Tab::OpenCode | crate::state::Tab::KimiCode => quota_bar::no_quota_source(),
+        crate::state::Tab::OpenCode 
+        | crate::state::Tab::KimiCode 
+        | crate::state::Tab::Pi 
+        | crate::state::Tab::OpenClaw 
+        | crate::state::Tab::Hermes 
+        | crate::state::Tab::Factory => quota_bar::no_quota_source(),
         _ => quota_bar::quota_panel(active, quota),
     };
     frame.render_widget(quota_widget, chunks[1]);

@@ -20,6 +20,22 @@ pub struct Config {
     #[serde(default = "default_kimi_code_path")]
     pub kimi_code_path: PathBuf,
 
+    /// Path to pi data directory
+    #[serde(default = "default_pi_path")]
+    pub pi_path: PathBuf,
+
+    /// Path to openclaw data directory
+    #[serde(default = "default_openclaw_path")]
+    pub openclaw_path: PathBuf,
+
+    /// Path to hermes-agent data directory
+    #[serde(default = "default_hermes_path")]
+    pub hermes_path: PathBuf,
+
+    /// Path to Factory AI data directory
+    #[serde(default = "default_factory_path")]
+    pub factory_path: PathBuf,
+
     /// Polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -36,6 +52,10 @@ impl Default for Config {
             codex_path: default_codex_path(),
             opencode_path: default_opencode_path(),
             kimi_code_path: default_kimi_code_path(),
+            pi_path: default_pi_path(),
+            openclaw_path: default_openclaw_path(),
+            hermes_path: default_hermes_path(),
+            factory_path: default_factory_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -73,6 +93,30 @@ fn default_kimi_code_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".kimi-code")
+}
+
+fn default_pi_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".pi/agent/sessions")
+}
+
+fn default_openclaw_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".openclaw/agents")
+}
+
+fn default_hermes_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".hermes")
+}
+
+fn default_factory_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".factory/projects")
 }
 
 fn default_refresh() -> u64 {
