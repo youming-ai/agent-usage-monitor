@@ -1,6 +1,6 @@
 # Agent Usage Monitor
 
-Real-time terminal dashboard for **Claude Code**, **Codex**, **opencode** & **Kimi Code** usage — quota windows, token usage, and cost, read straight from local log files. No API keys required. The command is `aum`.
+Real-time terminal dashboard for **Claude Code**, **Codex**, **opencode**, **Kimi Code**, **pi**, **openclaw**, **hermes-agent** & **Factory AI** usage — quota windows, token usage, and cost, read straight from local log files. No API keys required. The command is `aum`.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -30,9 +30,15 @@ aum config reset   # reset configuration to defaults
 | `--codex-path` | `~/.codex` | Codex data directory |
 | `--opencode-path` | `$XDG_DATA_HOME/opencode` | opencode data directory |
 | `--kimi-code-path` | `~/.kimi-code` | Kimi Code data directory |
+| `--pi-path` | `~/.pi/agent/sessions` | pi data directory |
+| `--openclaw-path` | `~/.openclaw/agents` | openclaw data directory |
+| `--hermes-path` | `~/.hermes` | hermes-agent data directory |
+| `--factory-path` | `~/.factory/projects` | Factory AI data directory |
 | `-r, --refresh` | `5` | Poll interval, in seconds |
 
 **Keys:** `Tab` / `←` / `→` switch tab · `r` clear current tab · `q` quit
+
+Only tabs for agents whose data directory exists are shown in the TUI.
 
 ### Configuration
 
@@ -42,6 +48,10 @@ Configuration is stored in `~/.config/aum/config.toml` (or platform equivalent).
 - `codex_path` - Path to Codex data directory
 - `opencode_path` - Path to opencode data directory
 - `kimi_code_path` - Path to Kimi Code data directory
+- `pi_path` - Path to pi data directory
+- `openclaw_path` - Path to openclaw data directory
+- `hermes_path` - Path to hermes-agent data directory
+- `factory_path` - Path to Factory AI data directory
 - `refresh` - Polling interval in seconds
 - `max_records` - Maximum number of records to keep in memory
 
@@ -55,7 +65,7 @@ aum config set max_records 200
 
 ```
  CLAUDE   codex   opencode   kimi-code                          ✓ you@mail.com
-────────────────────────────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────────────────────────────
  ✓ 5h ▓▓▓▓▓▓▓▓▓▓░░  82%  resets 2h30m
  ✓ 7d ▓▓▓▓▓▓░░░░░░  54%  resets 4d6h
 ┌ CLAUDE models (42) ───────────────────────────────────────────────────────────┐
@@ -74,16 +84,20 @@ aum config set max_records 200
 - **models** — per-model totals: tokens, cost, and request count.
 - **sessions** — per-conversation usage (tokens, requests), labelled `<dir> <id>` so multiple sessions in one project stay distinct.
 
-Each platform uses one accent color (Claude orange, Codex blue, opencode green, Kimi Code purple); everything else stays default or dimmed.
+Each platform uses one accent color (Claude orange, Codex blue, opencode green, Kimi Code purple, pi pink, openclaw orange, hermes purple, Factory green); everything else stays default or dimmed.
 
 ## How it works
 
-`aum` reads data that Claude Code, Codex, opencode, and Kimi Code already write locally — no network calls for usage records, no API keys:
+`aum` reads data that the supported agents already write locally — no network calls for usage records, no API keys:
 
 - **Claude Code** — `~/.claude/projects/**/*.jsonl`
 - **Codex** — `~/.codex/sessions/**/rollout-*.jsonl`
 - **opencode** — `$XDG_DATA_HOME/opencode/opencode.db` (SQLite, read-only)
 - **Kimi Code** — `~/.kimi-code/sessions/**/agents/*/wire.jsonl`
+- **pi** — `~/.pi/agent/sessions/**/*.jsonl`
+- **openclaw** — `~/.openclaw/agents/**/sessions/*.jsonl`
+- **hermes-agent** — `~/.hermes/state.db` (SQLite, read-only)
+- **Factory AI** — `~/.factory/projects/**/<session-uuid>.jsonl`
 
 Quota percentages come from the official endpoints, authenticated with your existing local credentials (Claude: macOS Keychain or `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`). Cost is computed from built-in pricing tables for Anthropic & OpenAI models; unknown models show `$0.00`.
 
