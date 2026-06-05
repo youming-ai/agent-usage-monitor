@@ -3,6 +3,7 @@ pub mod codex;
 pub mod jsonl_reader;
 pub mod kimi_code;
 pub mod opencode;
+pub mod pi;
 pub mod pricing;
 
 use crate::state::{Platform, UsageRecord};
@@ -73,6 +74,18 @@ impl UsageSource for claude::ClaudeReader {
 impl UsageSource for codex::CodexReader {
     fn platform(&self) -> Platform {
         Platform::Codex
+    }
+    fn scan_all(&mut self) -> Vec<UsageRecord> {
+        JsonlReader::scan_all(self)
+    }
+    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+        JsonlReader::poll_delta(self)
+    }
+}
+
+impl UsageSource for pi::PiReader {
+    fn platform(&self) -> Platform {
+        Platform::Pi
     }
     fn scan_all(&mut self) -> Vec<UsageRecord> {
         JsonlReader::scan_all(self)
