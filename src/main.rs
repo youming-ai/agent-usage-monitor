@@ -79,6 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Refresh interval: {} seconds", refresh);
 
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
+    app_state.write().unwrap().detect_available_tabs();
 
     // Reader tasks: one per usage source, all driven uniformly via UsageSource.
     let sources: Vec<Arc<std::sync::Mutex<Box<dyn UsageSource>>>> = vec![
@@ -309,12 +310,12 @@ fn run_tui(
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Tab | KeyCode::Right => {
                         if let Ok(mut state) = app_state.write() {
-                            state.active_tab = state.active_tab.next();
+                            state.active_tab = state.active_tab.next_in(&state.available_tabs);
                         }
                     }
                     KeyCode::Left => {
                         if let Ok(mut state) = app_state.write() {
-                            state.active_tab = state.active_tab.prev();
+                            state.active_tab = state.active_tab.prev_in(&state.available_tabs);
                         }
                     }
                     KeyCode::Char('r') => {
