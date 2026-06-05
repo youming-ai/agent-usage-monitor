@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod kimi_code;
 pub mod opencode;
 pub(crate) mod util;
 

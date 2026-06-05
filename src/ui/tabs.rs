@@ -30,6 +30,8 @@ pub fn tab_line(active: Tab) -> Paragraph<'static> {
         tab_span(Tab::Codex, active == Tab::Codex),
         Span::raw("  "),
         tab_span(Tab::OpenCode, active == Tab::OpenCode),
+        Span::raw("  "),
+        tab_span(Tab::KimiCode, active == Tab::KimiCode),
     ]);
     Paragraph::new(line)
 }

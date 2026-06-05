@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex;
 pub mod jsonl_reader;
+pub mod kimi_code;
 pub mod opencode;
 pub mod pricing;
 
