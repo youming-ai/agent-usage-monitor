@@ -27,32 +27,6 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub fn next(self) -> Self {
-        match self {
-            Tab::ClaudeCode => Tab::Codex,
-            Tab::Codex => Tab::OpenCode,
-            Tab::OpenCode => Tab::KimiCode,
-            Tab::KimiCode => Tab::Pi,
-            Tab::Pi => Tab::OpenClaw,
-            Tab::OpenClaw => Tab::Hermes,
-            Tab::Hermes => Tab::Factory,
-            Tab::Factory => Tab::ClaudeCode,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Tab::ClaudeCode => Tab::Factory,
-            Tab::Codex => Tab::ClaudeCode,
-            Tab::OpenCode => Tab::Codex,
-            Tab::KimiCode => Tab::OpenCode,
-            Tab::Pi => Tab::KimiCode,
-            Tab::OpenClaw => Tab::Pi,
-            Tab::Hermes => Tab::OpenClaw,
-            Tab::Factory => Tab::Hermes,
-        }
-    }
-
     pub fn next_in(self, available: &[Tab]) -> Self {
         if available.is_empty() {
             return self;
