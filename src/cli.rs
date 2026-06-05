@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "aum")]
 #[command(version)]
-#[command(about = "Real-time Claude Code, Codex & opencode usage monitor")]
+#[command(about = "Real-time Claude Code, Codex, opencode & Kimi Code usage monitor")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -20,6 +20,10 @@ pub struct Cli {
     /// Path to opencode data directory
     #[arg(long)]
     pub opencode_path: Option<PathBuf>,
+
+    /// Path to Kimi Code data directory
+    #[arg(long)]
+    pub kimi_code_path: Option<PathBuf>,
 
     /// Polling interval in seconds
     #[arg(short, long)]

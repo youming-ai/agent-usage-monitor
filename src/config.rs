@@ -16,6 +16,10 @@ pub struct Config {
     #[serde(default = "default_opencode_path")]
     pub opencode_path: PathBuf,
 
+    /// Path to Kimi Code data directory
+    #[serde(default = "default_kimi_code_path")]
+    pub kimi_code_path: PathBuf,
+
     /// Polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -31,6 +35,7 @@ impl Default for Config {
             claude_path: default_claude_path(),
             codex_path: default_codex_path(),
             opencode_path: default_opencode_path(),
+            kimi_code_path: default_kimi_code_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -62,6 +67,12 @@ fn default_opencode_path() -> PathBuf {
                 .join(".local/share")
         })
         .join("opencode")
+}
+
+fn default_kimi_code_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".kimi-code")
 }
 
 fn default_refresh() -> u64 {

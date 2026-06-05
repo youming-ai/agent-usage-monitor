@@ -67,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let claude_path = args.claude_path.unwrap_or(config.claude_path);
     let codex_path = args.codex_path.unwrap_or(config.codex_path);
     let opencode_path = args.opencode_path.unwrap_or(config.opencode_path);
+    let kimi_code_path = args.kimi_code_path.unwrap_or(config.kimi_code_path);
     // Clamp to at least 1s: tokio::time::interval panics on a zero period, so
     // `--refresh 0` (or refresh = 0 in config) would crash the reader tasks.
     let refresh = args.refresh.unwrap_or(config.refresh).max(1);
@@ -74,6 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Monitoring Claude Code at {:?}", claude_path);
     info!("Monitoring Codex at {:?}", codex_path);
     info!("Monitoring opencode at {:?}", opencode_path);
+    info!("Monitoring Kimi Code at {:?}", kimi_code_path);
     info!("Refresh interval: {} seconds", refresh);
 
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
@@ -88,6 +90,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )),
         Arc::new(std::sync::Mutex::new(
             Box::new(reader::opencode::OpencodeReader::new(opencode_path.clone()))
+                as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(reader::kimi_code::KimiCodeReader::new(kimi_code_path.clone()))
                 as Box<dyn UsageSource>,
         )),
     ];
@@ -317,6 +323,7 @@ fn run_tui(
                                 state::Tab::ClaudeCode => state.clear_claude(),
                                 state::Tab::Codex => state.clear_codex(),
                                 state::Tab::OpenCode => state.clear_opencode(),
+                                state::Tab::KimiCode => state.clear_kimi_code(),
                             }
                         }
                     }
