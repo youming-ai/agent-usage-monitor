@@ -20,6 +20,22 @@ pub struct Config {
     #[serde(default = "default_kimi_code_path")]
     pub kimi_code_path: PathBuf,
 
+    /// Path to pi data directory
+    #[serde(default = "default_pi_path")]
+    pub pi_path: PathBuf,
+
+    /// Path to openclaw data directory
+    #[serde(default = "default_openclaw_path")]
+    pub openclaw_path: PathBuf,
+
+    /// Path to hermes-agent data directory
+    #[serde(default = "default_hermes_path")]
+    pub hermes_path: PathBuf,
+
+    /// Path to Factory AI data directory
+    #[serde(default = "default_factory_path")]
+    pub factory_path: PathBuf,
+
     /// Polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -36,6 +52,10 @@ impl Default for Config {
             codex_path: default_codex_path(),
             opencode_path: default_opencode_path(),
             kimi_code_path: default_kimi_code_path(),
+            pi_path: default_pi_path(),
+            openclaw_path: default_openclaw_path(),
+            hermes_path: default_hermes_path(),
+            factory_path: default_factory_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -55,9 +75,15 @@ fn default_codex_path() -> PathBuf {
 }
 
 fn default_opencode_path() -> PathBuf {
-    // opencode uses the XDG data dir on every platform (NOT macOS's
-    // ~/Library/Application Support), so we resolve it ourselves rather than
-    // via dirs::data_dir().
+    xdg_data_dir().join("opencode")
+}
+
+/// Resolves the XDG data directory for agents that follow XDG on every
+/// platform (notably opencode, which does NOT use macOS's
+/// `~/Library/Application Support`). Honors `$XDG_DATA_HOME` if set and
+/// non-empty; otherwise falls back to `~/.local/share`. Centralized so the
+/// config default and the tab-detection path in `app_state.rs` can never drift.
+pub(crate) fn xdg_data_dir() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
@@ -66,13 +92,36 @@ fn default_opencode_path() -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".local/share")
         })
-        .join("opencode")
 }
 
 fn default_kimi_code_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".kimi-code")
+}
+
+fn default_pi_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".pi/agent/sessions")
+}
+
+fn default_openclaw_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".openclaw/agents")
+}
+
+fn default_hermes_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".hermes")
+}
+
+fn default_factory_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".factory/projects")
 }
 
 fn default_refresh() -> u64 {

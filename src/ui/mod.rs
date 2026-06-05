@@ -60,6 +60,34 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
             state.kimi_code_total_calls,
             state.kimi_code_total_cost,
         ),
+        crate::state::Tab::Pi => (
+            state.pi_quota.as_ref(),
+            &state.pi_sessions,
+            &state.pi_records,
+            state.pi_total_calls,
+            state.pi_total_cost,
+        ),
+        crate::state::Tab::OpenClaw => (
+            state.openclaw_quota.as_ref(),
+            &state.openclaw_sessions,
+            &state.openclaw_records,
+            state.openclaw_total_calls,
+            state.openclaw_total_cost,
+        ),
+        crate::state::Tab::Hermes => (
+            state.hermes_quota.as_ref(),
+            &state.hermes_sessions,
+            &state.hermes_records,
+            state.hermes_total_calls,
+            state.hermes_total_cost,
+        ),
+        crate::state::Tab::Factory => (
+            state.factory_quota.as_ref(),
+            &state.factory_sessions,
+            &state.factory_records,
+            state.factory_total_calls,
+            state.factory_total_cost,
+        ),
     };
 
     // Header: a bottom rule in the accent color, with tabs left and the
@@ -74,11 +102,16 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let acct_w = email.map(|e| e.chars().count() as u16 + 4).unwrap_or(15);
     let header_cols =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(acct_w)]).split(header_inner);
-    frame.render_widget(tabs::tab_line(active), header_cols[0]);
+    frame.render_widget(tabs::tab_line(active, &state.available_tabs), header_cols[0]);
     frame.render_widget(tabs::account(email), header_cols[1]);
 
     let quota_widget = match active {
-        crate::state::Tab::OpenCode | crate::state::Tab::KimiCode => quota_bar::no_quota_source(),
+        crate::state::Tab::OpenCode 
+        | crate::state::Tab::KimiCode 
+        | crate::state::Tab::Pi 
+        | crate::state::Tab::OpenClaw 
+        | crate::state::Tab::Hermes 
+        | crate::state::Tab::Factory => quota_bar::no_quota_source(),
         _ => quota_bar::quota_panel(active, quota),
     };
     frame.render_widget(quota_widget, chunks[1]);
