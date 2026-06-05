@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.10.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.9.0...v0.10.0) (2026-06-05)
+
+
+### Features
+
+* add CLI args, config, and UI for pi/openclaw/hermes/factory ([599bb3a](https://github.com/youming-ai/agent-usage-monitor/commit/599bb3a01ef838008ad5dff3922f1263507bb12a))
+* add OpenClawReader for openclaw agent ([021b653](https://github.com/youming-ai/agent-usage-monitor/commit/021b6538598c32611607920d93dd3012a62b69fe))
+* add PiReader for pi agent ([5e9f8d7](https://github.com/youming-ai/agent-usage-monitor/commit/5e9f8d7b7b4ba79e7e3cce7e5cacb054d5c4b885))
+* add support for pi, openclaw, hermes-agent, Factory AI ([9c02026](https://github.com/youming-ai/agent-usage-monitor/commit/9c0202690b32a471158454c36948ada25ab69e2c))
+* extend Platform/Tab enums for pi, openclaw, hermes, factory ([2250bd7](https://github.com/youming-ai/agent-usage-monitor/commit/2250bd775df0a00cbf173020d722eebee2952444))
+* **ui:** update tab_line to show only available tabs ([c2c9d33](https://github.com/youming-ai/agent-usage-monitor/commit/c2c9d331f5eef90e7f8a14e479b900be2b08d398))
+
+
+### Bug Fixes
+
+* opencode tab detection — use XDG path, not macOS App Support ([40f26b2](https://github.com/youming-ai/agent-usage-monitor/commit/40f26b26d93bf87d754d3789af39ebfc9865618c))
+* use next_in/prev_in for tab navigation with available_tabs ([2c643e4](https://github.com/youming-ai/agent-usage-monitor/commit/2c643e4db5231585204cf9480a85da10456e995f))
+
+
+### Refactors
+
+* remove unused Tab::next/prev (replaced by next_in/prev_in) ([e5c5013](https://github.com/youming-ai/agent-usage-monitor/commit/e5c50136d6683ec073c5701ceee0c3c2cd16cf05))
+
+
+### Documentation
+
+* update README for new agents; ignore planning artifacts ([dc6705e](https://github.com/youming-ai/agent-usage-monitor/commit/dc6705edf3a484f207f2aa09ba6be843337dda1a))
+
 ## [0.9.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.8.0...v0.9.0) (2026-06-05)
 
 
