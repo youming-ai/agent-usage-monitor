@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.8.0...v0.9.0) (2026-06-05)
+
+
+### Features
+
+* add Kimi Code CLI support ([bf96e51](https://github.com/youming-ai/agent-usage-monitor/commit/bf96e5123c0f66b7594cfea24579208d9536a48f))
+* add Kimi Code CLI support ([30338a7](https://github.com/youming-ai/agent-usage-monitor/commit/30338a7237f27049996708e2f819f36e29f85125))
+
 ## [0.8.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.7.1...v0.8.0) (2026-06-04)
 
 
