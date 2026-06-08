@@ -88,6 +88,20 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
             state.factory_total_calls,
             state.factory_total_cost,
         ),
+        crate::state::Tab::Grok => (
+            state.grok_quota.as_ref(),
+            &state.grok_sessions,
+            &state.grok_records,
+            state.grok_total_calls,
+            state.grok_total_cost,
+        ),
+        crate::state::Tab::Cursor => (
+            state.cursor_quota.as_ref(),
+            &state.cursor_sessions,
+            &state.cursor_records,
+            state.cursor_total_calls,
+            state.cursor_total_cost,
+        ),
     };
 
     // Header: a bottom rule in the accent color, with tabs left and the
@@ -111,7 +125,9 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
         | crate::state::Tab::Pi 
         | crate::state::Tab::OpenClaw 
         | crate::state::Tab::Hermes 
-        | crate::state::Tab::Factory => quota_bar::no_quota_source(),
+        | crate::state::Tab::Factory
+        | crate::state::Tab::Grok
+        | crate::state::Tab::Cursor => quota_bar::no_quota_source(),
         _ => quota_bar::quota_panel(active, quota),
     };
     frame.render_widget(quota_widget, chunks[1]);

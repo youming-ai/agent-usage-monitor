@@ -69,7 +69,11 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    if input_tokens == 0 && output_tokens == 0 {
+    if input_tokens == 0
+        && output_tokens == 0
+        && cache_read == 0
+        && cache_creation == 0
+    {
         return None;
     }
 

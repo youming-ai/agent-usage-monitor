@@ -1,3 +1,4 @@
+use crate::reader::session_jsonl::{read_jsonl_from_offset, SessionFileState};
 use crate::reader::{basename, find_recursive, session_label, UsageSource};
 use crate::reader::pricing::calculate_cost;
 use crate::state::{Platform, UsageRecord};
@@ -5,7 +6,6 @@ use chrono::{TimeZone, Utc};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Reads per-turn usage from Kimi Code's local JSONL `wire.jsonl` files.
@@ -58,39 +58,14 @@ impl KimiCodeReader {
     /// returning parsed records and advancing the offset.
     fn read_file_delta(&mut self, path: &Path) -> Vec<UsageRecord> {
         let offset = self.file_positions.get(path).copied().unwrap_or(0);
-        let file = match fs::File::open(path) {
-            Ok(f) => f,
-            Err(_) => return Vec::new(),
-        };
-
-        // Seek to the last known position.
-        let mut reader = std::io::BufReader::new(file);
-        if offset > 0 {
-            if reader.seek(SeekFrom::Start(offset)).is_err() {
-                return Vec::new();
-            }
-        }
-
-        // Derive session info from the file path:
+        // Session info comes from the path, not session lines in wire.jsonl:
         //   .../sessions/wd_{dir}/session_{id}/agents/{agent}/wire.jsonl
         let (session_id, session) = extract_session_info(path, &self.session_meta);
-
-        let mut records = Vec::new();
-        let mut line = String::new();
-        let mut new_offset = offset;
-        loop {
-            line.clear();
-            let bytes = match reader.read_line(&mut line) {
-                Ok(0) => break, // EOF
-                Ok(n) => n as u64,
-                Err(_) => break,
-            };
-            if let Some(rec) = parse_usage_record(&line, &session_id, &session) {
-                records.push(rec);
-            }
-            new_offset += bytes;
-        }
-
+        let mut st = SessionFileState::default();
+        let (records, new_offset) =
+            read_jsonl_from_offset(path, offset, &mut st, |line, _| {
+                parse_usage_record(line, &session_id, &session)
+            });
         self.file_positions.insert(path.to_path_buf(), new_offset);
         records
     }
@@ -120,7 +95,7 @@ impl KimiCodeReader {
 
         let mut all = Vec::new();
         for f in &files {
-            all.extend(self.read_file_delta(&f));
+            all.extend(self.read_file_delta(f));
         }
         all
     }
@@ -138,6 +113,16 @@ impl UsageSource for KimiCodeReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.do_poll_delta()
     }
+}
+
+fn lookup_work_dir<'a>(
+    session_meta: &'a HashMap<String, String>,
+    session_id: &str,
+) -> Option<&'a str> {
+    session_meta
+        .get(&format!("session_{session_id}"))
+        .or_else(|| session_meta.get(session_id))
+        .map(|s| s.as_str())
 }
 
 /// Load `session_index.jsonl` into a sessionId → workDir map.
@@ -178,11 +163,8 @@ fn extract_session_info(
         }
     }
 
-    // Look up workDir from session_index.jsonl.
-    let work_dir = session_meta
-        .get(&format!("session_{session_id}"))
-        .map(|s| s.as_str())
-        .unwrap_or("");
+    // Look up workDir from session_index.jsonl (keys may be with or without prefix).
+    let work_dir = lookup_work_dir(session_meta, &session_id).unwrap_or("");
     let label = session_label(&basename(work_dir), &session_id);
 
     (session_id, label)
@@ -233,7 +215,12 @@ fn parse_usage_record(
         platform: Platform::KimiCode,
         model,
         session: if session.is_empty() {
-            format!("unknown {}", &session_id[..8.min(session_id.len())])
+            let short: String = session_id.chars().take(8).collect();
+            if short.is_empty() {
+                "unknown".to_string()
+            } else {
+                format!("unknown {short}")
+            }
         } else {
             session.to_string()
         },
@@ -380,6 +367,91 @@ mod tests {
         );
         let mut reader = KimiCodeReader::new(dir.path().to_path_buf());
         assert!(reader.scan_all().is_empty());
+    }
+
+    #[test]
+    fn session_index_lookup_accepts_unprefixed_session_id() {
+        let dir = setup_dir();
+        let wire = wire_path(dir.path(), "abc12345-0000", "main");
+        write_lines(
+            &wire,
+            &[r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#],
+        );
+        let mut meta = HashMap::new();
+        meta.insert(
+            "abc12345-0000".to_string(),
+            "/Users/me/myproject".to_string(),
+        );
+        let mut reader = KimiCodeReader::new_with_meta(dir.path().to_path_buf(), meta);
+        let records = reader.scan_all();
+        assert_eq!(records.len(), 1);
+        assert!(records[0].session.starts_with("myproject"));
+    }
+
+    #[test]
+    fn poll_delta_waits_for_complete_line() {
+        let dir = setup_dir();
+        let wire = wire_path(dir.path(), "abc12345-0000", "main");
+        let record = r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#;
+        fs::write(
+            &wire,
+            format!("{}\n{}", r#"{"type":"metadata"}"#, record),
+        )
+        .unwrap();
+
+        let mut meta = HashMap::new();
+        meta.insert(
+            "session_abc12345-0000".to_string(),
+            "/Users/me/myproject".to_string(),
+        );
+        let mut reader = KimiCodeReader::new_with_meta(dir.path().to_path_buf(), meta);
+
+        assert!(
+            reader.scan_all().is_empty(),
+            "incomplete usage line must not emit a record"
+        );
+
+        let mut f = fs::OpenOptions::new().append(true).open(&wire).unwrap();
+        use std::io::Write;
+        f.write_all(b"\n").unwrap();
+
+        let delta = reader.poll_delta();
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0].input_tokens, 100);
+    }
+
+    #[test]
+    fn stale_offset_rescans_after_file_shrink() {
+        let dir = setup_dir();
+        let wire = wire_path(dir.path(), "abc12345-0000", "main");
+        let padding = format!(
+            r#"{{"type":"metadata","padding":"{}"}}"#,
+            "x".repeat(500)
+        );
+        write_lines(
+            &wire,
+            &[
+                &padding,
+                r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#,
+            ],
+        );
+        let mut meta = HashMap::new();
+        meta.insert(
+            "session_abc12345-0000".to_string(),
+            "/Users/me/myproject".to_string(),
+        );
+        let mut reader = KimiCodeReader::new_with_meta(dir.path().to_path_buf(), meta);
+        assert_eq!(reader.scan_all().len(), 1);
+
+        // Replacement file is much smaller than the tracked offset.
+        write_lines(
+            &wire,
+            &[r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":200,"output":80,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625875000}"#],
+        );
+
+        let delta = reader.poll_delta();
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0].input_tokens, 200);
     }
 
     #[test]

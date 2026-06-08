@@ -3,7 +3,8 @@ use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::find_recursive;
@@ -77,31 +78,13 @@ impl JsonlReader for CodexReader {
         let files = self.find_files();
         let mut records = Vec::new();
         for file in files {
-            let content = match fs::read_to_string(&file) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            let complete_lines = if content.ends_with('\n') {
-                content.lines().count()
-            } else {
-                content.lines().count().saturating_sub(1)
-            };
-
-            // Initialize file state
             let mut st = FileState {
                 model: "unknown".to_string(),
                 dir: "codex".to_string(),
                 sid: extract_codex_project(&file),
             };
-
-            let file_records: Vec<UsageRecord> = content
-                .lines()
-                .take(complete_lines)
-                .filter_map(|line| parse_codex_line(line, &mut st))
-                .collect();
-
-            self.file_positions.insert(file.clone(), complete_lines as u64);
+            let (file_records, bytes_read) = read_codex_from_offset(&file, 0, &mut st);
+            self.file_positions.insert(file.clone(), bytes_read);
             self.file_state.insert(file, st);
             records.extend(file_records);
         }
@@ -112,7 +95,6 @@ impl JsonlReader for CodexReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         let files = self.find_files();
         
-        // Clean up positions and state for files that no longer exist
         let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
         self.file_positions.retain(|path, _| current_files.contains(path));
         self.file_state.retain(|path, _| current_files.contains(path));
@@ -120,38 +102,65 @@ impl JsonlReader for CodexReader {
         let mut new_records = Vec::new();
         for file in files {
             let offset = self.file_positions.get(&file).copied().unwrap_or(0);
-            let content = match fs::read_to_string(&file) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            let complete_lines = if content.ends_with('\n') {
-                content.lines().count()
-            } else {
-                content.lines().count().saturating_sub(1)
-            };
-
-            // Resume this file's running state
             let mut st = self.file_state.get(&file).cloned().unwrap_or_else(|| FileState {
                 model: "unknown".to_string(),
                 dir: "codex".to_string(),
                 sid: extract_codex_project(&file),
             });
 
-            let records: Vec<UsageRecord> = content
-                .lines()
-                .take(complete_lines)
-                .skip(offset as usize)
-                .filter_map(|line| parse_codex_line(line, &mut st))
-                .collect();
-
-            self.file_positions.insert(file.clone(), complete_lines as u64);
+            let (records, bytes_read) = read_codex_from_offset(&file, offset, &mut st);
+            self.file_positions.insert(file.clone(), bytes_read);
             self.file_state.insert(file, st);
             new_records.extend(records);
         }
         new_records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
         new_records
     }
+}
+
+fn read_codex_from_offset(
+    path: &Path,
+    skip_bytes: u64,
+    st: &mut FileState,
+) -> (Vec<UsageRecord>, u64) {
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return (Vec::new(), skip_bytes),
+    };
+
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if skip_bytes > file_len {
+        return read_codex_from_offset(path, 0, st);
+    }
+
+    let mut reader = BufReader::new(file);
+    if skip_bytes > 0 && reader.seek(SeekFrom::Start(skip_bytes)).is_err() {
+        return read_codex_from_offset(path, 0, st);
+    }
+
+    let mut records = Vec::new();
+    let mut offset = skip_bytes;
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let bytes = match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(n) => n as u64,
+            Err(_) => break,
+        };
+
+        if !line.ends_with('\n') {
+            break;
+        }
+
+        if let Some(rec) = parse_codex_line(line.trim_end_matches(['\r', '\n']), st) {
+            records.push(rec);
+        }
+        offset += bytes;
+    }
+
+    (records, offset)
 }
 
 /// Parse one rollout line. `st` carries the session's running model and working
@@ -265,6 +274,7 @@ fn extract_codex_project(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
 
     fn turn_context(model: &str) -> String {

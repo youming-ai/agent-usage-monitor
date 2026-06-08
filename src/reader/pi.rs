@@ -1,15 +1,17 @@
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::find_recursive;
-use super::jsonl_reader::JsonlReader;
+use super::session_jsonl::{read_jsonl_from_offset, SessionFileState};
+use super::UsageSource;
 
 pub struct PiReader {
     data_dir: PathBuf,
     file_positions: HashMap<PathBuf, u64>,
+    file_state: HashMap<PathBuf, SessionFileState>,
 }
 
 impl PiReader {
@@ -17,6 +19,7 @@ impl PiReader {
         Self {
             data_dir,
             file_positions: HashMap::new(),
+            file_state: HashMap::new(),
         }
     }
 
@@ -25,12 +28,6 @@ impl PiReader {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".pi/agent/sessions")
-    }
-}
-
-impl JsonlReader for PiReader {
-    fn file_positions(&mut self) -> &mut HashMap<PathBuf, u64> {
-        &mut self.file_positions
     }
 
     fn find_files(&self) -> Vec<PathBuf> {
@@ -43,15 +40,56 @@ impl JsonlReader for PiReader {
         files
     }
 
-    fn parse_line(&self, line: &str) -> Option<UsageRecord> {
-        parse_pi_line(line)
+    fn scan_files(&mut self, from_start: bool) -> Vec<UsageRecord> {
+        let files = self.find_files();
+        let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
+        self.file_positions
+            .retain(|path, _| current_files.contains(path));
+        self.file_state
+            .retain(|path, _| current_files.contains(path));
+
+        let mut records = Vec::new();
+        for file in files {
+            let offset = if from_start {
+                0
+            } else {
+                self.file_positions.get(&file).copied().unwrap_or(0)
+            };
+            let mut st = self
+                .file_state
+                .get(&file)
+                .cloned()
+                .unwrap_or_else(|| SessionFileState::with_dir("unknown", ""));
+            let (entries, bytes_read) =
+                read_jsonl_from_offset(&file, offset, &mut st, parse_pi_line);
+            self.file_positions.insert(file.clone(), bytes_read);
+            self.file_state.insert(file, st);
+            records.extend(entries);
+        }
+        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        records
     }
 }
 
-fn parse_pi_line(line: &str) -> Option<UsageRecord> {
+impl UsageSource for PiReader {
+    fn platform(&self) -> Platform {
+        Platform::Pi
+    }
+
+    fn scan_all(&mut self) -> Vec<UsageRecord> {
+        self.file_positions.clear();
+        self.file_state.clear();
+        self.scan_files(true)
+    }
+
+    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+        self.scan_files(false)
+    }
+}
+
+fn parse_pi_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
 
-    // pi 的 JSONL 格式：type == "message"，message.role == "assistant"
     if v.get("type")?.as_str()? != "message" {
         return None;
     }
@@ -74,7 +112,7 @@ fn parse_pi_line(line: &str) -> Option<UsageRecord> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    if input == 0 && output == 0 {
+    if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
         return None;
     }
 
@@ -87,14 +125,6 @@ fn parse_pi_line(line: &str) -> Option<UsageRecord> {
     let timestamp_str = v.get("timestamp")?.as_str()?;
     let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
 
-    let dir = v
-        .get("cwd")
-        .and_then(|c| c.as_str())
-        .map(crate::reader::basename)
-        .unwrap_or_else(|| "unknown".to_string());
-    let session_id = v.get("id").and_then(|s| s.as_str()).unwrap_or("");
-    let session = crate::reader::session_label(&dir, session_id);
-
     let cost_usd = usage
         .get("cost")
         .and_then(|c| c.get("total"))
@@ -105,7 +135,7 @@ fn parse_pi_line(line: &str) -> Option<UsageRecord> {
         timestamp,
         platform: Platform::Pi,
         model,
-        session,
+        session: st.session_label(),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,
@@ -151,6 +181,7 @@ mod tests {
         assert_eq!(records[0].cache_read_tokens, 10);
         assert_eq!(records[0].cache_creation_tokens, 5);
         assert_eq!(records[0].platform, Platform::Pi);
+        assert_eq!(records[0].session, "project abc123");
     }
 
     #[test]

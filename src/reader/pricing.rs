@@ -15,6 +15,26 @@ const ANTHROPIC_PRICING: &[PricingEntry] = &[
     PricingEntry { pattern: "claude-haiku-3", input: 0.25, output: 1.25, cache_read: 0.03 },
 ];
 
+const KIMI_PRICING: &[PricingEntry] = &[
+    PricingEntry { pattern: "mimo-v2.5-pro", input: 0.60, output: 3.00, cache_read: 0.06 },
+    PricingEntry { pattern: "mimo-v2-pro", input: 0.60, output: 3.00, cache_read: 0.06 },
+    PricingEntry { pattern: "mimo-v2", input: 0.60, output: 3.00, cache_read: 0.06 },
+    PricingEntry { pattern: "kimi-k2", input: 0.60, output: 3.00, cache_read: 0.06 },
+];
+
+const CURSOR_PRICING: &[PricingEntry] = &[
+    PricingEntry { pattern: "cursor-auto", input: 1.25, output: 6.00, cache_read: 0.25 },
+    PricingEntry { pattern: "composer-2.5", input: 1.25, output: 6.00, cache_read: 0.25 },
+    PricingEntry { pattern: "composer-1", input: 1.25, output: 6.00, cache_read: 0.25 },
+    PricingEntry { pattern: "claude-4.6-sonnet", input: 3.0, output: 15.0, cache_read: 0.30 },
+    PricingEntry { pattern: "claude-opus-4", input: 15.0, output: 75.0, cache_read: 1.50 },
+    PricingEntry { pattern: "claude-sonnet-4", input: 3.0, output: 15.0, cache_read: 0.30 },
+    PricingEntry { pattern: "gpt-5.5", input: 1.25, output: 5.00, cache_read: 0.125 },
+    PricingEntry { pattern: "gpt-5.3-codex", input: 2.50, output: 10.0, cache_read: 0.25 },
+    PricingEntry { pattern: "gemini-3", input: 1.25, output: 5.00, cache_read: 0.125 },
+    PricingEntry { pattern: "grok-build", input: 0.60, output: 3.00, cache_read: 0.06 },
+];
+
 const OPENAI_PRICING: &[PricingEntry] = &[
     PricingEntry { pattern: "gpt-5.5", input: 1.25, output: 5.00, cache_read: 0.125 },
     PricingEntry { pattern: "gpt-5.4", input: 0.15, output: 0.60, cache_read: 0.015 },
@@ -43,7 +63,9 @@ pub fn calculate_cost(
     _cache_creation_tokens: u64,
 ) -> f64 {
     let entry = find_price(model, ANTHROPIC_PRICING)
-        .or_else(|| find_price(model, OPENAI_PRICING));
+        .or_else(|| find_price(model, KIMI_PRICING))
+        .or_else(|| find_price(model, OPENAI_PRICING))
+        .or_else(|| find_price(model, CURSOR_PRICING));
 
     let Some(e) = entry else {
         return 0.0;
@@ -76,5 +98,11 @@ mod tests {
     #[test]
     fn unknown_model_is_free() {
         assert_eq!(calculate_cost("totally-unknown", 1_000_000, 1_000_000, 0, 0), 0.0);
+    }
+
+    #[test]
+    fn kimi_models_use_kimi_pricing() {
+        let cost = calculate_cost("xiaomi-token-plan-cn/mimo-v2.5-pro", 1_000_000, 1_000_000, 0, 0);
+        assert!((cost - 3.60).abs() < 1e-9, "mimo priced as {cost}, expected 3.60");
     }
 }

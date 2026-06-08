@@ -2,43 +2,62 @@ use crate::reader::{basename, session_label, UsageSource};
 use crate::state::{Platform, UsageRecord};
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::warn;
 
+/// Last-known cumulative totals for a session row. Hermes updates rows in
+/// place as a session progresses, so we emit token/cost deltas on each poll.
+#[derive(Clone, PartialEq)]
+struct SessionTotals {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+    cost: f64,
+}
+
+struct SessionRow {
+    id: String,
+    model: String,
+    started_at: f64,
+    totals: SessionTotals,
+    cwd: String,
+}
+
 /// Reads per-session usage from hermes-agent's SQLite DB (`state.db`). Each
-/// `sessions` row becomes one `UsageRecord`. Opened read-only; if the DB is
-/// missing or unreadable, every method returns empty (hermes absent).
+/// `sessions` row becomes usage records; in-place row updates emit deltas.
 pub struct HermesReader {
     conn: Option<Connection>,
-    /// Max `started_at` (epoch seconds as REAL) seen so far — the poll cursor.
-    cursor: f64,
+    last_seen: HashMap<String, SessionTotals>,
 }
 
 impl HermesReader {
     pub fn new(data_dir: PathBuf) -> Self {
         let db_path = data_dir.join("state.db");
         let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
-        Self { conn, cursor: 0.0 }
+        Self {
+            conn,
+            last_seen: HashMap::new(),
+        }
     }
 
     #[cfg(test)]
     fn from_connection(conn: Connection) -> Self {
         Self {
             conn: Some(conn),
-            cursor: 0.0,
+            last_seen: HashMap::new(),
         }
     }
 
-    /// Query sessions with `started_at > cursor`, advancing the cursor to the
-    /// max timestamp seen.
-    fn query_since(&mut self, cursor: f64) -> Vec<UsageRecord> {
+    fn fetch_all_sessions(&self) -> Vec<SessionRow> {
         let Some(conn) = self.conn.as_ref() else {
             return Vec::new();
         };
         let mut stmt = match conn.prepare(
             "SELECT id, model, started_at, input_tokens, output_tokens, \
              cache_read_tokens, cache_write_tokens, estimated_cost_usd, cwd \
-             FROM sessions WHERE started_at > ?1 ORDER BY started_at",
+             FROM sessions ORDER BY started_at",
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -46,53 +65,110 @@ impl HermesReader {
                 return Vec::new();
             }
         };
-        let rows = stmt.query_map([cursor], |row| {
+        let rows = stmt.query_map([], |row| {
             Ok((
-                row.get::<_, String>(0)?,       // id
-                row.get::<_, Option<String>>(1)?, // model
-                row.get::<_, f64>(2)?,          // started_at
-                row.get::<_, i64>(3)?,          // input_tokens
-                row.get::<_, i64>(4)?,          // output_tokens
-                row.get::<_, i64>(5)?,          // cache_read_tokens
-                row.get::<_, i64>(6)?,          // cache_write_tokens
-                row.get::<_, Option<f64>>(7)?,  // estimated_cost_usd
-                row.get::<_, Option<String>>(8)?, // cwd
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, Option<f64>>(7)?,
+                row.get::<_, Option<String>>(8)?,
             ))
         });
-        let mut records = Vec::new();
-        let mut max_seen = cursor;
+        let mut sessions = Vec::new();
         if let Ok(rows) = rows {
             for row in rows.flatten() {
                 let (id, model, started_at, input, output, cache_read, cache_write, cost, cwd) =
                     row;
-                if started_at > max_seen {
-                    max_seen = started_at;
-                }
-                // Skip rows with no token usage.
-                if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
-                    continue;
-                }
-                let timestamp = Utc.timestamp_millis_opt((started_at * 1000.0) as i64).single();
-                let Some(timestamp) = timestamp else {
-                    continue;
-                };
-                let model = model.unwrap_or_else(|| "unknown".to_string());
-                let cwd = cwd.unwrap_or_default();
-                let session = session_label(&basename(&cwd), &id);
-                records.push(UsageRecord {
-                    timestamp,
-                    platform: Platform::Hermes,
-                    model,
-                    session,
-                    input_tokens: input as u64,
-                    output_tokens: output as u64,
-                    cache_read_tokens: cache_read as u64,
-                    cache_creation_tokens: cache_write as u64,
-                    cost_usd: cost.unwrap_or(0.0),
+                sessions.push(SessionRow {
+                    id,
+                    model: model.unwrap_or_else(|| "unknown".to_string()),
+                    started_at,
+                    totals: SessionTotals {
+                        input: input.max(0) as u64,
+                        output: output.max(0) as u64,
+                        cache_read: cache_read.max(0) as u64,
+                        cache_write: cache_write.max(0) as u64,
+                        cost: cost.unwrap_or(0.0),
+                    },
+                    cwd: cwd.unwrap_or_default(),
                 });
             }
         }
-        self.cursor = max_seen;
+        sessions
+    }
+
+    fn sync_records(&mut self) -> Vec<UsageRecord> {
+        let sessions = self.fetch_all_sessions();
+        let mut records = Vec::new();
+        let mut current_ids = Vec::with_capacity(sessions.len());
+
+        for session in sessions {
+            current_ids.push(session.id.clone());
+            let current = session.totals.clone();
+            if current.input == 0
+                && current.output == 0
+                && current.cache_read == 0
+                && current.cache_write == 0
+            {
+                self.last_seen.insert(session.id.clone(), current);
+                continue;
+            }
+
+            let (input, output, cache_read, cache_write, cost) =
+                if let Some(prev) = self.last_seen.get(&session.id) {
+                    (
+                        current.input.saturating_sub(prev.input),
+                        current.output.saturating_sub(prev.output),
+                        current.cache_read.saturating_sub(prev.cache_read),
+                        current.cache_write.saturating_sub(prev.cache_write),
+                        (current.cost - prev.cost).max(0.0),
+                    )
+                } else {
+                    (
+                        current.input,
+                        current.output,
+                        current.cache_read,
+                        current.cache_write,
+                        current.cost,
+                    )
+                };
+
+            self.last_seen.insert(session.id.clone(), current);
+
+            if input == 0
+                && output == 0
+                && cache_read == 0
+                && cache_write == 0
+                && cost == 0.0
+            {
+                continue;
+            }
+
+            let timestamp = match Utc.timestamp_millis_opt((session.started_at * 1000.0) as i64).single()
+            {
+                Some(ts) => ts,
+                None => continue,
+            };
+            let session_label = session_label(&basename(&session.cwd), &session.id);
+            records.push(UsageRecord {
+                timestamp,
+                platform: Platform::Hermes,
+                model: session.model,
+                session: session_label,
+                input_tokens: input,
+                output_tokens: output,
+                cache_read_tokens: cache_read,
+                cache_creation_tokens: cache_write,
+                cost_usd: cost,
+            });
+        }
+
+        self.last_seen
+            .retain(|id, _| current_ids.iter().any(|current| current == id));
         records
     }
 }
@@ -102,12 +178,11 @@ impl UsageSource for HermesReader {
         Platform::Hermes
     }
     fn scan_all(&mut self) -> Vec<UsageRecord> {
-        self.cursor = 0.0;
-        self.query_since(0.0)
+        self.last_seen.clear();
+        self.sync_records()
     }
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        let cursor = self.cursor;
-        self.query_since(cursor)
+        self.sync_records()
     }
 }
 
@@ -160,13 +235,12 @@ mod tests {
     fn scan_all_parses_sessions_and_skips_empty() {
         let conn = setup();
         insert(&conn, "s1", "claude-3.5-sonnet", 1000.0, 100, 40, 5, 2, 0.5, "/Users/me/project");
-        // Zero-token session — should be skipped.
         insert(&conn, "s2", "claude-3.5-sonnet", 1500.0, 0, 0, 0, 0, 0.0, "/Users/me/project");
         insert(&conn, "s3", "gpt-4o", 2000.0, 200, 80, 0, 0, 1.5, "/Users/me/other");
         let mut reader = HermesReader::from_connection(conn);
 
         let records = reader.scan_all();
-        assert_eq!(records.len(), 2); // s2 skipped
+        assert_eq!(records.len(), 2);
 
         let r1 = &records[0];
         assert_eq!(r1.model, "claude-3.5-sonnet");
@@ -191,9 +265,8 @@ mod tests {
         let mut reader = HermesReader::from_connection(conn);
 
         assert_eq!(reader.scan_all().len(), 1);
-        assert_eq!(reader.poll_delta().len(), 0); // nothing new
+        assert_eq!(reader.poll_delta().len(), 0);
 
-        // A newer session arrives.
         let conn2 = reader.conn.as_ref().unwrap();
         conn2
             .execute(
@@ -207,6 +280,30 @@ mod tests {
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
         assert_eq!(delta[0].model, "gpt-4o");
+    }
+
+    #[test]
+    fn poll_delta_emits_in_place_session_updates() {
+        let conn = setup();
+        insert(&conn, "s1", "claude-3.5-sonnet", 1000.0, 100, 40, 0, 0, 0.5, "/Users/me/project");
+        let mut reader = HermesReader::from_connection(conn);
+
+        assert_eq!(reader.scan_all().len(), 1);
+
+        let conn2 = reader.conn.as_ref().unwrap();
+        conn2
+            .execute(
+                "UPDATE sessions SET input_tokens = 250, output_tokens = 90, estimated_cost_usd = 1.0 \
+                 WHERE id = 's1'",
+                [],
+            )
+            .unwrap();
+
+        let delta = reader.poll_delta();
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0].input_tokens, 150);
+        assert_eq!(delta[0].output_tokens, 50);
+        assert!((delta[0].cost_usd - 0.5).abs() < 1e-9);
     }
 
     #[test]

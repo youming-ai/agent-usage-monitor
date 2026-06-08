@@ -1,15 +1,18 @@
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::find_recursive;
-use super::jsonl_reader::JsonlReader;
+use super::is_uuid_jsonl;
+use super::session_jsonl::{read_jsonl_from_offset, SessionFileState};
+use super::UsageSource;
 
 pub struct FactoryReader {
     data_dir: PathBuf,
     file_positions: HashMap<PathBuf, u64>,
+    file_state: HashMap<PathBuf, SessionFileState>,
 }
 
 impl FactoryReader {
@@ -17,6 +20,7 @@ impl FactoryReader {
         Self {
             data_dir,
             file_positions: HashMap::new(),
+            file_state: HashMap::new(),
         }
     }
 
@@ -26,29 +30,65 @@ impl FactoryReader {
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".factory/projects")
     }
-}
-
-impl JsonlReader for FactoryReader {
-    fn file_positions(&mut self) -> &mut HashMap<PathBuf, u64> {
-        &mut self.file_positions
-    }
 
     fn find_files(&self) -> Vec<PathBuf> {
         let mut files = Vec::new();
         if self.data_dir.exists() {
             find_recursive(&self.data_dir, &mut files, &|p| {
-                p.extension().map(|e| e == "jsonl").unwrap_or(false)
+                p.extension().map(|e| e == "jsonl").unwrap_or(false) && is_uuid_jsonl(p)
             });
         }
         files
     }
 
-    fn parse_line(&self, line: &str) -> Option<UsageRecord> {
-        parse_factory_line(line)
+    fn scan_files(&mut self, from_start: bool) -> Vec<UsageRecord> {
+        let files = self.find_files();
+        let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
+        self.file_positions
+            .retain(|path, _| current_files.contains(path));
+        self.file_state
+            .retain(|path, _| current_files.contains(path));
+
+        let mut records = Vec::new();
+        for file in files {
+            let offset = if from_start {
+                0
+            } else {
+                self.file_positions.get(&file).copied().unwrap_or(0)
+            };
+            let mut st = self
+                .file_state
+                .get(&file)
+                .cloned()
+                .unwrap_or_else(|| SessionFileState::with_dir("unknown", ""));
+            let (entries, bytes_read) =
+                read_jsonl_from_offset(&file, offset, &mut st, parse_factory_line);
+            self.file_positions.insert(file.clone(), bytes_read);
+            self.file_state.insert(file, st);
+            records.extend(entries);
+        }
+        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        records
     }
 }
 
-fn parse_factory_line(line: &str) -> Option<UsageRecord> {
+impl UsageSource for FactoryReader {
+    fn platform(&self) -> Platform {
+        Platform::Factory
+    }
+
+    fn scan_all(&mut self) -> Vec<UsageRecord> {
+        self.file_positions.clear();
+        self.file_state.clear();
+        self.scan_files(true)
+    }
+
+    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+        self.scan_files(false)
+    }
+}
+
+fn parse_factory_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
 
     if v.get("type")?.as_str()? != "message" {
@@ -73,7 +113,7 @@ fn parse_factory_line(line: &str) -> Option<UsageRecord> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    if input == 0 && output == 0 {
+    if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
         return None;
     }
 
@@ -90,8 +130,11 @@ fn parse_factory_line(line: &str) -> Option<UsageRecord> {
         .get("cwd")
         .and_then(|c| c.as_str())
         .map(crate::reader::basename)
-        .unwrap_or_else(|| "unknown".to_string());
-    let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
+        .unwrap_or_else(|| st.dir.clone());
+    let session_id = v
+        .get("sessionId")
+        .and_then(|s| s.as_str())
+        .unwrap_or(st.sid.as_str());
     let session = crate::reader::session_label(&dir, session_id);
 
     let cost_usd = usage
@@ -138,7 +181,11 @@ mod tests {
     #[test]
     fn parses_assistant_messages() {
         let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "session.jsonl", &sample_jsonl());
+        write_file(
+            dir.path(),
+            "a3f2c1d8-10e5-4b2a-9c1d-ef0123456789.jsonl",
+            &sample_jsonl(),
+        );
 
         let mut reader = FactoryReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
@@ -149,12 +196,26 @@ mod tests {
         assert_eq!(records[0].cache_read_tokens, 800);
         assert_eq!(records[0].cache_creation_tokens, 150);
         assert_eq!(records[0].platform, Platform::Factory);
+        assert_eq!(records[0].session, "project abc123");
+    }
+
+    #[test]
+    fn ignores_non_uuid_jsonl_files() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "session.jsonl", &sample_jsonl());
+
+        let mut reader = FactoryReader::new(dir.path().to_path_buf());
+        assert!(reader.scan_all().is_empty());
     }
 
     #[test]
     fn poll_delta_returns_nothing_when_unchanged() {
         let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "session.jsonl", &sample_jsonl());
+        write_file(
+            dir.path(),
+            "a3f2c1d8-10e5-4b2a-9c1d-ef0123456789.jsonl",
+            &sample_jsonl(),
+        );
 
         let mut reader = FactoryReader::new(dir.path().to_path_buf());
         assert_eq!(reader.scan_all().len(), 1);
