@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user"}}
+{"type":"summary","summary":"fixture session"}
+{"type":"assistant","timestamp":"2026-05-29T10:00:00Z","requestId":"req1","cwd":"/Users/me/agent-usage-monitor","sessionId":"a3f2c1d8","message":{"id":"msg1","model":"claude-opus-4","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"service_tier":"standard"}},"cost_usd":0.01}
+{"type":"user","message":{"role":"user"}}
+{"type":"assistant","timestamp":"2026-05-29T10:01:00Z","requestId":"req2","cwd":"/Users/me/agent-usage-monitor","sessionId":"a3f2c1d8","message":{"id":"msg2","model":"claude-opus-4","usage":{"input_tokens":200,"output_tokens":80,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"service_tier":"standard"}},"cost_usd":0.02}

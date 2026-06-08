@@ -3,6 +3,10 @@ name = "agent-usage-monitor"
 version = "0.11.2"
 edition = "2024"
 
+[lib]
+name = "agent_usage_monitor"
+path = "src/lib.rs"
+
 [[bin]]
 name = "aum"
 path = "src/main.rs"

@@ -63,12 +63,18 @@ Example:
 ```bash
 aum config set refresh 2
 aum config set max_records 200
+aum config set grok_path ~/.grok
+aum config set cursor_path ~/.cursor
 ```
 
 ## Layout
 
+Each agent tab uses the same layout; only the accent color and data source change. Claude and Codex also show quota bars when credentials are available.
+
+### Claude Code (quota + usage)
+
 ```
- CLAUDE   codex   opencode   kimi-code                          ✓ you@mail.com
+ CLAUDE   codex   opencode   kimi-code   GROK   CURSOR                 ✓ you@mail.com
 ───────────────────────────────────────────────────────────────────────────────
  ✓ 5h ▓▓▓▓▓▓▓▓▓▓░░  82%  resets 2h30m
  ✓ 7d ▓▓▓▓▓▓░░░░░░  54%  resets 4d6h
@@ -84,7 +90,41 @@ aum config set max_records 200
  42 calls · $12.34                                                    tab·r·q
 ```
 
-- **Quota bars** — one per window; the fill shows remaining usage, with a status glyph (`✓` ≥50%, `⚠` ≥20%, `✗` <20%) and reset time.
+### Grok Build (usage only)
+
+```
+ GROK   CURSOR   CLAUDE   codex
+───────────────────────────────────────────────────────────────────────────────
+ (no quota API — usage from local session logs)
+┌ GROK models (8) ──────────────────────────────────────────────────────────────┐
+│ MODEL                 INPUT    OUTPUT   CACHE   COST     #                    │
+│ grok-composer-2.5-fast  45.2k    0       0      $0.12    8                    │
+└───────────────────────────────────────────────────────────────────────────────┘
+┌ sessions ─────────────────────────────────────────────────────────────────────┐
+│ SESSION                       TOKENS    REQUESTS                              │
+│ my-project 019ea524           12.1k     4                                     │
+└───────────────────────────────────────────────────────────────────────────────┘
+ 8 calls · $0.12                                                      tab·r·q
+```
+
+### Cursor CLI (usage only)
+
+```
+ CURSOR   GROK   CLAUDE   codex
+───────────────────────────────────────────────────────────────────────────────
+ (no quota API — usage from transcripts and store.db)
+┌ CURSOR models (3) ────────────────────────────────────────────────────────────┐
+│ MODEL               INPUT   OUTPUT   CACHE   COST     #                      │
+│ claude-sonnet-4-5   8.4k    2.1k     0      $0.00    3                       │
+└───────────────────────────────────────────────────────────────────────────────┘
+┌ sessions ─────────────────────────────────────────────────────────────────────┐
+│ SESSION                       TOKENS    REQUESTS                              │
+│ myproject a3f2c1d8            3.2k      1                                     │
+└───────────────────────────────────────────────────────────────────────────────┘
+ 3 calls · $0.00                                                      tab·r·q
+```
+
+- **Quota bars** — one per window (Claude & Codex only); the fill shows remaining usage, with a status glyph (`✓` ≥50%, `⚠` ≥20%, `✗` <20%) and reset time.
 - **models** — per-model totals: tokens, cost, and request count.
 - **sessions** — per-conversation usage (tokens, requests), labelled `<dir> <id>` so multiple sessions in one project stay distinct.
 
@@ -102,10 +142,22 @@ Each platform uses an accent color matched to its official CLI theme or brand pa
 - **openclaw** — `~/.openclaw/agents/**/sessions/*.jsonl`
 - **hermes-agent** — `~/.hermes/state.db` (SQLite, read-only)
 - **Factory AI** — `~/.factory/projects/**/<session-uuid>.jsonl`
-- **Grok Build** — `~/.grok/sessions/**/updates.jsonl` (plus `summary.json` for session metadata)
-- **Cursor CLI** — `~/.cursor/projects/**/agent-transcripts/*.jsonl` and `~/.cursor/chats/**/store.db` (also `~/.config/cursor/chats/**/store.db`)
+- **Grok Build** — `~/.grok/sessions/**/<session-id>/updates.jsonl` (+ `summary.json` for session metadata)
+- **Cursor CLI** — `~/.cursor/projects/**/agent-transcripts/**/*.jsonl`, `~/.cursor/chats/**/store.db`, and `~/.config/cursor/chats/**/store.db`
 
 Quota percentages come from the official endpoints, authenticated with your existing local credentials (Claude: macOS Keychain or `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`). Cost is computed from built-in pricing tables for Anthropic & OpenAI models; unknown models show `$0.00`.
+
+### Adding a new agent
+
+Platform wiring lives in `src/platforms.rs` (`RegistryEntry`). A new agent needs one registry row (path keys, reader factory) instead of scattered changes across `main.rs` and config handlers.
+
+### Tests
+
+Unit tests live under `src/`; committed log samples under `tests/fixtures/` are scanned by integration tests in `tests/reader_fixtures.rs` to catch format regressions:
+
+```bash
+cargo test
+```
 
 ## License
 
