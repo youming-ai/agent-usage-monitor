@@ -1,24 +1,12 @@
-mod cli;
-mod config;
-mod event;
-mod quota;
-mod reader;
-mod state;
-mod ui;
-mod updater;
-
-use crate::config::Config;
-use crate::event::{AppEvent, EventLoop};
-use crate::reader::claude::ClaudeReader;
-use crate::reader::codex::CodexReader;
-use crate::reader::cursor::CursorReader;
-use crate::reader::factory::FactoryReader;
-use crate::reader::grok::GrokReader;
-use crate::reader::hermes::HermesReader;
-use crate::reader::openclaw::OpenClawReader;
-use crate::reader::pi::PiReader;
-use crate::reader::UsageSource;
-use crate::state::{AgentPaths, AppState};
+use agent_usage_monitor::cli;
+use agent_usage_monitor::config::{self, Config};
+use agent_usage_monitor::event::{AppEvent, EventLoop};
+use agent_usage_monitor::platforms;
+use agent_usage_monitor::quota;
+use agent_usage_monitor::reader::UsageSource;
+use agent_usage_monitor::state::AppState;
+use agent_usage_monitor::ui;
+use agent_usage_monitor::updater;
 use clap::Parser;
 use crossterm::event::KeyCode;
 use std::sync::{Arc, RwLock};
@@ -65,49 +53,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    // Merge CLI args with config: CLI takes precedence, but we can no longer
-    // rely on "arg != default" to detect user input (the user may have
-    // explicitly set a value equal to the default in config). Instead, the
-    // CLI fields are `Option`, so `None` is the unambiguous "user didn't
-    // provide it" signal — and we fall back to the config value.
-    let claude_path = args.claude_path.unwrap_or(config.claude_path);
-    let codex_path = args.codex_path.unwrap_or(config.codex_path);
-    let opencode_path = args.opencode_path.unwrap_or(config.opencode_path);
-    let kimi_code_path = args.kimi_code_path.unwrap_or(config.kimi_code_path);
-    let pi_path = args.pi_path.unwrap_or(config.pi_path);
-    let openclaw_path = args.openclaw_path.unwrap_or(config.openclaw_path);
-    let hermes_path = args.hermes_path.unwrap_or(config.hermes_path);
-    let factory_path = args.factory_path.unwrap_or(config.factory_path);
-    let grok_path = args.grok_path.unwrap_or(config.grok_path);
-    let cursor_path = args.cursor_path.unwrap_or(config.cursor_path);
+    // CLI `Option` paths override config; see `platforms::resolve_paths`.
+    let agent_paths = platforms::resolve_paths(&args, &config);
     // Clamp to at least 1s: tokio::time::interval panics on a zero period, so
     // `--refresh 0` (or refresh = 0 in config) would crash the reader tasks.
     let refresh = args.refresh.unwrap_or(config.refresh).max(1);
 
-    info!("Monitoring Claude Code at {:?}", claude_path);
-    info!("Monitoring Codex at {:?}", codex_path);
-    info!("Monitoring opencode at {:?}", opencode_path);
-    info!("Monitoring Kimi Code at {:?}", kimi_code_path);
-    info!("Monitoring Pi at {:?}", pi_path);
-    info!("Monitoring OpenClaw at {:?}", openclaw_path);
-    info!("Monitoring Hermes at {:?}", hermes_path);
-    info!("Monitoring Factory at {:?}", factory_path);
-    info!("Monitoring Grok at {:?}", grok_path);
-    info!("Monitoring Cursor CLI at {:?}", cursor_path);
+    for entry in platforms::entries() {
+        info!(
+            "Monitoring {} at {:?}",
+            entry.log_name,
+            agent_paths.path_for(entry.tab)
+        );
+    }
     info!("Refresh interval: {} seconds", refresh);
-
-    let agent_paths = AgentPaths {
-        claude_path: claude_path.clone(),
-        codex_path: codex_path.clone(),
-        opencode_path: opencode_path.clone(),
-        kimi_code_path: kimi_code_path.clone(),
-        pi_path: pi_path.clone(),
-        openclaw_path: openclaw_path.clone(),
-        hermes_path: hermes_path.clone(),
-        factory_path: factory_path.clone(),
-        grok_path: grok_path.clone(),
-        cursor_path: cursor_path.clone(),
-    };
 
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
     app_state
@@ -115,41 +74,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap()
         .detect_available_tabs(&agent_paths);
 
-    // Reader tasks: one per usage source, all driven uniformly via UsageSource.
-    let sources: Vec<Arc<std::sync::Mutex<Box<dyn UsageSource>>>> = vec![
-        Arc::new(std::sync::Mutex::new(
-            Box::new(ClaudeReader::new(claude_path.clone())) as Box<dyn UsageSource>,
-        )),
-        Arc::new(std::sync::Mutex::new(
-            Box::new(CodexReader::new(codex_path.clone())) as Box<dyn UsageSource>,
-        )),
-        Arc::new(std::sync::Mutex::new(
-            Box::new(reader::opencode::OpencodeReader::new(opencode_path.clone()))
-                as Box<dyn UsageSource>,
-        )),
-        Arc::new(std::sync::Mutex::new(
-            Box::new(reader::kimi_code::KimiCodeReader::new(kimi_code_path.clone()))
-                as Box<dyn UsageSource>,
-        )),
-        Arc::new(std::sync::Mutex::new(
-            Box::new(PiReader::new(pi_path.clone())) as Box<dyn UsageSource>,
-        )),
-        Arc::new(std::sync::Mutex::new(
-            Box::new(OpenClawReader::new(openclaw_path.clone())) as Box<dyn UsageSource>,
-        )),
-        Arc::new(std::sync::Mutex::new(
-            Box::new(HermesReader::new(hermes_path.clone())) as Box<dyn UsageSource>,
-        )),
-        Arc::new(std::sync::Mutex::new(
-            Box::new(FactoryReader::new(factory_path.clone())) as Box<dyn UsageSource>,
-        )),
-        Arc::new(std::sync::Mutex::new(
-            Box::new(GrokReader::new(grok_path.clone())) as Box<dyn UsageSource>,
-        )),
-        Arc::new(std::sync::Mutex::new(
-            Box::new(CursorReader::new(cursor_path.clone())) as Box<dyn UsageSource>,
-        )),
-    ];
+    // Reader tasks: one per registered platform, driven uniformly via UsageSource.
+    let sources: Vec<Arc<std::sync::Mutex<Box<dyn UsageSource>>>> = platforms::entries()
+        .iter()
+        .map(|entry| {
+            let path = agent_paths.path_for(entry.tab);
+            Arc::new(std::sync::Mutex::new(entry.build_reader(path)))
+        })
+        .collect();
     let mut reader_handles = Vec::new();
     for source in &sources {
         let source = source.clone();
@@ -308,27 +240,12 @@ fn handle_config(action: Option<cli::ConfigAction>) -> Result<(), Box<dyn std::e
         }
         Some(cli::ConfigAction::Set { key, value }) => {
             let mut config = config::load_config().unwrap_or_default();
-            
-            match key.as_str() {
-                "claude_path" => config.claude_path = std::path::PathBuf::from(value),
-                "codex_path" => config.codex_path = std::path::PathBuf::from(value),
-                "opencode_path" => config.opencode_path = std::path::PathBuf::from(value),
-                "kimi_code_path" => config.kimi_code_path = std::path::PathBuf::from(value),
-                "pi_path" => config.pi_path = std::path::PathBuf::from(value),
-                "openclaw_path" => config.openclaw_path = std::path::PathBuf::from(value),
-                "hermes_path" => config.hermes_path = std::path::PathBuf::from(value),
-                "factory_path" => config.factory_path = std::path::PathBuf::from(value),
-                "grok_path" => config.grok_path = std::path::PathBuf::from(value),
-                "cursor_path" => config.cursor_path = std::path::PathBuf::from(value),
-                "refresh" => config.refresh = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
-                "max_records" => config.max_records = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
-                _ => {
-                    eprintln!("Unknown configuration key: {}", key);
-                    eprintln!("Available keys: claude_path, codex_path, opencode_path, kimi_code_path, pi_path, openclaw_path, hermes_path, factory_path, grok_path, cursor_path, refresh, max_records");
-                    std::process::exit(1);
-                }
+
+            if let Err(msg) = platforms::apply_config_key(&mut config, &key, &value) {
+                eprintln!("{msg}");
+                std::process::exit(1);
             }
-            
+
             config::save_config(&config).map_err(|e| e.to_string())?;
             println!("Configuration updated.");
         }
@@ -379,18 +296,8 @@ fn run_tui(
                     }
                     KeyCode::Char('r') => {
                         if let Ok(mut state) = app_state.write() {
-                            match state.active_tab {
-                                state::Tab::ClaudeCode => state.clear_claude(),
-                                state::Tab::Codex => state.clear_codex(),
-                                state::Tab::OpenCode => state.clear_opencode(),
-                                state::Tab::KimiCode => state.clear_kimi_code(),
-                                state::Tab::Pi => state.clear_pi(),
-                                state::Tab::OpenClaw => state.clear_openclaw(),
-                                state::Tab::Hermes => state.clear_hermes(),
-                                state::Tab::Factory => state.clear_factory(),
-                                state::Tab::Grok => state.clear_grok(),
-                                state::Tab::Cursor => state.clear_cursor(),
-                            }
+                            let tab = state.active_tab;
+                            state.clear_tab(tab);
                         }
                     }
                     _ => {}

@@ -7,32 +7,25 @@ use std::path::PathBuf;
 /// custom paths are honored instead of always checking defaults.
 #[derive(Debug, Clone)]
 pub struct AgentPaths {
-    pub claude_path: PathBuf,
-    pub codex_path: PathBuf,
-    pub opencode_path: PathBuf,
-    pub kimi_code_path: PathBuf,
-    pub pi_path: PathBuf,
-    pub openclaw_path: PathBuf,
-    pub hermes_path: PathBuf,
-    pub factory_path: PathBuf,
-    pub grok_path: PathBuf,
-    pub cursor_path: PathBuf,
+    paths: HashMap<Tab, PathBuf>,
 }
 
 impl AgentPaths {
+    pub fn new(paths: HashMap<Tab, PathBuf>) -> Self {
+        Self { paths }
+    }
+
     pub fn path_for(&self, tab: Tab) -> PathBuf {
-        match tab {
-            Tab::ClaudeCode => self.claude_path.clone(),
-            Tab::Codex => self.codex_path.clone(),
-            Tab::OpenCode => self.opencode_path.clone(),
-            Tab::KimiCode => self.kimi_code_path.clone(),
-            Tab::Pi => self.pi_path.clone(),
-            Tab::OpenClaw => self.openclaw_path.clone(),
-            Tab::Hermes => self.hermes_path.clone(),
-            Tab::Factory => self.factory_path.clone(),
-            Tab::Grok => self.grok_path.clone(),
-            Tab::Cursor => self.cursor_path.clone(),
-        }
+        self.paths
+            .get(&tab)
+            .cloned()
+            .unwrap_or_else(|| {
+                debug_assert!(
+                    self.paths.contains_key(&tab),
+                    "AgentPaths missing {tab:?}; use platforms::resolve_paths"
+                );
+                tab.default_path()
+            })
     }
 }
 
@@ -50,7 +43,7 @@ pub enum Platform {
     Cursor,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tab {
     ClaudeCode,
     Codex,
@@ -615,6 +608,22 @@ impl AppState {
         self.cursor_total_cost = 0.0;
     }
 
+    /// Clear usage data for the active tab (`r` key). Dispatches via `Tab`.
+    pub fn clear_tab(&mut self, tab: Tab) {
+        match tab {
+            Tab::ClaudeCode => self.clear_claude(),
+            Tab::Codex => self.clear_codex(),
+            Tab::OpenCode => self.clear_opencode(),
+            Tab::KimiCode => self.clear_kimi_code(),
+            Tab::Pi => self.clear_pi(),
+            Tab::OpenClaw => self.clear_openclaw(),
+            Tab::Hermes => self.clear_hermes(),
+            Tab::Factory => self.clear_factory(),
+            Tab::Grok => self.clear_grok(),
+            Tab::Cursor => self.clear_cursor(),
+        }
+    }
+
     pub fn detect_available_tabs(&mut self, paths: &AgentPaths) {
         self.available_tabs = Tab::all()
             .iter()
@@ -743,18 +752,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let claude = dir.path().join("claude-custom");
         std::fs::create_dir_all(&claude).unwrap();
-        let paths = AgentPaths {
-            claude_path: claude,
-            codex_path: dir.path().join("missing-codex"),
-            opencode_path: dir.path().join("missing-opencode"),
-            kimi_code_path: dir.path().join("missing-kimi"),
-            pi_path: dir.path().join("missing-pi"),
-            openclaw_path: dir.path().join("missing-openclaw"),
-            hermes_path: dir.path().join("missing-hermes"),
-            factory_path: dir.path().join("missing-factory"),
-            grok_path: dir.path().join("missing-grok"),
-            cursor_path: dir.path().join("missing-cursor"),
-        };
+        let missing = dir.path().join("missing");
+        let paths = AgentPaths::new(HashMap::from([
+            (Tab::ClaudeCode, claude),
+            (Tab::Codex, missing.join("codex")),
+            (Tab::OpenCode, missing.join("opencode")),
+            (Tab::KimiCode, missing.join("kimi")),
+            (Tab::Pi, missing.join("pi")),
+            (Tab::OpenClaw, missing.join("openclaw")),
+            (Tab::Hermes, missing.join("hermes")),
+            (Tab::Factory, missing.join("factory")),
+            (Tab::Grok, missing.join("grok")),
+            (Tab::Cursor, missing.join("cursor")),
+        ]));
 
         let mut state = AppState::new();
         state.detect_available_tabs(&paths);
