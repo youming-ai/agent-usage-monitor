@@ -97,18 +97,19 @@ impl Tab {
     }
 
     /// Primary color for the tab (used for borders and accents)
+    /// Adjusted to match each agent's official website / brand theme color.
     pub fn primary_color(self) -> ratatui::style::Color {
         match self {
-            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 165, 0),
-            Tab::Codex => ratatui::style::Color::Rgb(59, 130, 246),
-            Tab::OpenCode => ratatui::style::Color::Rgb(16, 185, 129),
-            Tab::KimiCode => ratatui::style::Color::Rgb(139, 92, 246),
-            Tab::Pi => ratatui::style::Color::Rgb(236, 72, 153),
-            Tab::OpenClaw => ratatui::style::Color::Rgb(234, 88, 12),
-            Tab::Hermes => ratatui::style::Color::Rgb(168, 85, 247),
-            Tab::Factory => ratatui::style::Color::Rgb(34, 197, 94),
-            Tab::Grok => ratatui::style::Color::Rgb(220, 38, 38),
-            Tab::Cursor => ratatui::style::Color::Rgb(99, 102, 241),
+            Tab::ClaudeCode => ratatui::style::Color::Rgb(222, 115, 86),   // #DE7356 Claude peach/orange
+            Tab::Codex => ratatui::style::Color::Rgb(16, 163, 127),       // #10A37F OpenAI green
+            Tab::OpenCode => ratatui::style::Color::Rgb(14, 165, 233),    // #0EA5E9 modern sky blue
+            Tab::KimiCode => ratatui::style::Color::Rgb(0, 101, 181),     // #0065B5 Kimi deep blue
+            Tab::Pi => ratatui::style::Color::Rgb(119, 229, 68),          // #77E544 Pi apple green
+            Tab::OpenClaw => ratatui::style::Color::Rgb(234, 88, 12),     // #EA580C OpenClaw orange
+            Tab::Hermes => ratatui::style::Color::Rgb(212, 175, 55),      // #D4AF37 Hermes gold
+            Tab::Factory => ratatui::style::Color::Rgb(59, 130, 246),     // #3B82F6 Factory blue
+            Tab::Grok => ratatui::style::Color::Rgb(220, 38, 38),         // #DC2626 xAI/Grok red
+            Tab::Cursor => ratatui::style::Color::Rgb(249, 115, 22),      // #F97316 Cursor orange accent
         }
     }
 
@@ -116,16 +117,16 @@ impl Tab {
     #[allow(dead_code)]
     pub fn secondary_color(self) -> ratatui::style::Color {
         match self {
-            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 200, 100),
-            Tab::Codex => ratatui::style::Color::Rgb(147, 197, 253),
-            Tab::OpenCode => ratatui::style::Color::Rgb(110, 231, 183),
-            Tab::KimiCode => ratatui::style::Color::Rgb(196, 181, 253),
-            Tab::Pi => ratatui::style::Color::Rgb(249, 168, 212),
-            Tab::OpenClaw => ratatui::style::Color::Rgb(253, 186, 116),
-            Tab::Hermes => ratatui::style::Color::Rgb(216, 180, 254),
-            Tab::Factory => ratatui::style::Color::Rgb(134, 239, 172),
-            Tab::Grok => ratatui::style::Color::Rgb(252, 165, 165),
-            Tab::Cursor => ratatui::style::Color::Rgb(199, 210, 254),
+            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 200, 180),  // lighter peach
+            Tab::Codex => ratatui::style::Color::Rgb(103, 232, 249),      // light teal
+            Tab::OpenCode => ratatui::style::Color::Rgb(125, 211, 252),   // light sky
+            Tab::KimiCode => ratatui::style::Color::Rgb(147, 197, 253),   // light blue
+            Tab::Pi => ratatui::style::Color::Rgb(163, 230, 114),         // light green
+            Tab::OpenClaw => ratatui::style::Color::Rgb(253, 186, 116),   // light orange
+            Tab::Hermes => ratatui::style::Color::Rgb(245, 158, 11),      // light gold
+            Tab::Factory => ratatui::style::Color::Rgb(147, 197, 253),    // light blue
+            Tab::Grok => ratatui::style::Color::Rgb(252, 165, 165),       // light red
+            Tab::Cursor => ratatui::style::Color::Rgb(253, 186, 116),     // light orange
         }
     }
 

@@ -88,7 +88,7 @@ aum config set max_records 200
 - **models** — per-model totals: tokens, cost, and request count.
 - **sessions** — per-conversation usage (tokens, requests), labelled `<dir> <id>` so multiple sessions in one project stay distinct.
 
-Each platform uses one accent color (Claude orange, Codex blue, opencode green, Kimi Code purple, pi pink, openclaw orange, hermes purple, Factory green, Grok blue, Cursor purple); everything else stays default or dimmed.
+Each platform uses an accent color matched to its official website/brand theme (Claude peach-orange, Codex teal-green, OpenCode sky blue, Kimi Code deep blue, Pi apple green, OpenClaw orange, Hermes gold, Factory blue, Grok red, Cursor orange); everything else stays default or dimmed. These are defined in `src/state/app_state.rs` (`Tab::primary_color`).
 
 ## How it works
 
