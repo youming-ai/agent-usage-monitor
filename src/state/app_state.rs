@@ -96,20 +96,20 @@ impl Tab {
         }
     }
 
-    /// Primary color for the tab (used for borders and accents)
-    /// Adjusted to match each agent's official website / brand theme color.
+    /// Primary color for the tab (used for borders and accents).
+    /// Sourced from each agent's official CLI theme / brand palette.
     pub fn primary_color(self) -> ratatui::style::Color {
         match self {
-            Tab::ClaudeCode => ratatui::style::Color::Rgb(222, 115, 86),   // #DE7356 Claude peach/orange
-            Tab::Codex => ratatui::style::Color::Rgb(16, 163, 127),       // #10A37F OpenAI green
-            Tab::OpenCode => ratatui::style::Color::Rgb(14, 165, 233),    // #0EA5E9 modern sky blue
-            Tab::KimiCode => ratatui::style::Color::Rgb(0, 101, 181),     // #0065B5 Kimi deep blue
-            Tab::Pi => ratatui::style::Color::Rgb(119, 229, 68),          // #77E544 Pi apple green
-            Tab::OpenClaw => ratatui::style::Color::Rgb(234, 88, 12),     // #EA580C OpenClaw orange
-            Tab::Hermes => ratatui::style::Color::Rgb(212, 175, 55),      // #D4AF37 Hermes gold
-            Tab::Factory => ratatui::style::Color::Rgb(59, 130, 246),     // #3B82F6 Factory blue
-            Tab::Grok => ratatui::style::Color::Rgb(220, 38, 38),         // #DC2626 xAI/Grok red
-            Tab::Cursor => ratatui::style::Color::Rgb(249, 115, 22),      // #F97316 Cursor orange accent
+            Tab::ClaudeCode => ratatui::style::Color::Rgb(217, 119, 87),   // #D97757 anthropic/claude brand accent
+            Tab::Codex => ratatui::style::Color::Rgb(215, 95, 215),       // #D75FD7 openai/codex TUI ANSI magenta
+            Tab::OpenCode => ratatui::style::Color::Rgb(250, 178, 131),   // #FAB283 anomalyco/opencode opencode.json primary (dark)
+            Tab::KimiCode => ratatui::style::Color::Rgb(103, 232, 249),   // #67E8F9 MoonshotAI/kimi-cli ui/theme.py accent
+            Tab::Pi => ratatui::style::Color::Rgb(138, 190, 183),         // #8ABEB7 earendil-works/pi dark.json accent
+            Tab::OpenClaw => ratatui::style::Color::Rgb(255, 90, 45),     // #FF5A2D openclaw/openclaw LOBSTER_PALETTE.accent
+            Tab::Hermes => ratatui::style::Color::Rgb(255, 215, 0),      // #FFD700 NousResearch/hermes-agent ui-tui primary
+            Tab::Factory => ratatui::style::Color::Rgb(242, 123, 47),     // #F27B2F Factory-AI/factory docs accent
+            Tab::Grok => ratatui::style::Color::Rgb(187, 154, 247),       // #BB9AF7 Grok Build CLI GrokNight accent
+            Tab::Cursor => ratatui::style::Color::Rgb(136, 192, 208),     // #88C0D0 anomalyco/opencode cursor.json darkCyan (primary)
         }
     }
 
@@ -117,16 +117,16 @@ impl Tab {
     #[allow(dead_code)]
     pub fn secondary_color(self) -> ratatui::style::Color {
         match self {
-            Tab::ClaudeCode => ratatui::style::Color::Rgb(255, 200, 180),  // lighter peach
-            Tab::Codex => ratatui::style::Color::Rgb(103, 232, 249),      // light teal
-            Tab::OpenCode => ratatui::style::Color::Rgb(125, 211, 252),   // light sky
-            Tab::KimiCode => ratatui::style::Color::Rgb(147, 197, 253),   // light blue
-            Tab::Pi => ratatui::style::Color::Rgb(163, 230, 114),         // light green
-            Tab::OpenClaw => ratatui::style::Color::Rgb(253, 186, 116),   // light orange
-            Tab::Hermes => ratatui::style::Color::Rgb(245, 158, 11),      // light gold
-            Tab::Factory => ratatui::style::Color::Rgb(147, 197, 253),    // light blue
-            Tab::Grok => ratatui::style::Color::Rgb(252, 165, 165),       // light red
-            Tab::Cursor => ratatui::style::Color::Rgb(253, 186, 116),     // light orange
+            Tab::ClaudeCode => ratatui::style::Color::Rgb(254, 205, 170),  // lighter orange
+            Tab::Codex => ratatui::style::Color::Rgb(240, 176, 240),      // lighter magenta
+            Tab::OpenCode => ratatui::style::Color::Rgb(255, 212, 184),   // lighter peach (#FAB283 tint)
+            Tab::KimiCode => ratatui::style::Color::Rgb(165, 243, 252),   // lighter cyan
+            Tab::Pi => ratatui::style::Color::Rgb(197, 228, 224),         // lighter sage
+            Tab::OpenClaw => ratatui::style::Color::Rgb(255, 184, 158),   // lighter lobster orange
+            Tab::Hermes => ratatui::style::Color::Rgb(255, 235, 128),   // lighter gold
+            Tab::Factory => ratatui::style::Color::Rgb(255, 201, 160),    // lighter orange
+            Tab::Grok => ratatui::style::Color::Rgb(221, 208, 252),       // lighter purple
+            Tab::Cursor => ratatui::style::Color::Rgb(184, 224, 235),     // lighter cyan
         }
     }
 
