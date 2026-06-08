@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.2](https://github.com/youming-ai/agent-usage-monitor/compare/v0.11.1...v0.11.2) (2026-06-08)
+
+
+### Bug Fixes
+
+* **ui:** align agent tab colors with official CLI themes ([af1e488](https://github.com/youming-ai/agent-usage-monitor/commit/af1e48899f55d6cd41ad62c5be9c67dcdf8acdde))
+* **ui:** align tab accent colors with official CLI themes ([ec2b985](https://github.com/youming-ai/agent-usage-monitor/commit/ec2b985d32eb16abc02cac46f65313f85dd51a13))
+
 ## [0.11.1](https://github.com/youming-ai/agent-usage-monitor/compare/v0.11.0...v0.11.1) (2026-06-08)
 
 
