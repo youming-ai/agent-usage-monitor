@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.10.0...v0.11.0) (2026-06-08)
+
+
+### Features
+
+* add Grok Build and Cursor CLI support; fix critical Cursor reader bugs ([f7efc85](https://github.com/youming-ai/agent-usage-monitor/commit/f7efc85ba825f19ad1e738054b2f18322bb2a83d))
+* add Grok Build and Cursor CLI support; fix critical Cursor reader bugs ([49b6bbe](https://github.com/youming-ai/agent-usage-monitor/commit/49b6bbe5e3aeb6013a361ea4a81cf7ed77545c7e))
+
 ## [0.10.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.9.0...v0.10.0) (2026-06-05)
 
 
