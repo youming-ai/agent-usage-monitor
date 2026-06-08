@@ -11,12 +11,14 @@ use crate::config::Config;
 use crate::event::{AppEvent, EventLoop};
 use crate::reader::claude::ClaudeReader;
 use crate::reader::codex::CodexReader;
+use crate::reader::cursor::CursorReader;
 use crate::reader::factory::FactoryReader;
+use crate::reader::grok::GrokReader;
 use crate::reader::hermes::HermesReader;
 use crate::reader::openclaw::OpenClawReader;
 use crate::reader::pi::PiReader;
 use crate::reader::UsageSource;
-use crate::state::AppState;
+use crate::state::{AgentPaths, AppState};
 use clap::Parser;
 use crossterm::event::KeyCode;
 use std::sync::{Arc, RwLock};
@@ -76,6 +78,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let openclaw_path = args.openclaw_path.unwrap_or(config.openclaw_path);
     let hermes_path = args.hermes_path.unwrap_or(config.hermes_path);
     let factory_path = args.factory_path.unwrap_or(config.factory_path);
+    let grok_path = args.grok_path.unwrap_or(config.grok_path);
+    let cursor_path = args.cursor_path.unwrap_or(config.cursor_path);
     // Clamp to at least 1s: tokio::time::interval panics on a zero period, so
     // `--refresh 0` (or refresh = 0 in config) would crash the reader tasks.
     let refresh = args.refresh.unwrap_or(config.refresh).max(1);
@@ -88,10 +92,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Monitoring OpenClaw at {:?}", openclaw_path);
     info!("Monitoring Hermes at {:?}", hermes_path);
     info!("Monitoring Factory at {:?}", factory_path);
+    info!("Monitoring Grok at {:?}", grok_path);
+    info!("Monitoring Cursor CLI at {:?}", cursor_path);
     info!("Refresh interval: {} seconds", refresh);
 
+    let agent_paths = AgentPaths {
+        claude_path: claude_path.clone(),
+        codex_path: codex_path.clone(),
+        opencode_path: opencode_path.clone(),
+        kimi_code_path: kimi_code_path.clone(),
+        pi_path: pi_path.clone(),
+        openclaw_path: openclaw_path.clone(),
+        hermes_path: hermes_path.clone(),
+        factory_path: factory_path.clone(),
+        grok_path: grok_path.clone(),
+        cursor_path: cursor_path.clone(),
+    };
+
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
-    app_state.write().unwrap().detect_available_tabs();
+    app_state
+        .write()
+        .unwrap()
+        .detect_available_tabs(&agent_paths);
 
     // Reader tasks: one per usage source, all driven uniformly via UsageSource.
     let sources: Vec<Arc<std::sync::Mutex<Box<dyn UsageSource>>>> = vec![
@@ -120,6 +142,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )),
         Arc::new(std::sync::Mutex::new(
             Box::new(FactoryReader::new(factory_path.clone())) as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(GrokReader::new(grok_path.clone())) as Box<dyn UsageSource>,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            Box::new(CursorReader::new(cursor_path.clone())) as Box<dyn UsageSource>,
         )),
     ];
     let mut reader_handles = Vec::new();
@@ -290,11 +318,13 @@ fn handle_config(action: Option<cli::ConfigAction>) -> Result<(), Box<dyn std::e
                 "openclaw_path" => config.openclaw_path = std::path::PathBuf::from(value),
                 "hermes_path" => config.hermes_path = std::path::PathBuf::from(value),
                 "factory_path" => config.factory_path = std::path::PathBuf::from(value),
+                "grok_path" => config.grok_path = std::path::PathBuf::from(value),
+                "cursor_path" => config.cursor_path = std::path::PathBuf::from(value),
                 "refresh" => config.refresh = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
                 "max_records" => config.max_records = value.parse().map_err(|e: std::num::ParseIntError| e.to_string())?,
                 _ => {
                     eprintln!("Unknown configuration key: {}", key);
-                    eprintln!("Available keys: claude_path, codex_path, opencode_path, kimi_code_path, pi_path, openclaw_path, hermes_path, factory_path, refresh, max_records");
+                    eprintln!("Available keys: claude_path, codex_path, opencode_path, kimi_code_path, pi_path, openclaw_path, hermes_path, factory_path, grok_path, cursor_path, refresh, max_records");
                     std::process::exit(1);
                 }
             }
@@ -358,6 +388,8 @@ fn run_tui(
                                 state::Tab::OpenClaw => state.clear_openclaw(),
                                 state::Tab::Hermes => state.clear_hermes(),
                                 state::Tab::Factory => state.clear_factory(),
+                                state::Tab::Grok => state.clear_grok(),
+                                state::Tab::Cursor => state.clear_cursor(),
                             }
                         }
                     }

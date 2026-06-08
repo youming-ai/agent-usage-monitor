@@ -36,6 +36,14 @@ pub struct Config {
     #[serde(default = "default_factory_path")]
     pub factory_path: PathBuf,
 
+    /// Path to Grok Build data directory (~/.grok)
+    #[serde(default = "default_grok_path")]
+    pub grok_path: PathBuf,
+
+    /// Path to Cursor CLI data directory (~/.cursor)
+    #[serde(default = "default_cursor_path")]
+    pub cursor_path: PathBuf,
+
     /// Polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -56,6 +64,8 @@ impl Default for Config {
             openclaw_path: default_openclaw_path(),
             hermes_path: default_hermes_path(),
             factory_path: default_factory_path(),
+            grok_path: default_grok_path(),
+            cursor_path: default_cursor_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -122,6 +132,18 @@ fn default_factory_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".factory/projects")
+}
+
+fn default_grok_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".grok")
+}
+
+fn default_cursor_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".cursor")
 }
 
 fn default_refresh() -> u64 {

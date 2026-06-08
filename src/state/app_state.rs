@@ -1,6 +1,40 @@
 use crate::quota::QuotaInfo;
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
+
+/// Resolved agent data paths (from config + CLI). Used for tab detection so
+/// custom paths are honored instead of always checking defaults.
+#[derive(Debug, Clone)]
+pub struct AgentPaths {
+    pub claude_path: PathBuf,
+    pub codex_path: PathBuf,
+    pub opencode_path: PathBuf,
+    pub kimi_code_path: PathBuf,
+    pub pi_path: PathBuf,
+    pub openclaw_path: PathBuf,
+    pub hermes_path: PathBuf,
+    pub factory_path: PathBuf,
+    pub grok_path: PathBuf,
+    pub cursor_path: PathBuf,
+}
+
+impl AgentPaths {
+    pub fn path_for(&self, tab: Tab) -> PathBuf {
+        match tab {
+            Tab::ClaudeCode => self.claude_path.clone(),
+            Tab::Codex => self.codex_path.clone(),
+            Tab::OpenCode => self.opencode_path.clone(),
+            Tab::KimiCode => self.kimi_code_path.clone(),
+            Tab::Pi => self.pi_path.clone(),
+            Tab::OpenClaw => self.openclaw_path.clone(),
+            Tab::Hermes => self.hermes_path.clone(),
+            Tab::Factory => self.factory_path.clone(),
+            Tab::Grok => self.grok_path.clone(),
+            Tab::Cursor => self.cursor_path.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
@@ -12,6 +46,8 @@ pub enum Platform {
     OpenClaw,
     Hermes,
     Factory,
+    Grok,
+    Cursor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +60,8 @@ pub enum Tab {
     OpenClaw,
     Hermes,
     Factory,
+    Grok,
+    Cursor,
 }
 
 impl Tab {
@@ -53,6 +91,8 @@ impl Tab {
             Tab::OpenClaw => "OPENCLAW",
             Tab::Hermes => "HERMES",
             Tab::Factory => "FACTORY",
+            Tab::Grok => "GROK",
+            Tab::Cursor => "CURSOR",
         }
     }
 
@@ -67,6 +107,8 @@ impl Tab {
             Tab::OpenClaw => ratatui::style::Color::Rgb(234, 88, 12),
             Tab::Hermes => ratatui::style::Color::Rgb(168, 85, 247),
             Tab::Factory => ratatui::style::Color::Rgb(34, 197, 94),
+            Tab::Grok => ratatui::style::Color::Rgb(220, 38, 38),
+            Tab::Cursor => ratatui::style::Color::Rgb(99, 102, 241),
         }
     }
 
@@ -82,6 +124,8 @@ impl Tab {
             Tab::OpenClaw => ratatui::style::Color::Rgb(253, 186, 116),
             Tab::Hermes => ratatui::style::Color::Rgb(216, 180, 254),
             Tab::Factory => ratatui::style::Color::Rgb(134, 239, 172),
+            Tab::Grok => ratatui::style::Color::Rgb(252, 165, 165),
+            Tab::Cursor => ratatui::style::Color::Rgb(199, 210, 254),
         }
     }
 
@@ -96,6 +140,8 @@ impl Tab {
             Tab::OpenClaw,
             Tab::Hermes,
             Tab::Factory,
+            Tab::Grok,
+            Tab::Cursor,
         ]
     }
 
@@ -113,14 +159,34 @@ impl Tab {
             Tab::OpenClaw => home.join(".openclaw/agents"),
             Tab::Hermes => home.join(".hermes"),
             Tab::Factory => home.join(".factory/projects"),
+            Tab::Grok => home.join(".grok"),
+            Tab::Cursor => home.join(".cursor"),
         }
     }
 
-    /// 检测该 agent 是否已安装（配置目录是否存在）
+    /// 检测该 agent 是否已安装（使用实际配置路径）
+    pub fn is_available_at(self, paths: &AgentPaths) -> bool {
+        let path = paths.path_for(self);
+        match self {
+            Tab::Hermes => path.join("state.db").exists(),
+            Tab::OpenCode => path.join("opencode.db").exists(),
+            Tab::Grok => path.join("sessions").exists(),
+            Tab::Cursor => {
+                path.join("projects").exists() || path.join("chats").exists()
+            }
+            _ => path.exists(),
+        }
+    }
+
+    /// 检测该 agent 是否已安装（默认路径，用于无配置场景）
+    #[allow(dead_code)]
     pub fn is_available(self) -> bool {
         let path = self.default_path();
         match self {
             Tab::Hermes => path.join("state.db").exists(),
+            Tab::OpenCode => path.join("opencode.db").exists(),
+            Tab::Grok => path.join("sessions").exists(),
+            Tab::Cursor => path.join("projects").exists() || path.join("chats").exists(),
             _ => path.exists(),
         }
     }
@@ -222,6 +288,22 @@ pub struct AppState {
     pub factory_quota: Option<QuotaInfo>,
     pub factory_max_records: usize,
 
+    // grok
+    pub grok_records: VecDeque<UsageRecord>,
+    pub grok_sessions: HashMap<String, SessionSummary>,
+    pub grok_total_calls: usize,
+    pub grok_total_cost: f64,
+    pub grok_quota: Option<QuotaInfo>,
+    pub grok_max_records: usize,
+
+    // cursor
+    pub cursor_records: VecDeque<UsageRecord>,
+    pub cursor_sessions: HashMap<String, SessionSummary>,
+    pub cursor_total_calls: usize,
+    pub cursor_total_cost: f64,
+    pub cursor_quota: Option<QuotaInfo>,
+    pub cursor_max_records: usize,
+
     // Shared
     pub active_tab: Tab,
     pub available_tabs: Vec<Tab>,
@@ -285,6 +367,18 @@ impl AppState {
             factory_total_cost: 0.0,
             factory_quota: None,
             factory_max_records: max_records,
+            grok_records: VecDeque::with_capacity(max_records),
+            grok_sessions: HashMap::new(),
+            grok_total_calls: 0,
+            grok_total_cost: 0.0,
+            grok_quota: None,
+            grok_max_records: max_records,
+            cursor_records: VecDeque::with_capacity(max_records),
+            cursor_sessions: HashMap::new(),
+            cursor_total_calls: 0,
+            cursor_total_cost: 0.0,
+            cursor_quota: None,
+            cursor_max_records: max_records,
             active_tab: Tab::ClaudeCode,
             available_tabs: Vec::new(),
         }
@@ -407,6 +501,32 @@ impl AppState {
         }
     }
 
+    pub fn add_grok_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.grok_records.len() >= self.grok_max_records
+                && let Some(old) = self.grok_records.pop_front() {
+                    reverse_model_aggregate(&mut self.grok_sessions, &old);
+                }
+            self.grok_total_cost += r.cost_usd;
+            self.grok_total_calls += 1;
+            upsert_model_aggregate(&mut self.grok_sessions, &r);
+            self.grok_records.push_back(r);
+        }
+    }
+
+    pub fn add_cursor_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.cursor_records.len() >= self.cursor_max_records
+                && let Some(old) = self.cursor_records.pop_front() {
+                    reverse_model_aggregate(&mut self.cursor_sessions, &old);
+                }
+            self.cursor_total_cost += r.cost_usd;
+            self.cursor_total_calls += 1;
+            upsert_model_aggregate(&mut self.cursor_sessions, &r);
+            self.cursor_records.push_back(r);
+        }
+    }
+
     /// Route a batch of records to the bucket for `platform`. Every batch from
     /// a single reader is one platform, so this just dispatches.
     pub fn add_records(&mut self, platform: Platform, records: Vec<UsageRecord>) {
@@ -419,6 +539,8 @@ impl AppState {
             Platform::OpenClaw => self.add_openclaw_records(records),
             Platform::Hermes => self.add_hermes_records(records),
             Platform::Factory => self.add_factory_records(records),
+            Platform::Grok => self.add_grok_records(records),
+            Platform::Cursor => self.add_cursor_records(records),
         }
     }
 
@@ -478,10 +600,24 @@ impl AppState {
         self.factory_total_cost = 0.0;
     }
 
-    pub fn detect_available_tabs(&mut self) {
+    pub fn clear_grok(&mut self) {
+        self.grok_records.clear();
+        self.grok_sessions.clear();
+        self.grok_total_calls = 0;
+        self.grok_total_cost = 0.0;
+    }
+
+    pub fn clear_cursor(&mut self) {
+        self.cursor_records.clear();
+        self.cursor_sessions.clear();
+        self.cursor_total_calls = 0;
+        self.cursor_total_cost = 0.0;
+    }
+
+    pub fn detect_available_tabs(&mut self, paths: &AgentPaths) {
         self.available_tabs = Tab::all()
             .iter()
-            .filter(|tab| tab.is_available())
+            .filter(|tab| tab.is_available_at(paths))
             .copied()
             .collect();
 
@@ -599,6 +735,29 @@ mod tests {
         assert!(!s.claude_sessions.contains_key("opus-4"));
         assert!(s.claude_sessions.contains_key("sonnet-4"));
         assert_eq!(s.claude_sessions.len(), 1);
+    }
+
+    #[test]
+    fn detect_available_tabs_uses_configured_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = dir.path().join("claude-custom");
+        std::fs::create_dir_all(&claude).unwrap();
+        let paths = AgentPaths {
+            claude_path: claude,
+            codex_path: dir.path().join("missing-codex"),
+            opencode_path: dir.path().join("missing-opencode"),
+            kimi_code_path: dir.path().join("missing-kimi"),
+            pi_path: dir.path().join("missing-pi"),
+            openclaw_path: dir.path().join("missing-openclaw"),
+            hermes_path: dir.path().join("missing-hermes"),
+            factory_path: dir.path().join("missing-factory"),
+            grok_path: dir.path().join("missing-grok"),
+            cursor_path: dir.path().join("missing-cursor"),
+        };
+
+        let mut state = AppState::new();
+        state.detect_available_tabs(&paths);
+        assert_eq!(state.available_tabs, vec![Tab::ClaudeCode]);
     }
 
     /// Regression test: opencode stores its data under `~/.local/share/opencode`

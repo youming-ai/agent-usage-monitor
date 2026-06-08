@@ -1,6 +1,8 @@
 pub mod claude;
+pub mod cursor;
 pub mod codex;
 pub mod factory;
+pub mod grok;
 pub mod hermes;
 pub mod jsonl_reader;
 pub mod kimi_code;
@@ -8,6 +10,7 @@ pub mod opencode;
 pub mod openclaw;
 pub mod pi;
 pub mod pricing;
+pub(crate) mod session_jsonl;
 
 use crate::state::{Platform, UsageRecord};
 use jsonl_reader::JsonlReader;
@@ -16,10 +19,37 @@ use std::path::{Path, PathBuf};
 
 /// Last non-empty path component, e.g. `/Users/me/repo` -> `repo`.
 pub(crate) fn basename(path: &str) -> String {
-    path.rsplit('/')
-        .find(|s| !s.is_empty())
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
         .unwrap_or("unknown")
         .to_string()
+}
+
+/// True when `path` has an ancestor directory named `name`.
+pub(crate) fn is_under_dir_named(path: &Path, name: &str) -> bool {
+    path.ancestors().any(|a| a.file_name().is_some_and(|n| n == name))
+}
+
+/// True when the file stem matches `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
+pub(crate) fn is_uuid_jsonl(path: &Path) -> bool {
+    let stem = match path.file_stem().and_then(|s| s.to_str()) {
+        Some(s) => s,
+        None => return false,
+    };
+    if stem.len() != 36 {
+        return false;
+    }
+    let bytes = stem.as_bytes();
+    const DASHES: [usize; 4] = [8, 13, 18, 23];
+    bytes.iter().enumerate().all(|(i, &b)| {
+        if DASHES.contains(&i) {
+            b == b'-'
+        } else {
+            b.is_ascii_hexdigit()
+        }
+    })
 }
 
 /// Label for a single conversation: working-dir basename plus a short id
@@ -86,41 +116,7 @@ impl UsageSource for codex::CodexReader {
     }
 }
 
-impl UsageSource for pi::PiReader {
-    fn platform(&self) -> Platform {
-        Platform::Pi
-    }
-    fn scan_all(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::scan_all(self)
-    }
-    fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::poll_delta(self)
-    }
-}
 
-impl UsageSource for openclaw::OpenClawReader {
-    fn platform(&self) -> Platform {
-        Platform::OpenClaw
-    }
-    fn scan_all(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::scan_all(self)
-    }
-    fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::poll_delta(self)
-    }
-}
-
-impl UsageSource for factory::FactoryReader {
-    fn platform(&self) -> Platform {
-        Platform::Factory
-    }
-    fn scan_all(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::scan_all(self)
-    }
-    fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::poll_delta(self)
-    }
-}
 
 
 
@@ -139,5 +135,20 @@ mod tests {
     #[test]
     fn session_label_empty_id_is_dir_only() {
         assert_eq!(session_label("repo", ""), "repo");
+    }
+
+    #[test]
+    fn basename_uses_path_file_name() {
+        assert_eq!(basename("/Users/me/repo"), "repo");
+        assert_eq!(basename("repo"), "repo");
+    }
+
+    #[test]
+    fn is_uuid_jsonl_matches_session_files() {
+        use std::path::Path;
+        assert!(is_uuid_jsonl(Path::new(
+            "a3f2c1d8-10e5-4b2a-9c1d-ef0123456789.jsonl"
+        )));
+        assert!(!is_uuid_jsonl(Path::new("session.jsonl")));
     }
 }
