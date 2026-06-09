@@ -41,6 +41,8 @@ pub enum Platform {
     Factory,
     Grok,
     Cursor,
+    Copilot,
+    Antigravity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +57,8 @@ pub enum Tab {
     Factory,
     Grok,
     Cursor,
+    Copilot,
+    Antigravity,
 }
 
 impl Tab {
@@ -86,6 +90,8 @@ impl Tab {
             Tab::Factory => "FACTORY",
             Tab::Grok => "GROK",
             Tab::Cursor => "CURSOR",
+            Tab::Copilot => "COPILOT",
+            Tab::Antigravity => "ANTIGRAVITY",
         }
     }
 
@@ -103,6 +109,8 @@ impl Tab {
             Tab::Factory => ratatui::style::Color::Rgb(242, 123, 47),     // #F27B2F Factory-AI/factory docs accent
             Tab::Grok => ratatui::style::Color::Rgb(187, 154, 247),       // #BB9AF7 Grok Build CLI GrokNight accent
             Tab::Cursor => ratatui::style::Color::Rgb(136, 192, 208),     // #88C0D0 anomalyco/opencode cursor.json darkCyan (primary)
+            Tab::Copilot => ratatui::style::Color::Rgb(35, 134, 54),      // #238636 github brand green
+            Tab::Antigravity => ratatui::style::Color::Rgb(66, 133, 244), // #4285F4 google brand blue
         }
     }
 
@@ -120,6 +128,8 @@ impl Tab {
             Tab::Factory => ratatui::style::Color::Rgb(255, 201, 160),    // lighter orange
             Tab::Grok => ratatui::style::Color::Rgb(221, 208, 252),       // lighter purple
             Tab::Cursor => ratatui::style::Color::Rgb(184, 224, 235),     // lighter cyan
+            Tab::Copilot => ratatui::style::Color::Rgb(155, 215, 165),    // lighter green
+            Tab::Antigravity => ratatui::style::Color::Rgb(154, 194, 249), // lighter blue
         }
     }
 
@@ -136,6 +146,8 @@ impl Tab {
             Tab::Factory,
             Tab::Grok,
             Tab::Cursor,
+            Tab::Copilot,
+            Tab::Antigravity,
         ]
     }
 
@@ -155,6 +167,8 @@ impl Tab {
             Tab::Factory => home.join(".factory/projects"),
             Tab::Grok => home.join(".grok"),
             Tab::Cursor => home.join(".cursor"),
+            Tab::Copilot => home.join(".copilot"),
+            Tab::Antigravity => home.join(".gemini/antigravity-cli"),
         }
     }
 
@@ -168,6 +182,8 @@ impl Tab {
             Tab::Cursor => {
                 path.join("projects").exists() || path.join("chats").exists()
             }
+            Tab::Copilot => path.join("session-state").exists(),
+            Tab::Antigravity => path.join("brain").exists(),
             _ => path.exists(),
         }
     }
@@ -181,6 +197,8 @@ impl Tab {
             Tab::OpenCode => path.join("opencode.db").exists(),
             Tab::Grok => path.join("sessions").exists(),
             Tab::Cursor => path.join("projects").exists() || path.join("chats").exists(),
+            Tab::Copilot => path.join("session-state").exists(),
+            Tab::Antigravity => path.join("brain").exists(),
             _ => path.exists(),
         }
     }
@@ -298,6 +316,22 @@ pub struct AppState {
     pub cursor_quota: Option<QuotaInfo>,
     pub cursor_max_records: usize,
 
+    // copilot
+    pub copilot_records: VecDeque<UsageRecord>,
+    pub copilot_sessions: HashMap<String, SessionSummary>,
+    pub copilot_total_calls: usize,
+    pub copilot_total_cost: f64,
+    pub copilot_quota: Option<QuotaInfo>,
+    pub copilot_max_records: usize,
+
+    // antigravity
+    pub antigravity_records: VecDeque<UsageRecord>,
+    pub antigravity_sessions: HashMap<String, SessionSummary>,
+    pub antigravity_total_calls: usize,
+    pub antigravity_total_cost: f64,
+    pub antigravity_quota: Option<QuotaInfo>,
+    pub antigravity_max_records: usize,
+
     // Shared
     pub active_tab: Tab,
     pub available_tabs: Vec<Tab>,
@@ -373,6 +407,18 @@ impl AppState {
             cursor_total_cost: 0.0,
             cursor_quota: None,
             cursor_max_records: max_records,
+            copilot_records: VecDeque::with_capacity(max_records),
+            copilot_sessions: HashMap::new(),
+            copilot_total_calls: 0,
+            copilot_total_cost: 0.0,
+            copilot_quota: None,
+            copilot_max_records: max_records,
+            antigravity_records: VecDeque::with_capacity(max_records),
+            antigravity_sessions: HashMap::new(),
+            antigravity_total_calls: 0,
+            antigravity_total_cost: 0.0,
+            antigravity_quota: None,
+            antigravity_max_records: max_records,
             active_tab: Tab::ClaudeCode,
             available_tabs: Vec::new(),
         }
@@ -521,6 +567,32 @@ impl AppState {
         }
     }
 
+    pub fn add_copilot_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.copilot_records.len() >= self.copilot_max_records
+                && let Some(old) = self.copilot_records.pop_front() {
+                    reverse_model_aggregate(&mut self.copilot_sessions, &old);
+                }
+            self.copilot_total_cost += r.cost_usd;
+            self.copilot_total_calls += 1;
+            upsert_model_aggregate(&mut self.copilot_sessions, &r);
+            self.copilot_records.push_back(r);
+        }
+    }
+
+    pub fn add_antigravity_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.antigravity_records.len() >= self.antigravity_max_records
+                && let Some(old) = self.antigravity_records.pop_front() {
+                    reverse_model_aggregate(&mut self.antigravity_sessions, &old);
+                }
+            self.antigravity_total_cost += r.cost_usd;
+            self.antigravity_total_calls += 1;
+            upsert_model_aggregate(&mut self.antigravity_sessions, &r);
+            self.antigravity_records.push_back(r);
+        }
+    }
+
     /// Route a batch of records to the bucket for `platform`. Every batch from
     /// a single reader is one platform, so this just dispatches.
     pub fn add_records(&mut self, platform: Platform, records: Vec<UsageRecord>) {
@@ -535,6 +607,8 @@ impl AppState {
             Platform::Factory => self.add_factory_records(records),
             Platform::Grok => self.add_grok_records(records),
             Platform::Cursor => self.add_cursor_records(records),
+            Platform::Copilot => self.add_copilot_records(records),
+            Platform::Antigravity => self.add_antigravity_records(records),
         }
     }
 
@@ -608,6 +682,20 @@ impl AppState {
         self.cursor_total_cost = 0.0;
     }
 
+    pub fn clear_copilot(&mut self) {
+        self.copilot_records.clear();
+        self.copilot_sessions.clear();
+        self.copilot_total_calls = 0;
+        self.copilot_total_cost = 0.0;
+    }
+
+    pub fn clear_antigravity(&mut self) {
+        self.antigravity_records.clear();
+        self.antigravity_sessions.clear();
+        self.antigravity_total_calls = 0;
+        self.antigravity_total_cost = 0.0;
+    }
+
     /// Clear usage data for the active tab (`r` key). Dispatches via `Tab`.
     pub fn clear_tab(&mut self, tab: Tab) {
         match tab {
@@ -621,6 +709,8 @@ impl AppState {
             Tab::Factory => self.clear_factory(),
             Tab::Grok => self.clear_grok(),
             Tab::Cursor => self.clear_cursor(),
+            Tab::Copilot => self.clear_copilot(),
+            Tab::Antigravity => self.clear_antigravity(),
         }
     }
 
@@ -764,6 +854,8 @@ mod tests {
             (Tab::Factory, missing.join("factory")),
             (Tab::Grok, missing.join("grok")),
             (Tab::Cursor, missing.join("cursor")),
+            (Tab::Copilot, missing.join("copilot")),
+            (Tab::Antigravity, missing.join("antigravity")),
         ]));
 
         let mut state = AppState::new();

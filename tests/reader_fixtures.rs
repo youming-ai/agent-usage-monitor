@@ -2,7 +2,9 @@
 //! regressions when upstream agents change their log formats.
 
 use agent_usage_monitor::platforms;
+use agent_usage_monitor::reader::antigravity::AntigravityReader;
 use agent_usage_monitor::reader::claude::ClaudeReader;
+use agent_usage_monitor::reader::copilot::CopilotReader;
 use agent_usage_monitor::reader::codex::CodexReader;
 use agent_usage_monitor::reader::cursor::CursorReader;
 use agent_usage_monitor::reader::factory::FactoryReader;
@@ -74,6 +76,29 @@ fn cursor_fixture_parses_transcript_turns() {
 }
 
 #[test]
+fn copilot_fixture_parses_events() {
+    let mut reader = CopilotReader::new(fixtures_root().join("copilot"));
+    let records = reader.scan_all();
+    // One tool.execution_complete + one session.compaction_complete
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].platform, Platform::Copilot);
+    assert_eq!(records[0].model, "gpt-4.1");
+    assert_eq!(records[1].input_tokens, 52000); // 50000 + 2000
+    assert_eq!(records[1].session, "myproject abc12345");
+}
+
+#[test]
+fn antigravity_fixture_parses_transcript() {
+    let mut reader = AntigravityReader::new(fixtures_root().join("antigravity"));
+    let records = reader.scan_all();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].platform, Platform::Antigravity);
+    assert_eq!(records[0].model, "gemini-3");
+    assert!(records[0].output_tokens > 0);
+    assert_eq!(records[0].input_tokens, 0);
+}
+
+#[test]
 fn registry_creates_readers_for_all_fixture_paths() {
     for entry in platforms::entries() {
         let path = fixtures_root().join(entry.config_key.trim_end_matches("_path"));
@@ -87,8 +112,9 @@ fn registry_creates_readers_for_all_fixture_paths() {
 }
 
 #[test]
-fn registry_covers_grok_and_cursor_tabs() {
+fn registry_covers_all_tabs() {
     let tabs: Vec<_> = platforms::entries().iter().map(|e| e.tab).collect();
-    assert!(tabs.contains(&Tab::Grok));
-    assert!(tabs.contains(&Tab::Cursor));
+    for tab in Tab::all() {
+        assert!(tabs.contains(tab), "missing registry entry for {tab:?}");
+    }
 }

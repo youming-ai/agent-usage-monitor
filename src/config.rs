@@ -44,6 +44,14 @@ pub struct Config {
     #[serde(default = "default_cursor_path")]
     pub cursor_path: PathBuf,
 
+    /// Path to Copilot CLI data directory (~/.copilot)
+    #[serde(default = "default_copilot_path")]
+    pub copilot_path: PathBuf,
+
+    /// Path to Antigravity CLI data directory (~/.gemini/antigravity-cli)
+    #[serde(default = "default_antigravity_path")]
+    pub antigravity_path: PathBuf,
+
     /// Polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -66,6 +74,8 @@ impl Default for Config {
             factory_path: default_factory_path(),
             grok_path: default_grok_path(),
             cursor_path: default_cursor_path(),
+            copilot_path: default_copilot_path(),
+            antigravity_path: default_antigravity_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -144,6 +154,18 @@ fn default_cursor_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".cursor")
+}
+
+fn default_copilot_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".copilot")
+}
+
+fn default_antigravity_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".gemini/antigravity-cli")
 }
 
 fn default_refresh() -> u64 {

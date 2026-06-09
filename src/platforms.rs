@@ -1,6 +1,8 @@
 use crate::cli::Cli;
 use crate::config::Config;
+use crate::reader::antigravity::AntigravityReader;
 use crate::reader::claude::ClaudeReader;
+use crate::reader::copilot::CopilotReader;
 use crate::reader::codex::CodexReader;
 use crate::reader::cursor::CursorReader;
 use crate::reader::factory::FactoryReader;
@@ -127,6 +129,26 @@ static REGISTRY: &[RegistryEntry] = &[
         cli_path: |cli| cli.cursor_path.clone(),
         set_config_path: |c, p| c.cursor_path = p,
         create_reader: |p| Box::new(CursorReader::new(p)),
+    },
+    RegistryEntry {
+        tab: Tab::Copilot,
+        platform: Platform::Copilot,
+        config_key: "copilot_path",
+        log_name: "Copilot CLI",
+        config_path: |c| c.copilot_path.clone(),
+        cli_path: |cli| cli.copilot_path.clone(),
+        set_config_path: |c, p| c.copilot_path = p,
+        create_reader: |p| Box::new(CopilotReader::new(p)),
+    },
+    RegistryEntry {
+        tab: Tab::Antigravity,
+        platform: Platform::Antigravity,
+        config_key: "antigravity_path",
+        log_name: "Antigravity CLI",
+        config_path: |c| c.antigravity_path.clone(),
+        cli_path: |cli| cli.antigravity_path.clone(),
+        set_config_path: |c, p| c.antigravity_path = p,
+        create_reader: |p| Box::new(AntigravityReader::new(p)),
     },
 ];
 
@@ -256,6 +278,8 @@ mod tests {
             factory_path: None,
             grok_path: None,
             cursor_path: None,
+            copilot_path: None,
+            antigravity_path: None,
             refresh: None,
         };
         let paths = resolve_paths(&cli, &config);
