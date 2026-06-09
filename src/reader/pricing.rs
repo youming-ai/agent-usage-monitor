@@ -35,6 +35,23 @@ const CURSOR_PRICING: &[PricingEntry] = &[
     PricingEntry { pattern: "grok-build", input: 0.60, output: 3.00, cache_read: 0.06 },
 ];
 
+const GITHUB_PRICING: &[PricingEntry] = &[
+    PricingEntry { pattern: "gpt-4.1", input: 2.00, output: 8.00, cache_read: 0.20 },
+    PricingEntry { pattern: "gpt-4.1-mini", input: 0.40, output: 1.60, cache_read: 0.04 },
+    PricingEntry { pattern: "claude-sonnet-4", input: 3.0, output: 15.0, cache_read: 0.30 },
+    PricingEntry { pattern: "claude-opus-4", input: 15.0, output: 75.0, cache_read: 1.50 },
+    PricingEntry { pattern: "gemini-3", input: 1.25, output: 5.00, cache_read: 0.125 },
+];
+
+const GOOGLE_PRICING: &[PricingEntry] = &[
+    PricingEntry { pattern: "gemini-3.5-flash", input: 0.15, output: 0.60, cache_read: 0.015 },
+    PricingEntry { pattern: "gemini-3.1-pro", input: 1.25, output: 5.00, cache_read: 0.125 },
+    PricingEntry { pattern: "gemini-3", input: 1.25, output: 5.00, cache_read: 0.125 },
+    PricingEntry { pattern: "claude-sonnet-4", input: 3.0, output: 15.0, cache_read: 0.30 },
+    PricingEntry { pattern: "claude-opus-4", input: 15.0, output: 75.0, cache_read: 1.50 },
+    PricingEntry { pattern: "gpt-4.1", input: 2.00, output: 8.00, cache_read: 0.20 },
+];
+
 const OPENAI_PRICING: &[PricingEntry] = &[
     PricingEntry { pattern: "gpt-5.5", input: 1.25, output: 5.00, cache_read: 0.125 },
     PricingEntry { pattern: "gpt-5.4", input: 0.15, output: 0.60, cache_read: 0.015 },
@@ -65,7 +82,9 @@ pub fn calculate_cost(
     let entry = find_price(model, ANTHROPIC_PRICING)
         .or_else(|| find_price(model, KIMI_PRICING))
         .or_else(|| find_price(model, OPENAI_PRICING))
-        .or_else(|| find_price(model, CURSOR_PRICING));
+        .or_else(|| find_price(model, CURSOR_PRICING))
+        .or_else(|| find_price(model, GITHUB_PRICING))
+        .or_else(|| find_price(model, GOOGLE_PRICING));
 
     let Some(e) = entry else {
         return 0.0;

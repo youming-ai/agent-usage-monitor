@@ -102,6 +102,20 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
             state.cursor_total_calls,
             state.cursor_total_cost,
         ),
+        crate::state::Tab::Copilot => (
+            state.copilot_quota.as_ref(),
+            &state.copilot_sessions,
+            &state.copilot_records,
+            state.copilot_total_calls,
+            state.copilot_total_cost,
+        ),
+        crate::state::Tab::Antigravity => (
+            state.antigravity_quota.as_ref(),
+            &state.antigravity_sessions,
+            &state.antigravity_records,
+            state.antigravity_total_calls,
+            state.antigravity_total_cost,
+        ),
     };
 
     // Header: a bottom rule in the accent color, with tabs left and the
@@ -120,14 +134,16 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     frame.render_widget(tabs::account(email), header_cols[1]);
 
     let quota_widget = match active {
-        crate::state::Tab::OpenCode 
-        | crate::state::Tab::KimiCode 
-        | crate::state::Tab::Pi 
-        | crate::state::Tab::OpenClaw 
-        | crate::state::Tab::Hermes 
+        crate::state::Tab::OpenCode
+        | crate::state::Tab::KimiCode
+        | crate::state::Tab::Pi
+        | crate::state::Tab::OpenClaw
+        | crate::state::Tab::Hermes
         | crate::state::Tab::Factory
         | crate::state::Tab::Grok
-        | crate::state::Tab::Cursor => quota_bar::no_quota_source(),
+        | crate::state::Tab::Cursor
+        | crate::state::Tab::Copilot
+        | crate::state::Tab::Antigravity => quota_bar::no_quota_source(),
         _ => quota_bar::quota_panel(active, quota),
     };
     frame.render_widget(quota_widget, chunks[1]);
