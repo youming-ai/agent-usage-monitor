@@ -82,11 +82,11 @@ impl Tab {
         match self {
             Tab::ClaudeCode => "CLAUDE",
             Tab::Codex => "CODEX",
+            Tab::OpenClaw => "OPENCLAW",
+            Tab::Hermes => "HERMES",
             Tab::OpenCode => "OPENCODE",
             Tab::KimiCode => "KIMI-CODE",
             Tab::Pi => "PI",
-            Tab::OpenClaw => "OPENCLAW",
-            Tab::Hermes => "HERMES",
             Tab::Factory => "FACTORY",
             Tab::Grok => "GROK",
             Tab::Cursor => "CURSOR",
@@ -101,11 +101,11 @@ impl Tab {
         match self {
             Tab::ClaudeCode => ratatui::style::Color::Rgb(217, 119, 87),   // #D97757 anthropic/claude brand accent
             Tab::Codex => ratatui::style::Color::Rgb(215, 95, 215),       // #D75FD7 openai/codex TUI ANSI magenta
+            Tab::OpenClaw => ratatui::style::Color::Rgb(255, 90, 45),     // #FF5A2D openclaw/openclaw LOBSTER_PALETTE.accent
+            Tab::Hermes => ratatui::style::Color::Rgb(255, 215, 0),      // #FFD700 NousResearch/hermes-agent ui-tui primary
             Tab::OpenCode => ratatui::style::Color::Rgb(250, 178, 131),   // #FAB283 anomalyco/opencode opencode.json primary (dark)
             Tab::KimiCode => ratatui::style::Color::Rgb(103, 232, 249),   // #67E8F9 MoonshotAI/kimi-cli ui/theme.py accent
             Tab::Pi => ratatui::style::Color::Rgb(138, 190, 183),         // #8ABEB7 earendil-works/pi dark.json accent
-            Tab::OpenClaw => ratatui::style::Color::Rgb(255, 90, 45),     // #FF5A2D openclaw/openclaw LOBSTER_PALETTE.accent
-            Tab::Hermes => ratatui::style::Color::Rgb(255, 215, 0),      // #FFD700 NousResearch/hermes-agent ui-tui primary
             Tab::Factory => ratatui::style::Color::Rgb(242, 123, 47),     // #F27B2F Factory-AI/factory docs accent
             Tab::Grok => ratatui::style::Color::Rgb(187, 154, 247),       // #BB9AF7 Grok Build CLI GrokNight accent
             Tab::Cursor => ratatui::style::Color::Rgb(136, 192, 208),     // #88C0D0 anomalyco/opencode cursor.json darkCyan (primary)
@@ -120,11 +120,11 @@ impl Tab {
         match self {
             Tab::ClaudeCode => ratatui::style::Color::Rgb(254, 205, 170),  // lighter orange
             Tab::Codex => ratatui::style::Color::Rgb(240, 176, 240),      // lighter magenta
+            Tab::OpenClaw => ratatui::style::Color::Rgb(255, 184, 158),   // lighter lobster orange
+            Tab::Hermes => ratatui::style::Color::Rgb(255, 235, 128),   // lighter gold
             Tab::OpenCode => ratatui::style::Color::Rgb(255, 212, 184),   // lighter peach (#FAB283 tint)
             Tab::KimiCode => ratatui::style::Color::Rgb(165, 243, 252),   // lighter cyan
             Tab::Pi => ratatui::style::Color::Rgb(197, 228, 224),         // lighter sage
-            Tab::OpenClaw => ratatui::style::Color::Rgb(255, 184, 158),   // lighter lobster orange
-            Tab::Hermes => ratatui::style::Color::Rgb(255, 235, 128),   // lighter gold
             Tab::Factory => ratatui::style::Color::Rgb(255, 201, 160),    // lighter orange
             Tab::Grok => ratatui::style::Color::Rgb(221, 208, 252),       // lighter purple
             Tab::Cursor => ratatui::style::Color::Rgb(184, 224, 235),     // lighter cyan
@@ -138,11 +138,11 @@ impl Tab {
         &[
             Tab::ClaudeCode,
             Tab::Codex,
+            Tab::OpenClaw,
+            Tab::Hermes,
             Tab::OpenCode,
             Tab::KimiCode,
             Tab::Pi,
-            Tab::OpenClaw,
-            Tab::Hermes,
             Tab::Factory,
             Tab::Grok,
             Tab::Cursor,
@@ -157,13 +157,13 @@ impl Tab {
         match self {
             Tab::ClaudeCode => home.join(".claude/projects"),
             Tab::Codex => home.join(".codex"),
+            Tab::OpenClaw => home.join(".openclaw/agents"),
+            Tab::Hermes => home.join(".hermes"),
             // opencode follows XDG on every platform, NOT macOS's
             // ~/Library/Application Support — see `config::xdg_data_dir`.
             Tab::OpenCode => crate::config::xdg_data_dir().join("opencode"),
             Tab::KimiCode => home.join(".kimi-code"),
             Tab::Pi => home.join(".pi/agent/sessions"),
-            Tab::OpenClaw => home.join(".openclaw/agents"),
-            Tab::Hermes => home.join(".hermes"),
             Tab::Factory => home.join(".factory/projects"),
             Tab::Grok => home.join(".grok"),
             Tab::Cursor => home.join(".cursor"),
@@ -176,8 +176,12 @@ impl Tab {
     pub fn is_available_at(self, paths: &AgentPaths) -> bool {
         let path = paths.path_for(self);
         match self {
+            Tab::OpenClaw => path.exists(),
             Tab::Hermes => path.join("state.db").exists(),
             Tab::OpenCode => path.join("opencode.db").exists(),
+            Tab::KimiCode => path.exists(),
+            Tab::Pi => path.exists(),
+            Tab::Factory => path.exists(),
             Tab::Grok => path.join("sessions").exists(),
             Tab::Cursor => {
                 path.join("projects").exists() || path.join("chats").exists()
@@ -193,8 +197,12 @@ impl Tab {
     pub fn is_available(self) -> bool {
         let path = self.default_path();
         match self {
+            Tab::OpenClaw => path.exists(),
             Tab::Hermes => path.join("state.db").exists(),
             Tab::OpenCode => path.join("opencode.db").exists(),
+            Tab::KimiCode => path.exists(),
+            Tab::Pi => path.exists(),
+            Tab::Factory => path.exists(),
             Tab::Grok => path.join("sessions").exists(),
             Tab::Cursor => path.join("projects").exists() || path.join("chats").exists(),
             Tab::Copilot => path.join("session-state").exists(),
@@ -252,6 +260,22 @@ pub struct AppState {
     pub codex_quota: Option<QuotaInfo>,
     pub codex_max_records: usize,
 
+    // openclaw
+    pub openclaw_records: VecDeque<UsageRecord>,
+    pub openclaw_sessions: HashMap<String, SessionSummary>,
+    pub openclaw_total_calls: usize,
+    pub openclaw_total_cost: f64,
+    pub openclaw_quota: Option<QuotaInfo>,
+    pub openclaw_max_records: usize,
+
+    // hermes
+    pub hermes_records: VecDeque<UsageRecord>,
+    pub hermes_sessions: HashMap<String, SessionSummary>,
+    pub hermes_total_calls: usize,
+    pub hermes_total_cost: f64,
+    pub hermes_quota: Option<QuotaInfo>,
+    pub hermes_max_records: usize,
+
     // opencode
     pub opencode_records: VecDeque<UsageRecord>,
     pub opencode_sessions: HashMap<String, SessionSummary>,
@@ -275,22 +299,6 @@ pub struct AppState {
     pub pi_total_cost: f64,
     pub pi_quota: Option<QuotaInfo>,
     pub pi_max_records: usize,
-
-    // openclaw
-    pub openclaw_records: VecDeque<UsageRecord>,
-    pub openclaw_sessions: HashMap<String, SessionSummary>,
-    pub openclaw_total_calls: usize,
-    pub openclaw_total_cost: f64,
-    pub openclaw_quota: Option<QuotaInfo>,
-    pub openclaw_max_records: usize,
-
-    // hermes
-    pub hermes_records: VecDeque<UsageRecord>,
-    pub hermes_sessions: HashMap<String, SessionSummary>,
-    pub hermes_total_calls: usize,
-    pub hermes_total_cost: f64,
-    pub hermes_quota: Option<QuotaInfo>,
-    pub hermes_max_records: usize,
 
     // factory
     pub factory_records: VecDeque<UsageRecord>,
@@ -352,13 +360,25 @@ impl AppState {
             claude_total_calls: 0,
             claude_total_cost: 0.0,
             claude_quota: None,
+            claude_max_records: max_records,
             codex_records: VecDeque::with_capacity(max_records),
             codex_sessions: HashMap::new(),
             codex_total_calls: 0,
             codex_total_cost: 0.0,
             codex_quota: None,
-            claude_max_records: max_records,
             codex_max_records: max_records,
+            openclaw_records: VecDeque::with_capacity(max_records),
+            openclaw_sessions: HashMap::new(),
+            openclaw_total_calls: 0,
+            openclaw_total_cost: 0.0,
+            openclaw_quota: None,
+            openclaw_max_records: max_records,
+            hermes_records: VecDeque::with_capacity(max_records),
+            hermes_sessions: HashMap::new(),
+            hermes_total_calls: 0,
+            hermes_total_cost: 0.0,
+            hermes_quota: None,
+            hermes_max_records: max_records,
             opencode_records: VecDeque::with_capacity(max_records),
             opencode_sessions: HashMap::new(),
             opencode_total_calls: 0,
@@ -377,18 +397,6 @@ impl AppState {
             pi_total_cost: 0.0,
             pi_quota: None,
             pi_max_records: max_records,
-            openclaw_records: VecDeque::with_capacity(max_records),
-            openclaw_sessions: HashMap::new(),
-            openclaw_total_calls: 0,
-            openclaw_total_cost: 0.0,
-            openclaw_quota: None,
-            openclaw_max_records: max_records,
-            hermes_records: VecDeque::with_capacity(max_records),
-            hermes_sessions: HashMap::new(),
-            hermes_total_calls: 0,
-            hermes_total_cost: 0.0,
-            hermes_quota: None,
-            hermes_max_records: max_records,
             factory_records: VecDeque::with_capacity(max_records),
             factory_sessions: HashMap::new(),
             factory_total_calls: 0,
@@ -599,11 +607,11 @@ impl AppState {
         match platform {
             Platform::ClaudeCode => self.add_claude_records(records),
             Platform::Codex => self.add_codex_records(records),
+            Platform::OpenClaw => self.add_openclaw_records(records),
+            Platform::Hermes => self.add_hermes_records(records),
             Platform::OpenCode => self.add_opencode_records(records),
             Platform::KimiCode => self.add_kimi_code_records(records),
             Platform::Pi => self.add_pi_records(records),
-            Platform::OpenClaw => self.add_openclaw_records(records),
-            Platform::Hermes => self.add_hermes_records(records),
             Platform::Factory => self.add_factory_records(records),
             Platform::Grok => self.add_grok_records(records),
             Platform::Cursor => self.add_cursor_records(records),
@@ -701,11 +709,11 @@ impl AppState {
         match tab {
             Tab::ClaudeCode => self.clear_claude(),
             Tab::Codex => self.clear_codex(),
+            Tab::OpenClaw => self.clear_openclaw(),
+            Tab::Hermes => self.clear_hermes(),
             Tab::OpenCode => self.clear_opencode(),
             Tab::KimiCode => self.clear_kimi_code(),
             Tab::Pi => self.clear_pi(),
-            Tab::OpenClaw => self.clear_openclaw(),
-            Tab::Hermes => self.clear_hermes(),
             Tab::Factory => self.clear_factory(),
             Tab::Grok => self.clear_grok(),
             Tab::Cursor => self.clear_cursor(),

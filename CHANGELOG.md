@@ -1,12 +1,12 @@
 # Changelog
 
-## [0.12.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.11.2...v0.12.0) (2026-06-08)
+## [0.12.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.11.2...v0.12.0) (2026-06-09)
 
 
 ### Features
 
+* add Copilot CLI and Antigravity CLI support ([7d17bb7](https://github.com/youming-ai/agent-usage-monitor/commit/7d17bb7aae925330827629a7a337a1682613a9c6))
 * add platform registry, fixture tests, and README updates ([f5c9704](https://github.com/youming-ai/agent-usage-monitor/commit/f5c970474bb43abdc7a5c82db3ff7a45a3972e0f))
-* platform registry, fixture tests, and README updates ([4389196](https://github.com/youming-ai/agent-usage-monitor/commit/43891968e47e821dfdea04a9fb53ddb5b8649802))
 
 ## [0.11.2](https://github.com/youming-ai/agent-usage-monitor/compare/v0.11.1...v0.11.2) (2026-06-08)
 

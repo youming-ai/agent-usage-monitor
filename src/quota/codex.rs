@@ -2,8 +2,7 @@ use super::util::{decode_jwt_payload, format_duration_short};
 use super::{QuotaError, QuotaInfo, QuotaWindow};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn codex_auth_path() -> PathBuf {
     dirs::home_dir()
@@ -75,30 +74,16 @@ fn format_reset_time(epoch_str: &str) -> Option<String> {
     format_duration_short(reset_at - now)
 }
 
-/// Fetch usage data from Codex API
+/// Fetch usage data from Codex API via pure-Rust HTTP (ureq).
 fn fetch_usage_json(access_token: &str, account_id: &str) -> Option<Value> {
-    let output = Command::new("/usr/bin/curl")
-        .args([
-            "-sS",
-            "--max-time",
-            "3",
-            "-H",
-            &format!("Authorization: Bearer {access_token}"),
-            "-H",
-            &format!("ChatGPT-Account-Id: {account_id}"),
-            "-H",
-            "Accept: application/json",
-            "https://chatgpt.com/backend-api/wham/usage",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let raw = String::from_utf8(output.stdout).ok()?;
-    serde_json::from_str(&raw).ok()
+    ureq::get("https://chatgpt.com/backend-api/wham/usage")
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .set("ChatGPT-Account-Id", account_id)
+        .set("Accept", "application/json")
+        .timeout(Duration::from_secs(5))
+        .call()
+        .ok()
+        .and_then(|resp| resp.into_json().ok())
 }
 
 /// Format usage value for a window

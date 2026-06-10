@@ -87,12 +87,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let source = source.clone();
         let reader_state = app_state.clone();
         let refresh_interval = refresh;
-        let platform = source.lock().unwrap_or_else(|e| e.into_inner()).platform();
+        let platform = source.lock().unwrap_or_else(|e| {
+            warn!("{:?}: reader mutex poisoned, recovering", e.get_ref().platform());
+            e.into_inner()
+        }).platform();
         reader_handles.push(task::spawn(async move {
             // Initial scan
             let s = source.clone();
             let initial = task::spawn_blocking(move || {
-                s.lock().unwrap_or_else(|e| e.into_inner()).scan_all()
+                s.lock().unwrap_or_else(|e| {
+                    warn!("{:?}: reader mutex poisoned during scan_all, recovering", e.get_ref().platform());
+                    e.into_inner()
+                }).scan_all()
             })
             .await
             .unwrap_or_default();
@@ -107,7 +113,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 interval.tick().await;
                 let s = source.clone();
                 let new_records = task::spawn_blocking(move || {
-                    s.lock().unwrap_or_else(|e| e.into_inner()).poll_delta()
+                    s.lock().unwrap_or_else(|e| {
+                        warn!("{:?}: reader mutex poisoned during poll_delta, recovering", e.get_ref().platform());
+                        e.into_inner()
+                    }).poll_delta()
                 })
                 .await
                 .unwrap_or_default();
@@ -121,61 +130,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }));
     }
 
-    // Quota reader task (Claude Code & Codex limits)
+    // Quota fetcher: each fetch runs in spawn_blocking so the API call (HTTP
+    // via ureq / curl) does not block the tokio runtime. Per-platform stale
+    // checks avoid re-fetching a healthy quota just because another platform
+    // has a stale or missing result.
     let quota_state = app_state.clone();
     let quota_handle = task::spawn(async move {
-        // Initial fetch
+        // Initial fetch — batch in one spawn_blocking to avoid three concurrent
+        // token-spawns at startup.
         {
-            match quota::claude::fetch_quota() {
-                Some(quota) => {
-                    info!("Claude quota fetched successfully");
-                    if let Ok(mut state) = quota_state.write() {
-                        state.claude_quota = Some(quota);
-                    }
+            let qs = quota_state.clone();
+            let (claude_q, codex_q, cursor_q) = task::spawn_blocking(move || {
+                (quota::claude::fetch_quota(),
+                 quota::codex::fetch_quota(),
+                 quota::cursor::fetch_quota())
+            })
+            .await
+            .unwrap_or_default();
+
+            if let Some(q) = claude_q {
+                info!("Claude quota fetched successfully");
+                if let Ok(mut state) = qs.write() {
+                    state.claude_quota = Some(q);
                 }
-                None => warn!("Failed to fetch Claude quota"),
+            } else {
+                warn!("Failed to fetch Claude quota");
             }
-            match quota::codex::fetch_quota() {
-                Some(quota) => {
-                    info!("Codex quota fetched successfully");
-                    if let Ok(mut state) = quota_state.write() {
-                        state.codex_quota = Some(quota);
-                    }
+            if let Some(q) = codex_q {
+                info!("Codex quota fetched successfully");
+                if let Ok(mut state) = qs.write() {
+                    state.codex_quota = Some(q);
                 }
-                None => warn!("Failed to fetch Codex quota"),
+            } else {
+                warn!("Failed to fetch Codex quota");
+            }
+            if let Some(q) = cursor_q {
+                info!("Cursor quota fetched successfully");
+                if let Ok(mut state) = qs.write() {
+                    state.cursor_quota = Some(q);
+                }
+            } else {
+                warn!("Failed to fetch Cursor quota");
             }
         }
 
-        // Refresh every 2 minutes
+        // Refresh every 2 minutes — each platform independently.
         let mut interval = tokio::time::interval(Duration::from_secs(120));
         loop {
             interval.tick().await;
 
-            // Only refresh if stale
-            let needs_refresh = {
-                match quota_state.try_read() {
-                    Ok(state) => {
-                        state
-                            .claude_quota
-                            .as_ref()
-                            .is_none_or(|q| q.is_stale())
-                            || state
-                                .codex_quota
-                                .as_ref()
-                                .is_none_or(|q| q.is_stale())
-                    }
-                    Err(_) => true,  // If we can't read, assume we need refresh
-                }
-            };
+            let stale = quota_state
+                .try_read()
+                .map(|state| (
+                    state.claude_quota.as_ref().is_none_or(|q| q.is_stale()),
+                    state.codex_quota.as_ref().is_none_or(|q| q.is_stale()),
+                    state.cursor_quota.as_ref().is_none_or(|q| q.is_stale()),
+                ))
+                .unwrap_or((true, true, true));
 
-            if needs_refresh {
-                if let Some(quota) = quota::claude::fetch_quota()
-                    && let Ok(mut state) = quota_state.write() {
-                        state.claude_quota = Some(quota);
+            if stale.0 {
+                let qs = quota_state.clone();
+                if let Some(q) = task::spawn_blocking(quota::claude::fetch_quota)
+                    .await.unwrap_or_default() {
+                        if let Ok(mut s) = qs.write() {
+                            s.claude_quota = Some(q);
+                        }
                     }
-                if let Some(quota) = quota::codex::fetch_quota()
-                    && let Ok(mut state) = quota_state.write() {
-                        state.codex_quota = Some(quota);
+            }
+            if stale.1 {
+                let qs = quota_state.clone();
+                if let Some(q) = task::spawn_blocking(quota::codex::fetch_quota)
+                    .await.unwrap_or_default() {
+                        if let Ok(mut s) = qs.write() {
+                            s.codex_quota = Some(q);
+                        }
+                    }
+            }
+            if stale.2 {
+                let qs = quota_state.clone();
+                if let Some(q) = task::spawn_blocking(quota::cursor::fetch_quota)
+                    .await.unwrap_or_default() {
+                        if let Ok(mut s) = qs.write() {
+                            s.cursor_quota = Some(q);
+                        }
                     }
             }
         }

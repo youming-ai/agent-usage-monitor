@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Read Claude OAuth credentials, preferring the macOS Keychain and falling
 /// back to the `~/.claude/.credentials.json` file used on Linux (and some
@@ -84,34 +84,18 @@ fn format_reset_time(iso_str: &str) -> Option<String> {
     format_duration_short(diff)
 }
 
-/// Fetch usage data from Claude API
+/// Fetch usage data from Claude API via pure-Rust HTTP (ureq).
 fn fetch_usage_json(access_token: &str) -> Option<Value> {
-    let output = Command::new("/usr/bin/curl")
-        .args([
-            "-sS",
-            "--max-time",
-            "3",
-            "-H",
-            &format!("Authorization: Bearer {access_token}"),
-            "-H",
-            "anthropic-beta: oauth-2025-04-20",
-            "-H",
-            "Accept: application/json",
-            "-H",
-            "Content-Type: application/json",
-            "-H",
-            "User-Agent: claude-code/2.0.27",
-            "https://api.anthropic.com/api/oauth/usage",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let raw = String::from_utf8(output.stdout).ok()?;
-    serde_json::from_str(&raw).ok()
+    ureq::get("https://api.anthropic.com/api/oauth/usage")
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .set("anthropic-beta", "oauth-2025-04-20")
+        .set("Accept", "application/json")
+        .set("Content-Type", "application/json")
+        .set("User-Agent", "claude-code/2.0.27")
+        .timeout(Duration::from_secs(5))
+        .call()
+        .ok()
+        .and_then(|resp| resp.into_json().ok())
 }
 
 /// Parse usage response into QuotaInfo

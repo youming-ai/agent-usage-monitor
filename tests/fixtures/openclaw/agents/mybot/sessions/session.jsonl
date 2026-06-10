@@ -1,0 +1,2 @@
+{"type":"session","id":"sess_abc123","cwd":"/Users/me/repo","timestamp":"2026-06-05T10:00:00Z"}
+{"type":"message","timestamp":"2026-06-05T10:00:01Z","sessionId":"sess_abc123","cwd":"/Users/me/repo","message":{"role":"assistant","model":"claude-opus-4","usage":{"input":200,"output":80,"cacheRead":5,"cacheWrite":3},"cost":{"total":3.45}}}

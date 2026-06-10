@@ -4,62 +4,63 @@ struct PricingEntry {
     input: f64,
     output: f64,
     cache_read: f64,
+    cache_creation: f64,
 }
 
 const ANTHROPIC_PRICING: &[PricingEntry] = &[
-    PricingEntry { pattern: "claude-opus-4", input: 15.0, output: 75.0, cache_read: 1.50 },
-    PricingEntry { pattern: "claude-sonnet-4", input: 3.0, output: 15.0, cache_read: 0.30 },
-    PricingEntry { pattern: "claude-haiku-4", input: 1.0, output: 5.0, cache_read: 0.10 },
-    PricingEntry { pattern: "claude-opus-3", input: 15.0, output: 75.0, cache_read: 1.50 },
-    PricingEntry { pattern: "claude-sonnet-3", input: 3.0, output: 15.0, cache_read: 0.30 },
-    PricingEntry { pattern: "claude-haiku-3", input: 0.25, output: 1.25, cache_read: 0.03 },
+    PricingEntry { pattern: "claude-opus-4",   input: 15.0, output: 75.0, cache_read: 1.50, cache_creation: 15.00 },
+    PricingEntry { pattern: "claude-sonnet-4",  input:  3.0, output: 15.0, cache_read: 0.30, cache_creation:  3.00 },
+    PricingEntry { pattern: "claude-haiku-4",   input:  1.0, output:  5.0, cache_read: 0.10, cache_creation:  1.00 },
+    PricingEntry { pattern: "claude-opus-3",    input: 15.0, output: 75.0, cache_read: 1.50, cache_creation: 15.00 },
+    PricingEntry { pattern: "claude-sonnet-3",  input:  3.0, output: 15.0, cache_read: 0.30, cache_creation:  3.00 },
+    PricingEntry { pattern: "claude-haiku-3",   input: 0.25, output: 1.25, cache_read: 0.03, cache_creation:  0.25 },
 ];
 
 const KIMI_PRICING: &[PricingEntry] = &[
-    PricingEntry { pattern: "mimo-v2.5-pro", input: 0.60, output: 3.00, cache_read: 0.06 },
-    PricingEntry { pattern: "mimo-v2-pro", input: 0.60, output: 3.00, cache_read: 0.06 },
-    PricingEntry { pattern: "mimo-v2", input: 0.60, output: 3.00, cache_read: 0.06 },
-    PricingEntry { pattern: "kimi-k2", input: 0.60, output: 3.00, cache_read: 0.06 },
+    PricingEntry { pattern: "mimo-v2.5-pro", input: 0.60, output: 3.00, cache_read: 0.06, cache_creation: 0.60 },
+    PricingEntry { pattern: "mimo-v2-pro",   input: 0.60, output: 3.00, cache_read: 0.06, cache_creation: 0.60 },
+    PricingEntry { pattern: "mimo-v2",       input: 0.60, output: 3.00, cache_read: 0.06, cache_creation: 0.60 },
+    PricingEntry { pattern: "kimi-k2",       input: 0.60, output: 3.00, cache_read: 0.06, cache_creation: 0.60 },
 ];
 
 const CURSOR_PRICING: &[PricingEntry] = &[
-    PricingEntry { pattern: "cursor-auto", input: 1.25, output: 6.00, cache_read: 0.25 },
-    PricingEntry { pattern: "composer-2.5", input: 1.25, output: 6.00, cache_read: 0.25 },
-    PricingEntry { pattern: "composer-1", input: 1.25, output: 6.00, cache_read: 0.25 },
-    PricingEntry { pattern: "claude-4.6-sonnet", input: 3.0, output: 15.0, cache_read: 0.30 },
-    PricingEntry { pattern: "claude-opus-4", input: 15.0, output: 75.0, cache_read: 1.50 },
-    PricingEntry { pattern: "claude-sonnet-4", input: 3.0, output: 15.0, cache_read: 0.30 },
-    PricingEntry { pattern: "gpt-5.5", input: 1.25, output: 5.00, cache_read: 0.125 },
-    PricingEntry { pattern: "gpt-5.3-codex", input: 2.50, output: 10.0, cache_read: 0.25 },
-    PricingEntry { pattern: "gemini-3", input: 1.25, output: 5.00, cache_read: 0.125 },
-    PricingEntry { pattern: "grok-build", input: 0.60, output: 3.00, cache_read: 0.06 },
+    PricingEntry { pattern: "cursor-auto",     input: 1.25, output: 6.00, cache_read: 0.25,  cache_creation: 1.25 },
+    PricingEntry { pattern: "composer-2.5",    input: 1.25, output: 6.00, cache_read: 0.25,  cache_creation: 1.25 },
+    PricingEntry { pattern: "composer-1",      input: 1.25, output: 6.00, cache_read: 0.25,  cache_creation: 1.25 },
+    PricingEntry { pattern: "claude-4.6-sonnet", input: 3.0, output: 15.0, cache_read: 0.30, cache_creation: 3.0  },
+    PricingEntry { pattern: "claude-opus-4",   input: 15.0, output: 75.0, cache_read: 1.50,  cache_creation: 15.0 },
+    PricingEntry { pattern: "claude-sonnet-4", input: 3.0,  output: 15.0, cache_read: 0.30,  cache_creation: 3.0  },
+    PricingEntry { pattern: "gpt-5.5",          input: 1.25, output: 5.00, cache_read: 0.125, cache_creation: 1.25 },
+    PricingEntry { pattern: "gpt-5.3-codex",    input: 2.50, output: 10.0, cache_read: 0.25,  cache_creation: 2.50 },
+    PricingEntry { pattern: "gemini-3",         input: 1.25, output: 5.00, cache_read: 0.125, cache_creation: 1.25 },
+    PricingEntry { pattern: "grok-build",       input: 0.60, output: 3.00, cache_read: 0.06,  cache_creation: 0.60 },
 ];
 
 const GITHUB_PRICING: &[PricingEntry] = &[
-    PricingEntry { pattern: "gpt-4.1", input: 2.00, output: 8.00, cache_read: 0.20 },
-    PricingEntry { pattern: "gpt-4.1-mini", input: 0.40, output: 1.60, cache_read: 0.04 },
-    PricingEntry { pattern: "claude-sonnet-4", input: 3.0, output: 15.0, cache_read: 0.30 },
-    PricingEntry { pattern: "claude-opus-4", input: 15.0, output: 75.0, cache_read: 1.50 },
-    PricingEntry { pattern: "gemini-3", input: 1.25, output: 5.00, cache_read: 0.125 },
+    PricingEntry { pattern: "gpt-4.1",      input: 2.00, output: 8.00, cache_read: 0.20, cache_creation: 2.00 },
+    PricingEntry { pattern: "gpt-4.1-mini",  input: 0.40, output: 1.60, cache_read: 0.04, cache_creation: 0.40 },
+    PricingEntry { pattern: "claude-sonnet-4", input: 3.0, output: 15.0, cache_read: 0.30, cache_creation: 3.0 },
+    PricingEntry { pattern: "claude-opus-4", input: 15.0, output: 75.0, cache_read: 1.50, cache_creation: 15.0 },
+    PricingEntry { pattern: "gemini-3",      input: 1.25, output: 5.00, cache_read: 0.125, cache_creation: 1.25 },
 ];
 
 const GOOGLE_PRICING: &[PricingEntry] = &[
-    PricingEntry { pattern: "gemini-3.5-flash", input: 0.15, output: 0.60, cache_read: 0.015 },
-    PricingEntry { pattern: "gemini-3.1-pro", input: 1.25, output: 5.00, cache_read: 0.125 },
-    PricingEntry { pattern: "gemini-3", input: 1.25, output: 5.00, cache_read: 0.125 },
-    PricingEntry { pattern: "claude-sonnet-4", input: 3.0, output: 15.0, cache_read: 0.30 },
-    PricingEntry { pattern: "claude-opus-4", input: 15.0, output: 75.0, cache_read: 1.50 },
-    PricingEntry { pattern: "gpt-4.1", input: 2.00, output: 8.00, cache_read: 0.20 },
+    PricingEntry { pattern: "gemini-3.5-flash", input: 0.15, output: 0.60, cache_read: 0.015, cache_creation: 0.15 },
+    PricingEntry { pattern: "gemini-3.1-pro",   input: 1.25, output: 5.00, cache_read: 0.125, cache_creation: 1.25 },
+    PricingEntry { pattern: "gemini-3",         input: 1.25, output: 5.00, cache_read: 0.125, cache_creation: 1.25 },
+    PricingEntry { pattern: "claude-sonnet-4",  input: 3.0,  output: 15.0, cache_read: 0.30,  cache_creation: 3.0  },
+    PricingEntry { pattern: "claude-opus-4",    input: 15.0, output: 75.0, cache_read: 1.50,  cache_creation: 15.0 },
+    PricingEntry { pattern: "gpt-4.1",          input: 2.00, output: 8.00, cache_read: 0.20,  cache_creation: 2.00 },
 ];
 
 const OPENAI_PRICING: &[PricingEntry] = &[
-    PricingEntry { pattern: "gpt-5.5", input: 1.25, output: 5.00, cache_read: 0.125 },
-    PricingEntry { pattern: "gpt-5.4", input: 0.15, output: 0.60, cache_read: 0.015 },
-    PricingEntry { pattern: "gpt-5.3-codex", input: 2.50, output: 10.0, cache_read: 0.25 },
-    PricingEntry { pattern: "gpt-5.4-mini", input: 0.15, output: 0.60, cache_read: 0.015 },
-    PricingEntry { pattern: "gpt-4.1", input: 2.00, output: 8.00, cache_read: 0.20 },
-    PricingEntry { pattern: "gpt-4.1-mini", input: 0.40, output: 1.60, cache_read: 0.04 },
-    PricingEntry { pattern: "kimi-k2", input: 0.60, output: 3.00, cache_read: 0.06 },
+    PricingEntry { pattern: "gpt-5.5",        input: 1.25, output: 5.00, cache_read: 0.125, cache_creation: 1.25 },
+    PricingEntry { pattern: "gpt-5.4",        input: 0.15, output: 0.60, cache_read: 0.015, cache_creation: 0.15 },
+    PricingEntry { pattern: "gpt-5.3-codex",  input: 2.50, output: 10.0, cache_read: 0.25,  cache_creation: 2.50 },
+    PricingEntry { pattern: "gpt-5.4-mini",   input: 0.15, output: 0.60, cache_read: 0.015, cache_creation: 0.15 },
+    PricingEntry { pattern: "gpt-4.1",        input: 2.00, output: 8.00, cache_read: 0.20,  cache_creation: 2.00 },
+    PricingEntry { pattern: "gpt-4.1-mini",   input: 0.40, output: 1.60, cache_read: 0.04,  cache_creation: 0.40 },
+    PricingEntry { pattern: "kimi-k2",        input: 0.60, output: 3.00, cache_read: 0.06,  cache_creation: 0.60 },
 ];
 
 fn find_price<'a>(model: &str, table: &'a [PricingEntry]) -> Option<&'a PricingEntry> {
@@ -77,7 +78,7 @@ pub fn calculate_cost(
     input_tokens: u64,
     output_tokens: u64,
     cache_read_tokens: u64,
-    _cache_creation_tokens: u64,
+    cache_creation_tokens: u64,
 ) -> f64 {
     let entry = find_price(model, ANTHROPIC_PRICING)
         .or_else(|| find_price(model, KIMI_PRICING))
@@ -92,9 +93,10 @@ pub fn calculate_cost(
 
     let input_cost = (input_tokens as f64 / 1_000_000.0) * e.input;
     let output_cost = (output_tokens as f64 / 1_000_000.0) * e.output;
-    let cache_cost = (cache_read_tokens as f64 / 1_000_000.0) * e.cache_read;
+    let cache_read_cost = (cache_read_tokens as f64 / 1_000_000.0) * e.cache_read;
+    let cache_creation_cost = (cache_creation_tokens as f64 / 1_000_000.0) * e.cache_creation;
 
-    input_cost + output_cost + cache_cost
+    input_cost + output_cost + cache_read_cost + cache_creation_cost
 }
 
 #[cfg(test)]
