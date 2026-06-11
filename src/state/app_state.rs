@@ -43,6 +43,7 @@ pub enum Platform {
     Cursor,
     Copilot,
     Antigravity,
+    MimoCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,6 +60,7 @@ pub enum Tab {
     Cursor,
     Copilot,
     Antigravity,
+    MimoCode,
 }
 
 impl Tab {
@@ -92,6 +94,7 @@ impl Tab {
             Tab::Cursor => "CURSOR",
             Tab::Copilot => "COPILOT",
             Tab::Antigravity => "ANTIGRAVITY",
+            Tab::MimoCode => "MIMO-CODE",
         }
     }
 
@@ -111,6 +114,7 @@ impl Tab {
             Tab::Cursor => ratatui::style::Color::Rgb(136, 192, 208),     // #88C0D0 anomalyco/opencode cursor.json darkCyan (primary)
             Tab::Copilot => ratatui::style::Color::Rgb(35, 134, 54),      // #238636 github brand green
             Tab::Antigravity => ratatui::style::Color::Rgb(66, 133, 244), // #4285F4 google brand blue
+            Tab::MimoCode => ratatui::style::Color::Rgb(255, 103, 0),     // #FF6700 Xiaomi brand orange
         }
     }
 
@@ -130,6 +134,7 @@ impl Tab {
             Tab::Cursor => ratatui::style::Color::Rgb(184, 224, 235),     // lighter cyan
             Tab::Copilot => ratatui::style::Color::Rgb(155, 215, 165),    // lighter green
             Tab::Antigravity => ratatui::style::Color::Rgb(154, 194, 249), // lighter blue
+            Tab::MimoCode => ratatui::style::Color::Rgb(255, 178, 102),   // lighter orange
         }
     }
 
@@ -148,6 +153,7 @@ impl Tab {
             Tab::Cursor,
             Tab::Copilot,
             Tab::Antigravity,
+            Tab::MimoCode,
         ]
     }
 
@@ -169,6 +175,8 @@ impl Tab {
             Tab::Cursor => home.join(".cursor"),
             Tab::Copilot => home.join(".copilot"),
             Tab::Antigravity => home.join(".gemini/antigravity-cli"),
+            // MiMo Code also follows XDG, same as opencode
+            Tab::MimoCode => crate::config::xdg_data_dir().join("mimocode"),
         }
     }
 
@@ -188,6 +196,7 @@ impl Tab {
             }
             Tab::Copilot => path.join("session-state").exists(),
             Tab::Antigravity => path.join("brain").exists(),
+            Tab::MimoCode => path.join("mimocode.db").exists(),
             _ => path.exists(),
         }
     }
@@ -207,6 +216,7 @@ impl Tab {
             Tab::Cursor => path.join("projects").exists() || path.join("chats").exists(),
             Tab::Copilot => path.join("session-state").exists(),
             Tab::Antigravity => path.join("brain").exists(),
+            Tab::MimoCode => path.join("mimocode.db").exists(),
             _ => path.exists(),
         }
     }
@@ -321,7 +331,6 @@ pub struct AppState {
     pub cursor_sessions: HashMap<String, SessionSummary>,
     pub cursor_total_calls: usize,
     pub cursor_total_cost: f64,
-    pub cursor_quota: Option<QuotaInfo>,
     pub cursor_max_records: usize,
 
     // copilot
@@ -339,6 +348,14 @@ pub struct AppState {
     pub antigravity_total_cost: f64,
     pub antigravity_quota: Option<QuotaInfo>,
     pub antigravity_max_records: usize,
+
+    // mimo_code
+    pub mimo_code_records: VecDeque<UsageRecord>,
+    pub mimo_code_sessions: HashMap<String, SessionSummary>,
+    pub mimo_code_total_calls: usize,
+    pub mimo_code_total_cost: f64,
+    pub mimo_code_quota: Option<QuotaInfo>,
+    pub mimo_code_max_records: usize,
 
     // Shared
     pub active_tab: Tab,
@@ -413,7 +430,6 @@ impl AppState {
             cursor_sessions: HashMap::new(),
             cursor_total_calls: 0,
             cursor_total_cost: 0.0,
-            cursor_quota: None,
             cursor_max_records: max_records,
             copilot_records: VecDeque::with_capacity(max_records),
             copilot_sessions: HashMap::new(),
@@ -427,6 +443,12 @@ impl AppState {
             antigravity_total_cost: 0.0,
             antigravity_quota: None,
             antigravity_max_records: max_records,
+            mimo_code_records: VecDeque::with_capacity(max_records),
+            mimo_code_sessions: HashMap::new(),
+            mimo_code_total_calls: 0,
+            mimo_code_total_cost: 0.0,
+            mimo_code_quota: None,
+            mimo_code_max_records: max_records,
             active_tab: Tab::ClaudeCode,
             available_tabs: Vec::new(),
         }
@@ -601,6 +623,19 @@ impl AppState {
         }
     }
 
+    pub fn add_mimo_code_records(&mut self, records: Vec<UsageRecord>) {
+        for r in records {
+            if self.mimo_code_records.len() >= self.mimo_code_max_records
+                && let Some(old) = self.mimo_code_records.pop_front() {
+                    reverse_model_aggregate(&mut self.mimo_code_sessions, &old);
+                }
+            self.mimo_code_total_cost += r.cost_usd;
+            self.mimo_code_total_calls += 1;
+            upsert_model_aggregate(&mut self.mimo_code_sessions, &r);
+            self.mimo_code_records.push_back(r);
+        }
+    }
+
     /// Route a batch of records to the bucket for `platform`. Every batch from
     /// a single reader is one platform, so this just dispatches.
     pub fn add_records(&mut self, platform: Platform, records: Vec<UsageRecord>) {
@@ -617,6 +652,7 @@ impl AppState {
             Platform::Cursor => self.add_cursor_records(records),
             Platform::Copilot => self.add_copilot_records(records),
             Platform::Antigravity => self.add_antigravity_records(records),
+            Platform::MimoCode => self.add_mimo_code_records(records),
         }
     }
 
@@ -704,6 +740,13 @@ impl AppState {
         self.antigravity_total_cost = 0.0;
     }
 
+    pub fn clear_mimo_code(&mut self) {
+        self.mimo_code_records.clear();
+        self.mimo_code_sessions.clear();
+        self.mimo_code_total_calls = 0;
+        self.mimo_code_total_cost = 0.0;
+    }
+
     /// Clear usage data for the active tab (`r` key). Dispatches via `Tab`.
     pub fn clear_tab(&mut self, tab: Tab) {
         match tab {
@@ -719,6 +762,7 @@ impl AppState {
             Tab::Cursor => self.clear_cursor(),
             Tab::Copilot => self.clear_copilot(),
             Tab::Antigravity => self.clear_antigravity(),
+            Tab::MimoCode => self.clear_mimo_code(),
         }
     }
 
@@ -864,6 +908,7 @@ mod tests {
             (Tab::Cursor, missing.join("cursor")),
             (Tab::Copilot, missing.join("copilot")),
             (Tab::Antigravity, missing.join("antigravity")),
+            (Tab::MimoCode, missing.join("mimocode")),
         ]));
 
         let mut state = AppState::new();
