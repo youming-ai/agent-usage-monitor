@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.2](https://github.com/youming-ai/agent-usage-monitor/compare/v0.14.1...v0.14.2) (2026-06-12)
+
+
+### Bug Fixes
+
+* deduplicate AppState, unify SQLite readers, decouple quota fetchers ([9bd86ba](https://github.com/youming-ai/agent-usage-monitor/commit/9bd86baa4ad910eced0d154c6c864d8173d1bc40))
+
 ## [0.14.1](https://github.com/youming-ai/agent-usage-monitor/compare/v0.14.0...v0.14.1) (2026-06-12)
 
 
