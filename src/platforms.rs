@@ -9,6 +9,7 @@ use crate::reader::factory::FactoryReader;
 use crate::reader::grok::GrokReader;
 use crate::reader::hermes::HermesReader;
 use crate::reader::kimi_code::KimiCodeReader;
+use crate::reader::mimo_code::MimoCodeReader;
 use crate::reader::openclaw::OpenClawReader;
 use crate::reader::opencode::OpencodeReader;
 use crate::reader::pi::PiReader;
@@ -150,6 +151,16 @@ static REGISTRY: &[RegistryEntry] = &[
         set_config_path: |c, p| c.antigravity_path = p,
         create_reader: |p| Box::new(AntigravityReader::new(p)),
     },
+    RegistryEntry {
+        tab: Tab::MimoCode,
+        platform: Platform::MimoCode,
+        config_key: "mimo_code_path",
+        log_name: "MiMo Code",
+        config_path: |c| c.mimo_code_path.clone(),
+        cli_path: |cli| cli.mimo_code_path.clone(),
+        set_config_path: |c, p| c.mimo_code_path = p,
+        create_reader: |p| Box::new(MimoCodeReader::new(p)),
+    },
 ];
 
 /// All registered platforms in tab order.
@@ -280,6 +291,7 @@ mod tests {
             cursor_path: None,
             copilot_path: None,
             antigravity_path: None,
+            mimo_code_path: None,
             refresh: None,
         };
         let paths = resolve_paths(&cli, &config);

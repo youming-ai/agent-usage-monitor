@@ -8,6 +8,7 @@ pub mod grok;
 pub mod hermes;
 pub mod jsonl_reader;
 pub mod kimi_code;
+pub mod mimo_code;
 pub mod opencode;
 pub mod openclaw;
 pub mod pi;

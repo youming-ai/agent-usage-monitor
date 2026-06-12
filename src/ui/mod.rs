@@ -96,7 +96,7 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
             state.grok_total_cost,
         ),
         crate::state::Tab::Cursor => (
-            state.cursor_quota.as_ref(),
+            None,
             &state.cursor_sessions,
             &state.cursor_records,
             state.cursor_total_calls,
@@ -115,6 +115,13 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
             &state.antigravity_records,
             state.antigravity_total_calls,
             state.antigravity_total_cost,
+        ),
+        crate::state::Tab::MimoCode => (
+            state.mimo_code_quota.as_ref(),
+            &state.mimo_code_sessions,
+            &state.mimo_code_records,
+            state.mimo_code_total_calls,
+            state.mimo_code_total_cost,
         ),
     };
 
@@ -141,8 +148,10 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
         | crate::state::Tab::Pi
         | crate::state::Tab::Factory
         | crate::state::Tab::Grok
+        | crate::state::Tab::Cursor
         | crate::state::Tab::Copilot
-        | crate::state::Tab::Antigravity => quota_bar::no_quota_source(),
+        | crate::state::Tab::Antigravity
+        | crate::state::Tab::MimoCode => quota_bar::no_quota_source(),
         _ => quota_bar::quota_panel(active, quota),
     };
     frame.render_widget(quota_widget, chunks[1]);

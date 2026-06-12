@@ -140,10 +140,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // token-spawns at startup.
         {
             let qs = quota_state.clone();
-            let (claude_q, codex_q, cursor_q) = task::spawn_blocking(move || {
+            let (claude_q, codex_q) = task::spawn_blocking(move || {
                 (quota::claude::fetch_quota(),
-                 quota::codex::fetch_quota(),
-                 quota::cursor::fetch_quota())
+                 quota::codex::fetch_quota())
             })
             .await
             .unwrap_or_default();
@@ -164,14 +163,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             } else {
                 warn!("Failed to fetch Codex quota");
             }
-            if let Some(q) = cursor_q {
-                info!("Cursor quota fetched successfully");
-                if let Ok(mut state) = qs.write() {
-                    state.cursor_quota = Some(q);
-                }
-            } else {
-                warn!("Failed to fetch Cursor quota");
-            }
         }
 
         // Refresh every 2 minutes — each platform independently.
@@ -184,9 +175,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .map(|state| (
                     state.claude_quota.as_ref().is_none_or(|q| q.is_stale()),
                     state.codex_quota.as_ref().is_none_or(|q| q.is_stale()),
-                    state.cursor_quota.as_ref().is_none_or(|q| q.is_stale()),
                 ))
-                .unwrap_or((true, true, true));
+                .unwrap_or((true, true));
 
             if stale.0 {
                 let qs = quota_state.clone();
@@ -203,15 +193,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .await.unwrap_or_default() {
                         if let Ok(mut s) = qs.write() {
                             s.codex_quota = Some(q);
-                        }
-                    }
-            }
-            if stale.2 {
-                let qs = quota_state.clone();
-                if let Some(q) = task::spawn_blocking(quota::cursor::fetch_quota)
-                    .await.unwrap_or_default() {
-                        if let Ok(mut s) = qs.write() {
-                            s.cursor_quota = Some(q);
                         }
                     }
             }

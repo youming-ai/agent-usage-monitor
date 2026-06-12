@@ -52,6 +52,10 @@ pub struct Config {
     #[serde(default = "default_antigravity_path")]
     pub antigravity_path: PathBuf,
 
+    /// Path to MiMo Code data directory
+    #[serde(default = "default_mimo_code_path")]
+    pub mimo_code_path: PathBuf,
+
     /// Polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -76,6 +80,7 @@ impl Default for Config {
             cursor_path: default_cursor_path(),
             copilot_path: default_copilot_path(),
             antigravity_path: default_antigravity_path(),
+            mimo_code_path: default_mimo_code_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -166,6 +171,10 @@ fn default_antigravity_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".gemini/antigravity-cli")
+}
+
+fn default_mimo_code_path() -> PathBuf {
+    xdg_data_dir().join("mimocode")
 }
 
 fn default_refresh() -> u64 {

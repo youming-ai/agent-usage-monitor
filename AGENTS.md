@@ -2,7 +2,7 @@
 
 ## Project snapshot
 
-Single Rust binary (`aum`) — a TUI dashboard that reads local agent logs (JSONL / SQLite) and displays per-model usage, cost, and quota. Supports 12 agents: Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI.
+Single Rust binary (`aum`) — a TUI dashboard that reads local agent logs (JSONL / SQLite) and displays per-model usage, cost, and quota. Supports 13 agents: Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI, MiMo Code.
 
 ## Build & test
 
@@ -22,13 +22,13 @@ The only file you must edit is `src/platforms.rs`. Add one `RegistryEntry` to `R
 - `src/reader/` — One reader per agent. Most JSONL readers implement `JsonlReader` (see `jsonl_reader.rs`); SQLite readers (opencode, hermes) implement `UsageSource` directly.
 - `src/reader/pricing.rs` — Hard-coded USD-per-1M-token tables. Update when upstream pricing changes. Unknown models show `$0.00`.
 - `src/state/app_state.rs` — Per-platform state fields (records, sessions, totals, quota). Each platform has its own `add_*_records` / `clear_*` method. Eviction from the bounded ring reverses the per-model aggregate but **not** lifetime totals.
-- `src/quota/` — Quota fetchers (Claude, Codex, Cursor). Use local credentials (Keychain / `~/.claude/.credentials.json` / `~/.codex/auth.json`).
+- `src/quota/` — Quota fetchers (Claude, Codex). Use local credentials (Keychain / `~/.claude/.credentials.json` / `~/.codex/auth.json`).
 - `src/ui/` — ratatui widgets. Accent colors are defined in `Tab::primary_color()` in `app_state.rs`.
 
 ### Key quirks
 - **Reader tasks run in `task::spawn_blocking`** — `UsageSource` uses `std::sync::Mutex`, not `tokio::sync::Mutex`, because the reader does blocking I/O.
 - **Refresh is clamped to ≥1s** — `tokio::time::interval` panics on zero; `main.rs` enforces `refresh.max(1)`.
-- **opencode path is XDG, not macOS App Support** — `config.rs` has `xdg_data_dir()`; on macOS this resolves to `~/.local/share/opencode`, not `~/Library/Application Support/opencode`.
+- **opencode and MiMo Code paths are XDG, not macOS App Support** — `config.rs` has `xdg_data_dir()`; on macOS this resolves to `~/.local/share/opencode` and `~/.local/share/mimocode`, not `~/Library/Application Support/`.
 - **Tab availability detection is platform-specific** — Some agents check for subdirectories/files (e.g., Hermes checks `state.db`, Cursor checks `projects` or `chats`, Grok checks `sessions`). See `Tab::is_available_at()`.
 
 ### Session labels
