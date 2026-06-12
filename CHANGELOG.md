@@ -1,12 +1,14 @@
 # Changelog
 
-## [0.13.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.12.0...v0.13.0) (2026-06-12)
+## [0.13.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.12.1...v0.13.0) (2026-06-12)
 
 
 ### Features
 
 * add MiMo Code support and remove Cursor quota ([5214767](https://github.com/youming-ai/agent-usage-monitor/commit/52147679b903b0608894378fd9f9f68ca91afe1b))
 * add MiMo Code support and remove Cursor quota ([2e44cd1](https://github.com/youming-ai/agent-usage-monitor/commit/2e44cd1f547fa31d87d4fec9feb3b7bbb0276bad))
+
+## [0.12.1](https://github.com/youming-ai/agent-usage-monitor/compare/v0.12.0...v0.12.1) (2026-06-10)
 
 
 ### Bug Fixes
