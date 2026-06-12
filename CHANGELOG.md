@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/youming-ai/agent-usage-monitor/compare/v0.12.0...v0.12.1) (2026-06-10)
+
+
+### Bug Fixes
+
+* resolve merge conflicts and apply core improvements ([37f0bc9](https://github.com/youming-ai/agent-usage-monitor/commit/37f0bc9d29425c26ba3e29868503d7ea1a332358))
+
 ## [0.12.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.11.2...v0.12.0) (2026-06-09)
 
 
