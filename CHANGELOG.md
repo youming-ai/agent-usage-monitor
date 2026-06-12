@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.1](https://github.com/youming-ai/agent-usage-monitor/compare/v0.14.0...v0.14.1) (2026-06-12)
+
+
+### Documentation
+
+* add MiMo Code to README ([f708610](https://github.com/youming-ai/agent-usage-monitor/commit/f708610a92e2d8ec69d740c03b6370107b570f3d))
+* add MiMo Code to README ([74ba356](https://github.com/youming-ai/agent-usage-monitor/commit/74ba356874f461804d2b50210ba4d995231508c4))
+
 ## [0.14.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.13.0...v0.14.0) (2026-06-12)
 
 
