@@ -9,9 +9,33 @@ pub mod opencode;
 pub(crate) mod util;
 
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use std::time::Duration;
 
+use crate::state::Platform;
+
 const CACHE_TTL: Duration = Duration::from_secs(120);
+
+/// A source of quota information for one platform. Each implementation is
+/// self-contained (reads local credentials, calls the API, parses the
+/// response) and registered via `fetchers()`. `main.rs` iterates them all
+/// instead of hardcoding per-platform fetch calls.
+pub trait QuotaFetcher: Send + Sync {
+    fn platform(&self) -> Platform;
+    fn fetch(&self) -> Option<QuotaInfo>;
+}
+
+/// All registered quota fetchers (currently Claude + Codex). Adding a new
+/// quota source only requires adding to this list.
+pub fn fetchers() -> &'static [Box<dyn QuotaFetcher>] {
+    static FETCHERS: LazyLock<Vec<Box<dyn QuotaFetcher>>> = LazyLock::new(|| {
+        vec![
+            Box::new(claude::ClaudeQuotaFetcher),
+            Box::new(codex::CodexQuotaFetcher),
+        ]
+    });
+    &FETCHERS
+}
 
 /// Reason a quota fetch failed. Surfaced verbatim in the UI and used to decide
 /// whether the cached result should be re-tried sooner than the regular TTL.

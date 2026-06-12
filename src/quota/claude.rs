@@ -181,6 +181,18 @@ pub fn fetch_quota() -> Option<QuotaInfo> {
     parse_usage_response(&data, email)
 }
 
+/// `QuotaFetcher` implementation for the registry in `quota::fetchers()`.
+pub struct ClaudeQuotaFetcher;
+
+impl super::QuotaFetcher for ClaudeQuotaFetcher {
+    fn platform(&self) -> crate::state::Platform {
+        crate::state::Platform::ClaudeCode
+    }
+    fn fetch(&self) -> Option<QuotaInfo> {
+        fetch_quota()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

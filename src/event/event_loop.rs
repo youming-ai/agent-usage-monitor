@@ -40,7 +40,10 @@ impl EventLoop {
                     if tx_tick.send(AppEvent::Tick).is_err() {
                         break;
                     }
-                    last_tick = Instant::now();
+                    // Drift-corrected: add tick_rate instead of resetting to
+                    // now(), so we don't accidentally fire multiple ticks when
+                    // the event poll took longer than tick_rate.
+                    last_tick += tick_rate;
                 }
             }
         });

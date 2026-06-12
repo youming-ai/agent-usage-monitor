@@ -32,7 +32,7 @@ pub struct CursorReader {
     extra_chats_dir: PathBuf,
     transcript_positions: HashMap<PathBuf, u64>,
     transcript_state: HashMap<PathBuf, TranscriptTurnState>,
-    store_last_rowid: HashMap<PathBuf, i64>,
+    store_max_rowid: HashMap<PathBuf, i64>,
     store_seen_keys: HashMap<PathBuf, HashSet<String>>,
     conversation_models: HashMap<String, String>,
 }
@@ -50,7 +50,7 @@ impl CursorReader {
             extra_chats_dir,
             transcript_positions: HashMap::new(),
             transcript_state: HashMap::new(),
-            store_last_rowid: HashMap::new(),
+            store_max_rowid: HashMap::new(),
             store_seen_keys: HashMap::new(),
             conversation_models: HashMap::new(),
         }
@@ -115,7 +115,7 @@ impl CursorReader {
         if from_start {
             self.transcript_positions.clear();
             self.transcript_state.clear();
-            self.store_last_rowid.clear();
+            self.store_max_rowid.clear();
             self.store_seen_keys.clear();
         }
 
@@ -129,7 +129,7 @@ impl CursorReader {
             .retain(|p, _| current_transcripts.contains(p));
         self.transcript_state
             .retain(|p, _| current_transcripts.contains(p));
-        self.store_last_rowid
+        self.store_max_rowid
             .retain(|p, _| current_stores.contains(p));
         self.store_seen_keys
             .retain(|p, _| current_stores.contains(p));
@@ -209,13 +209,12 @@ impl CursorReader {
             return Vec::new();
         }
 
-        // Always start from the beginning of the *current* blobs table and let the
-        // persistent store_seen_keys (dedup by bubble/msg key + createdAt + tokens)
-        // suppress already-seen items. This is robust to store.db replacement/rotation
-        // (rowids restart, same path, new table). The previous "rowid > last" resume
-        // was the root cause of silent data loss after recreation.
-        // (from_start already clears the seen set in scan_all_inner.)
-        let last_rowid_for_query = 0i64;
+        // Always scan from rowid 0 — dedup is handled by `store_seen_keys` (HashSet),
+        // which survives store.db replacement/rotation. `store_max_rowid` is just a
+        // bookkeeping field tracking the highest rowid ever seen; it is NOT used as
+        // a query resume cursor (that was the root cause of silent data loss after
+        // store.db recreation).
+        let query_start_rowid = 0i64;
         let session_id = extract_store_session_id(path);
         let project = extract_store_project(path);
         let session = session_label(&project, &session_id);
@@ -226,7 +225,7 @@ impl CursorReader {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let rows = stmt.query_map([last_rowid_for_query], |row| {
+        let rows = stmt.query_map([query_start_rowid], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -242,7 +241,7 @@ impl CursorReader {
             .entry(path.to_path_buf())
             .or_default();
         let mut records = Vec::new();
-        let mut max_rowid = last_rowid_for_query;
+        let mut max_rowid = query_start_rowid;
 
         for row in rows.flatten() {
             let (rowid, key, value) = row;
@@ -252,7 +251,7 @@ impl CursorReader {
             }
         }
 
-        self.store_last_rowid.insert(path.to_path_buf(), max_rowid);
+        self.store_max_rowid.insert(path.to_path_buf(), max_rowid);
         records
     }
 }

@@ -1,137 +1,38 @@
-use crate::reader::{basename, session_label, UsageSource};
+use super::sqlite_message_reader::SqliteMessageReader;
+use super::UsageSource;
 use crate::state::{Platform, UsageRecord};
-use chrono::{TimeZone, Utc};
-use rusqlite::{Connection, OpenFlags};
-use serde_json::Value;
 use std::path::PathBuf;
-use tracing::warn;
 
+/// Reads per-call usage from MiMo Code's local SQLite DB (`mimocode.db`).
+/// Delegates to the shared `SqliteMessageReader`.
 pub struct MimoCodeReader {
-    conn: Option<Connection>,
-    cursor: i64,
+    inner: SqliteMessageReader,
 }
 
 impl MimoCodeReader {
     pub fn new(data_dir: PathBuf) -> Self {
-        let db_path = data_dir.join("mimocode.db");
-        let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
-        Self { conn, cursor: 0 }
-    }
-
-    #[cfg(test)]
-    fn from_connection(conn: Connection) -> Self {
         Self {
-            conn: Some(conn),
-            cursor: 0,
+            inner: SqliteMessageReader::new(data_dir, "mimocode.db", Platform::MimoCode, "mimocode"),
         }
-    }
-
-    fn query_since(&mut self, cursor: i64) -> Vec<UsageRecord> {
-        let Some(conn) = self.conn.as_ref() else {
-            return Vec::new();
-        };
-        let mut stmt = match conn.prepare(
-            "SELECT m.data, COALESCE(s.directory, '') AS directory, m.session_id, m.time_created \
-             FROM message m LEFT JOIN session s ON m.session_id = s.id \
-             WHERE json_extract(m.data, '$.role') = 'assistant' \
-               AND m.time_created > ?1 \
-             ORDER BY m.time_created",
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("mimo_code: failed to prepare usage query: {e}");
-                return Vec::new();
-            }
-        };
-        let rows = stmt.query_map([cursor], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        });
-        let mut records = Vec::new();
-        let mut max_seen = cursor;
-        if let Ok(rows) = rows {
-            for (data, directory, session_id, time_created) in rows.flatten() {
-                if time_created > max_seen {
-                    max_seen = time_created;
-                }
-                if let Some(rec) =
-                    parse_mimo_code_message(&data, &directory, &session_id, time_created)
-                {
-                    records.push(rec);
-                }
-            }
-        }
-        self.cursor = max_seen;
-        records
     }
 }
 
 impl UsageSource for MimoCodeReader {
     fn platform(&self) -> Platform {
-        Platform::MimoCode
+        self.inner.platform()
     }
     fn scan_all(&mut self) -> Vec<UsageRecord> {
-        self.cursor = 0;
-        self.query_since(0)
+        self.inner.scan_all()
     }
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        let cursor = self.cursor;
-        self.query_since(cursor)
+        self.inner.poll_delta()
     }
-}
-
-fn parse_mimo_code_message(
-    data: &str,
-    directory: &str,
-    session_id: &str,
-    time_created_ms: i64,
-) -> Option<UsageRecord> {
-    let v: Value = serde_json::from_str(data).ok()?;
-    let tokens = v.get("tokens")?;
-    let u64_at = |obj: &Value, key: &str| obj.get(key).and_then(|x| x.as_u64()).unwrap_or(0);
-
-    let input = u64_at(tokens, "input");
-    let output = u64_at(tokens, "output");
-    let reasoning = u64_at(tokens, "reasoning");
-    let (cache_read, cache_write) = match tokens.get("cache") {
-        Some(cache) => (u64_at(cache, "read"), u64_at(cache, "write")),
-        None => (0, 0),
-    };
-
-    if input == 0 && output == 0 && reasoning == 0 && cache_read == 0 && cache_write == 0 {
-        return None;
-    }
-
-    let model_id = v.get("modelID").and_then(|x| x.as_str()).unwrap_or("unknown");
-    let provider_id = v
-        .get("providerID")
-        .and_then(|x| x.as_str())
-        .unwrap_or("mimocode");
-    let model = format!("{provider_id}/{model_id}");
-    let cost = v.get("cost").and_then(|x| x.as_f64()).unwrap_or(0.0);
-    let timestamp = Utc.timestamp_millis_opt(time_created_ms).single()?;
-    let session = session_label(&basename(directory), session_id);
-
-    Some(UsageRecord {
-        timestamp,
-        platform: Platform::MimoCode,
-        model,
-        session,
-        input_tokens: input,
-        output_tokens: output + reasoning,
-        cache_read_tokens: cache_read,
-        cache_creation_tokens: cache_write,
-        cost_usd: cost,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
 
     const ASSISTANT_1: &str = r#"{"role":"assistant","modelID":"mimo-v2.5-pro","providerID":"xiaomi","cost":0.0,"tokens":{"input":100,"output":40,"reasoning":10,"cache":{"read":5,"write":2}},"time":{"created":1000}}"#;
     const ASSISTANT_2: &str = r#"{"role":"assistant","modelID":"claude-sonnet-4","providerID":"anthropic","cost":1.5,"tokens":{"input":200,"output":80,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":2000}}"#;
@@ -164,7 +65,9 @@ mod tests {
         insert(&conn, "m2", 1500, USER_MSG);
         insert(&conn, "m3", 1700, ASSISTANT_NO_TOKENS);
         insert(&conn, "m4", 2000, ASSISTANT_2);
-        let mut reader = MimoCodeReader::from_connection(conn);
+        let mut reader = MimoCodeReader {
+            inner: SqliteMessageReader::from_connection(conn, Platform::MimoCode, "mimocode"),
+        };
 
         let records = reader.scan_all();
         assert_eq!(records.len(), 2);
@@ -188,13 +91,15 @@ mod tests {
     fn poll_delta_returns_only_new_rows() {
         let conn = setup();
         insert(&conn, "m1", 1000, ASSISTANT_1);
-        let mut reader = MimoCodeReader::from_connection(conn);
+        let mut reader = MimoCodeReader {
+            inner: SqliteMessageReader::from_connection(conn, Platform::MimoCode, "mimocode"),
+        };
 
         assert_eq!(reader.scan_all().len(), 1);
         assert_eq!(reader.poll_delta().len(), 0);
 
-        let conn2 = reader.conn.as_ref().unwrap();
-        conn2
+        let inner_conn = reader.inner.conn.as_ref().unwrap();
+        inner_conn
             .execute(
                 "INSERT INTO message VALUES ('m2', 'ses_abc', 2000, ?1)",
                 rusqlite::params![ASSISTANT_2],
@@ -221,7 +126,9 @@ mod tests {
             rusqlite::params![ASSISTANT_2],
         )
         .unwrap();
-        let mut reader = MimoCodeReader::from_connection(conn);
+        let mut reader = MimoCodeReader {
+            inner: SqliteMessageReader::from_connection(conn, Platform::MimoCode, "mimocode"),
+        };
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
         assert!(

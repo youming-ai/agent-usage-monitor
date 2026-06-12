@@ -38,7 +38,7 @@ aum config reset   # reset configuration to defaults
 | `--cursor-path` | `~/.cursor` | Cursor CLI data directory |
 | `--copilot-path` | `~/.copilot` | Copilot CLI data directory |
 | `--antigravity-path` | `~/.gemini/antigravity-cli` | Antigravity CLI data directory |
-| `--mimo_code_path` | `~/.local/share/mimocode` | MiMo Code data directory |
+| `--mimo-code-path` | `~/.local/share/mimocode` | MiMo Code data directory |
 | `-r, --refresh` | `5` | Poll interval, in seconds |
 
 **Keys:** `Tab` / `←` / `→` switch tab · `r` clear current tab · `q` quit

@@ -19,10 +19,10 @@ The only file you must edit is `src/platforms.rs`. Add one `RegistryEntry` to `R
 
 ### Core modules
 - `src/platforms.rs` — `RegistryEntry` table; single source of truth for platform wiring.
-- `src/reader/` — One reader per agent. Most JSONL readers implement `JsonlReader` (see `jsonl_reader.rs`); SQLite readers (opencode, hermes) implement `UsageSource` directly.
+- `src/reader/` — One reader per agent. Most JSONL readers implement `JsonlReader` (see `jsonl_reader.rs`); SQLite readers (opencode, hermes, MiMo Code) implement `UsageSource` directly. Opencode and MiMo Code share the same `SqliteMessageReader` implementation (see `sqlite_message_reader.rs`).
 - `src/reader/pricing.rs` — Hard-coded USD-per-1M-token tables. Update when upstream pricing changes. Unknown models show `$0.00`.
-- `src/state/app_state.rs` — Per-platform state fields (records, sessions, totals, quota). Each platform has its own `add_*_records` / `clear_*` method. Eviction from the bounded ring reverses the per-model aggregate but **not** lifetime totals.
-- `src/quota/` — Quota fetchers (Claude, Codex). Use local credentials (Keychain / `~/.claude/.credentials.json` / `~/.codex/auth.json`).
+- `src/state/app_state.rs` — Per-platform state stored in a `[PlatformState; Platform::COUNT]` array indexed by `Platform::index()`. A single `add_records(platform, records)` method handles all platforms; eviction reverses per-model aggregates but not lifetime totals. `Tab` and `Platform` share variant order so `tab.index()` maps directly to the same slot.
+- `src/quota/` — Quota fetchers (Claude, Codex). Each implements `QuotaFetcher` and is registered in `quota::fetchers()`. Use local credentials (Keychain / `~/.claude/.credentials.json` / `~/.codex/auth.json`).
 - `src/ui/` — ratatui widgets. Accent colors are defined in `Tab::primary_color()` in `app_state.rs`.
 
 ### Key quirks
@@ -54,7 +54,6 @@ aum config set grok_path ~/.grok
 
 - Uses **release-please** (`release-please-config.json`).
 - Release assets are `aum-darwin-arm64.tar.gz` and `aum-linux-amd64.tar.gz` (see `install.sh` and `src/updater/platform.rs`).
-- `CHANGELOG.md` currently has an **unresolved merge conflict** (lines 3–7). Resolve before the next release.
 
 ## What NOT to put here
 

@@ -14,6 +14,7 @@ pub mod openclaw;
 pub mod pi;
 pub mod pricing;
 pub(crate) mod session_jsonl;
+pub(crate) mod sqlite_message_reader;
 
 use crate::state::{Platform, UsageRecord};
 use jsonl_reader::JsonlReader;

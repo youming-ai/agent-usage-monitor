@@ -30,100 +30,9 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     ])
     .split(frame.area());
 
-    // Active-tab data.
-    let (quota, sessions, records, total_calls, total_cost) = match active {
-        crate::state::Tab::ClaudeCode => (
-            state.claude_quota.as_ref(),
-            &state.claude_sessions,
-            &state.claude_records,
-            state.claude_total_calls,
-            state.claude_total_cost,
-        ),
-        crate::state::Tab::Codex => (
-            state.codex_quota.as_ref(),
-            &state.codex_sessions,
-            &state.codex_records,
-            state.codex_total_calls,
-            state.codex_total_cost,
-        ),
-        crate::state::Tab::OpenClaw => (
-            state.openclaw_quota.as_ref(),
-            &state.openclaw_sessions,
-            &state.openclaw_records,
-            state.openclaw_total_calls,
-            state.openclaw_total_cost,
-        ),
-        crate::state::Tab::Hermes => (
-            state.hermes_quota.as_ref(),
-            &state.hermes_sessions,
-            &state.hermes_records,
-            state.hermes_total_calls,
-            state.hermes_total_cost,
-        ),
-        crate::state::Tab::OpenCode => (
-            state.opencode_quota.as_ref(),
-            &state.opencode_sessions,
-            &state.opencode_records,
-            state.opencode_total_calls,
-            state.opencode_total_cost,
-        ),
-        crate::state::Tab::KimiCode => (
-            state.kimi_code_quota.as_ref(),
-            &state.kimi_code_sessions,
-            &state.kimi_code_records,
-            state.kimi_code_total_calls,
-            state.kimi_code_total_cost,
-        ),
-        crate::state::Tab::Pi => (
-            state.pi_quota.as_ref(),
-            &state.pi_sessions,
-            &state.pi_records,
-            state.pi_total_calls,
-            state.pi_total_cost,
-        ),
-        crate::state::Tab::Factory => (
-            state.factory_quota.as_ref(),
-            &state.factory_sessions,
-            &state.factory_records,
-            state.factory_total_calls,
-            state.factory_total_cost,
-        ),
-        crate::state::Tab::Grok => (
-            state.grok_quota.as_ref(),
-            &state.grok_sessions,
-            &state.grok_records,
-            state.grok_total_calls,
-            state.grok_total_cost,
-        ),
-        crate::state::Tab::Cursor => (
-            None,
-            &state.cursor_sessions,
-            &state.cursor_records,
-            state.cursor_total_calls,
-            state.cursor_total_cost,
-        ),
-        crate::state::Tab::Copilot => (
-            state.copilot_quota.as_ref(),
-            &state.copilot_sessions,
-            &state.copilot_records,
-            state.copilot_total_calls,
-            state.copilot_total_cost,
-        ),
-        crate::state::Tab::Antigravity => (
-            state.antigravity_quota.as_ref(),
-            &state.antigravity_sessions,
-            &state.antigravity_records,
-            state.antigravity_total_calls,
-            state.antigravity_total_cost,
-        ),
-        crate::state::Tab::MimoCode => (
-            state.mimo_code_quota.as_ref(),
-            &state.mimo_code_sessions,
-            &state.mimo_code_records,
-            state.mimo_code_total_calls,
-            state.mimo_code_total_cost,
-        ),
-    };
+    // Active-tab data — single array lookup instead of a 13-way match.
+    let p = state.platform(active);
+    let (quota, sessions, records, total_calls, total_cost) = p.refs();
 
     // Header: a bottom rule in the accent color, with tabs left and the
     // account right-aligned on the row above it.
@@ -140,19 +49,12 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     frame.render_widget(tabs::tab_line(active, &state.available_tabs), header_cols[0]);
     frame.render_widget(tabs::account(email), header_cols[1]);
 
-    let quota_widget = match active {
-        crate::state::Tab::OpenClaw
-        | crate::state::Tab::Hermes
-        | crate::state::Tab::OpenCode
-        | crate::state::Tab::KimiCode
-        | crate::state::Tab::Pi
-        | crate::state::Tab::Factory
-        | crate::state::Tab::Grok
-        | crate::state::Tab::Cursor
-        | crate::state::Tab::Copilot
-        | crate::state::Tab::Antigravity
-        | crate::state::Tab::MimoCode => quota_bar::no_quota_source(),
-        _ => quota_bar::quota_panel(active, quota),
+    // Only Claude and Codex have quota API backends; everything else shows
+    // "no quota data" so users don't stare at a perpetually loading bar.
+    let quota_widget = if active.has_quota_api() {
+        quota_bar::quota_panel(active, quota)
+    } else {
+        quota_bar::no_quota_source()
     };
     frame.render_widget(quota_widget, chunks[1]);
 
@@ -173,7 +75,7 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
 mod tests {
     use super::*;
     use crate::quota::{QuotaInfo, QuotaWindow};
-    use crate::state::{Platform, SessionSummary, UsageRecord};
+    use crate::state::{Platform, SessionSummary, Tab, UsageRecord};
     use chrono::Utc;
     use ratatui::{backend::TestBackend, Terminal};
     use std::time::Instant;
@@ -195,7 +97,8 @@ mod tests {
 
     fn sample_state() -> AppState {
         let mut s = AppState::new();
-        s.claude_quota = Some(QuotaInfo {
+        let claude = s.platform_mut(Tab::ClaudeCode);
+        claude.quota = Some(QuotaInfo {
             tool_name: "Claude Code".into(),
             email: Some("you@mail.com".into()),
             account_id: None,
@@ -216,7 +119,7 @@ mod tests {
             fetched_at: Instant::now(),
             error: None,
         });
-        s.claude_sessions = vec![SessionSummary {
+        claude.sessions = vec![SessionSummary {
             model: "claude-opus-4".into(),
             total_input: 1_200_000,
             total_output: 340_000,
@@ -236,28 +139,25 @@ mod tests {
             cache_creation_tokens: 0,
             cost_usd: 0.0,
         };
-        s.claude_records = vec![
-            // Same project, two distinct conversations + a third project.
+        claude.records = vec![
             mk("ollama-monitor a3f2c1d8", "claude-opus-4", 1200, 340),
             mk("ollama-monitor a3f2c1d8", "claude-opus-4", 8400, 512),
             mk("ollama-monitor 9b4e7f02", "claude-sonnet-4", 2100, 180),
             mk("my-web-app 1c2d3e4f", "claude-opus-4", 5000, 600),
         ].into();
-        s.claude_total_calls = 42;
-        s.claude_total_cost = 12.34;
+        claude.total_calls = 42;
+        claude.total_cost = 12.34;
         s
     }
 
     #[test]
     fn renders_without_panicking() {
         let out = dump(80, 18, sample_state());
-        // Print for manual inspection with `--nocapture`.
         println!("\n{out}");
-        // Header tab, a quota bar, both tables, and the status line are present.
         assert!(out.contains("CLAUDE"));
         assert!(out.contains("82%"));
-        assert!(out.contains("claude-opus-4")); // model table
-        assert!(out.contains("ollama-monitor")); // session table
+        assert!(out.contains("claude-opus-4"));
+        assert!(out.contains("ollama-monitor"));
         assert!(out.contains("sessions"));
         assert!(out.contains("42 calls"));
     }
@@ -267,7 +167,7 @@ mod tests {
         let mut s = sample_state();
         s.active_tab = crate::state::Tab::OpenCode;
         let out = dump(80, 18, s);
-        assert!(out.contains("OPENCODE")); // third tab is present
-        assert!(out.contains("no quota data")); // opencode has no quota source
+        assert!(out.contains("OPENCODE"));
+        assert!(out.contains("no quota data"));
     }
 }

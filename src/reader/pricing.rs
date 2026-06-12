@@ -66,9 +66,17 @@ const OPENAI_PRICING: &[PricingEntry] = &[
 fn find_price<'a>(model: &str, table: &'a [PricingEntry]) -> Option<&'a PricingEntry> {
     // Pick the most specific match: a model like "gpt-4.1-mini" contains both
     // "gpt-4.1" and "gpt-4.1-mini", and the longer (more specific) pattern wins.
+    // To avoid false positives (e.g. "my-gpt-4.1" matching "gpt-4.1"), require
+    // the pattern to appear at a word boundary: preceded by a separator (-, /, :)
+    // or at the start of the model string.
     table
         .iter()
-        .filter(|e| model.contains(e.pattern))
+        .filter(|e| {
+            model.contains(e.pattern) && {
+                let idx = model.find(e.pattern).unwrap_or(0);
+                idx == 0 || model.as_bytes().get(idx - 1).is_some_and(|b| matches!(b, b'-' | b'/' | b':'))
+            }
+        })
         .max_by_key(|e| e.pattern.len())
 }
 

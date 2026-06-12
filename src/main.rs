@@ -4,7 +4,7 @@ use agent_usage_monitor::event::{AppEvent, EventLoop};
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
 use agent_usage_monitor::reader::UsageSource;
-use agent_usage_monitor::state::AppState;
+use agent_usage_monitor::state::{AppState, Platform, Tab};
 use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
 use clap::Parser;
@@ -131,37 +131,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // Quota fetcher: each fetch runs in spawn_blocking so the API call (HTTP
-    // via ureq / curl) does not block the tokio runtime. Per-platform stale
-    // checks avoid re-fetching a healthy quota just because another platform
-    // has a stale or missing result.
+    // via ureq) does not block the tokio runtime. Fetchers are registered in
+    // `quota::fetchers()` — adding a new quota source no longer requires
+    // changing main.rs.
     let quota_state = app_state.clone();
     let quota_handle = task::spawn(async move {
-        // Initial fetch — batch in one spawn_blocking to avoid three concurrent
+        // Initial fetch — batch in one spawn_blocking to avoid concurrent
         // token-spawns at startup.
         {
             let qs = quota_state.clone();
-            let (claude_q, codex_q) = task::spawn_blocking(move || {
-                (quota::claude::fetch_quota(),
-                 quota::codex::fetch_quota())
+            let results: Vec<(Platform, Option<quota::QuotaInfo>)> = task::spawn_blocking(move || {
+                quota::fetchers()
+                    .iter()
+                    .map(|f| (f.platform(), f.fetch()))
+                    .collect()
             })
             .await
             .unwrap_or_default();
 
-            if let Some(q) = claude_q {
-                info!("Claude quota fetched successfully");
-                if let Ok(mut state) = qs.write() {
-                    state.claude_quota = Some(q);
+            for (platform, q) in results {
+                let tab = Tab::from_platform(platform);
+                if let Some(quota) = q {
+                    info!("{:?} quota fetched successfully", platform);
+                    if let Ok(mut state) = qs.write() {
+                        state.platform_mut(tab).quota = Some(quota);
+                    }
+                } else {
+                    warn!("Failed to fetch {:?} quota", platform);
                 }
-            } else {
-                warn!("Failed to fetch Claude quota");
-            }
-            if let Some(q) = codex_q {
-                info!("Codex quota fetched successfully");
-                if let Ok(mut state) = qs.write() {
-                    state.codex_quota = Some(q);
-                }
-            } else {
-                warn!("Failed to fetch Codex quota");
             }
         }
 
@@ -170,31 +167,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
             interval.tick().await;
 
-            let stale = quota_state
-                .try_read()
-                .map(|state| (
-                    state.claude_quota.as_ref().is_none_or(|q| q.is_stale()),
-                    state.codex_quota.as_ref().is_none_or(|q| q.is_stale()),
-                ))
-                .unwrap_or((true, true));
+            for fetcher in quota::fetchers() {
+                let p = fetcher.platform();
+                let tab = match p {
+                    Platform::ClaudeCode => Tab::ClaudeCode,
+                    Platform::Codex => Tab::Codex,
+                    _ => continue,
+                };
+                let stale = quota_state
+                    .try_read()
+                    .map(|state| {
+                        state.platform(tab).quota.as_ref().is_none_or(|q| q.is_stale())
+                    })
+                    .unwrap_or(true);
 
-            if stale.0 {
-                let qs = quota_state.clone();
-                if let Some(q) = task::spawn_blocking(quota::claude::fetch_quota)
-                    .await.unwrap_or_default() {
-                        if let Ok(mut s) = qs.write() {
-                            s.claude_quota = Some(q);
+                if stale {
+                    let qs = quota_state.clone();
+                    let fetcher_platform = p;
+                    if let Some(q) = task::spawn_blocking(move || fetcher.fetch())
+                        .await.unwrap_or_default() {
+                            let tab = match fetcher_platform {
+                                Platform::ClaudeCode => Tab::ClaudeCode,
+                                Platform::Codex => Tab::Codex,
+                                _ => continue,
+                            };
+                            if let Ok(mut s) = qs.write() {
+                                s.platform_mut(tab).quota = Some(q);
+                            }
                         }
-                    }
-            }
-            if stale.1 {
-                let qs = quota_state.clone();
-                if let Some(q) = task::spawn_blocking(quota::codex::fetch_quota)
-                    .await.unwrap_or_default() {
-                        if let Ok(mut s) = qs.write() {
-                            s.codex_quota = Some(q);
-                        }
-                    }
+                }
             }
         }
     });
