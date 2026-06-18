@@ -31,3 +31,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 toml = "0.8"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+anyhow = "1"
