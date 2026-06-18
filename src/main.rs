@@ -3,11 +3,11 @@ use agent_usage_monitor::config::{self, Config};
 use agent_usage_monitor::event::{AppEvent, EventLoop};
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
-use agent_usage_monitor::reader::UsageSource;
 use agent_usage_monitor::state::{AppState, Platform, Tab};
 use agent_usage_monitor::stats;
 use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
+use agent_usage_monitor::watcher::{self, WatcherMessage};
 use clap::Parser;
 use crossterm::event::KeyCode;
 use std::io::IsTerminal;
@@ -62,9 +62,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // CLI `Option` paths override config; see `platforms::resolve_paths`.
     let agent_paths = platforms::resolve_paths(&args, &config);
-    // Clamp to at least 1s: tokio::time::interval panics on a zero period, so
-    // `--refresh 0` (or refresh = 0 in config) would crash the reader tasks.
-    let refresh = args.refresh.unwrap_or(config.refresh).max(1);
+    // Reader refresh is now FS-driven (see watcher module); the 30s
+    // fallback below replaces the previous `tokio::time::interval` loop.
 
     for entry in platforms::entries() {
         info!(
@@ -73,86 +72,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             agent_paths.path_for(entry.tab)
         );
     }
-    info!("Refresh interval: {} seconds", refresh);
-
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
     app_state
         .write()
         .unwrap()
         .detect_available_tabs(&agent_paths);
 
-    // Reader tasks: one per registered platform, driven uniformly via UsageSource.
-    let sources: Vec<Arc<std::sync::Mutex<Box<dyn UsageSource>>>> = platforms::entries()
-        .iter()
-        .map(|entry| {
-            let path = agent_paths.path_for(entry.tab);
-            Arc::new(std::sync::Mutex::new(entry.build_reader(path)))
-        })
-        .collect();
-    let mut reader_handles = Vec::new();
-    for source in &sources {
-        let source = source.clone();
-        let reader_state = app_state.clone();
-        let refresh_interval = refresh;
-        let platform = source
-            .lock()
-            .unwrap_or_else(|e| {
-                warn!(
-                    "{:?}: reader mutex poisoned, recovering",
-                    e.get_ref().platform()
-                );
-                e.into_inner()
-            })
-            .platform();
-        reader_handles.push(task::spawn(async move {
-            // Initial scan
-            let s = source.clone();
-            let initial = task::spawn_blocking(move || {
-                s.lock()
-                    .unwrap_or_else(|e| {
-                        warn!(
-                            "{:?}: reader mutex poisoned during scan_all, recovering",
-                            e.get_ref().platform()
-                        );
-                        e.into_inner()
-                    })
-                    .scan_all()
-            })
-            .await
-            .unwrap_or_default();
-            info!("{:?}: Found {} initial records", platform, initial.len());
-            if !initial.is_empty()
-                && let Ok(mut state) = reader_state.write()
-            {
-                state.add_records(platform, initial);
-            }
+    // Reader task: FS-driven via the watcher module, with a 30s fallback
+    // poll as a safety net for edge cases the watcher misses (atomic
+    // rename, attribute-only writes, FS-event loss across reload).
+    let reader_handle = task::spawn({
+        let agent_paths = agent_paths.clone();
+        let app_state = app_state.clone();
+        async move {
+            let (_platform_watchers, mut watcher_rx) =
+                watcher::start_watchers(&agent_paths);
+            let mut fallback = tokio::time::interval(Duration::from_secs(30));
+            fallback.tick().await; // discard immediate first tick
 
-            let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
             loop {
-                interval.tick().await;
-                let s = source.clone();
-                let new_records = task::spawn_blocking(move || {
-                    s.lock()
-                        .unwrap_or_else(|e| {
-                            warn!(
-                                "{:?}: reader mutex poisoned during poll_delta, recovering",
-                                e.get_ref().platform()
-                            );
-                            e.into_inner()
-                        })
-                        .poll_delta()
-                })
-                .await
-                .unwrap_or_default();
-                if !new_records.is_empty() {
-                    info!("{:?}: Found {} new records", platform, new_records.len());
-                    if let Ok(mut state) = reader_state.write() {
-                        state.add_records(platform, new_records);
+                tokio::select! {
+                    Some(msg) = watcher_rx.recv() => {
+                        let platform_filter: Option<Platform> = match &msg {
+                            WatcherMessage::Event { platform, .. } => Some(*platform),
+                            WatcherMessage::FallbackTick => None,
+                        };
+                        for entry in platforms::entries() {
+                            if let Some(p) = platform_filter {
+                                if entry.platform != p { continue; }
+                            }
+                            let path = agent_paths.path_for(entry.tab);
+                            if !path.exists() { continue; }
+                            let mut reader = entry.build_reader(path);
+                            let platform = entry.platform;
+                            let app_state = app_state.clone();
+                            task::spawn_blocking(move || {
+                                let records = reader.poll_delta();
+                                if !records.is_empty() {
+                                    info!("{:?}: Found {} new records", platform, records.len());
+                                    if let Ok(mut state) = app_state.write() {
+                                        state.add_records(platform, records);
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    _ = fallback.tick() => {
+                        for entry in platforms::entries() {
+                            let path = agent_paths.path_for(entry.tab);
+                            if !path.exists() { continue; }
+                            let mut reader = entry.build_reader(path);
+                            let platform = entry.platform;
+                            let app_state = app_state.clone();
+                            task::spawn_blocking(move || {
+                                let records = reader.poll_delta();
+                                if !records.is_empty() {
+                                    info!("{:?}: Found {} new records", platform, records.len());
+                                    if let Ok(mut state) = app_state.write() {
+                                        state.add_records(platform, records);
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
             }
-        }));
-    }
+        }
+    });
 
     // Quota fetcher: each fetch runs in spawn_blocking so the API call (HTTP
     // via ureq) does not block the tokio runtime. Fetchers are registered in
@@ -241,9 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     tui_handle.await??;
-    for handle in &reader_handles {
-        handle.abort();
-    }
+    reader_handle.abort();
     quota_handle.abort();
 
     Ok(())
