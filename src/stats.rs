@@ -9,7 +9,7 @@ use crate::state::UsageRecord;
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 #[derive(Serialize)]
@@ -96,6 +96,30 @@ pub struct Filters {
     pub platforms: Option<std::collections::BTreeSet<String>>,
     pub since: Option<NaiveDate>,
     pub until: Option<NaiveDate>,
+}
+
+impl Filters {
+    pub fn matches_platform(&self, key: &str) -> bool {
+        match &self.platforms {
+            None => true,
+            Some(set) => set.contains(key),
+        }
+    }
+
+    pub fn matches_date(&self, ts: DateTime<Utc>) -> bool {
+        let d = ts.date_naive();
+        if let Some(s) = self.since {
+            if d < s {
+                return false;
+            }
+        }
+        if let Some(u) = self.until {
+            if d > u {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 pub struct CollectOptions {
@@ -254,5 +278,39 @@ mod tests {
         let mut models = s1.models.clone();
         models.sort();
         assert_eq!(models, vec!["claude-opus-4", "claude-sonnet-4"]);
+    }
+    #[test]
+    fn filters_matches_platform_none_accepts_all() {
+        let f = Filters::default();
+        assert!(f.matches_platform("claude_code"));
+        assert!(f.matches_platform("codex"));
+    }
+
+    #[test]
+    fn filters_matches_platform_set_filters_correctly() {
+        let f = Filters {
+            platforms: Some(BTreeSet::from(["claude_code".to_string()])),
+            ..Default::default()
+        };
+        assert!(f.matches_platform("claude_code"));
+        assert!(!f.matches_platform("codex"));
+    }
+
+    #[test]
+    fn filters_matches_date_handles_since_until() {
+        use chrono::TimeZone;
+        let f = Filters {
+            since: NaiveDate::from_ymd_opt(2026, 6, 15),
+            until: NaiveDate::from_ymd_opt(2026, 6, 20),
+            ..Default::default()
+        };
+        let day_14 = Utc.with_ymd_and_hms(2026, 6, 14, 12, 0, 0).unwrap();
+        let day_15 = Utc.with_ymd_and_hms(2026, 6, 15, 12, 0, 0).unwrap();
+        let day_20 = Utc.with_ymd_and_hms(2026, 6, 20, 12, 0, 0).unwrap();
+        let day_21 = Utc.with_ymd_and_hms(2026, 6, 21, 12, 0, 0).unwrap();
+        assert!(!f.matches_date(day_14));
+        assert!(f.matches_date(day_15));
+        assert!(f.matches_date(day_20));
+        assert!(!f.matches_date(day_21));
     }
 }
