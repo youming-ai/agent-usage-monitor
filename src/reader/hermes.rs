@@ -30,6 +30,7 @@ struct SessionRow {
 pub struct HermesReader {
     conn: Option<Connection>,
     last_seen: HashMap<String, SessionTotals>,
+    pub(crate) db_path: PathBuf,
 }
 
 impl HermesReader {
@@ -39,6 +40,7 @@ impl HermesReader {
         Self {
             conn,
             last_seen: HashMap::new(),
+            db_path,
         }
     }
 
@@ -47,6 +49,7 @@ impl HermesReader {
         Self {
             conn: Some(conn),
             last_seen: HashMap::new(),
+            db_path: PathBuf::new(),
         }
     }
 
@@ -180,6 +183,9 @@ impl UsageSource for HermesReader {
     }
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.sync_records()
+    }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.db_path.clone()]
     }
 }
 

@@ -268,6 +268,9 @@ impl UsageSource for CursorReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_all_inner(false)
     }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.data_dir.clone()]
+    }
 }
 
 fn transcript_meta_for(path: &Path, models: &HashMap<String, String>) -> TranscriptTurnState {

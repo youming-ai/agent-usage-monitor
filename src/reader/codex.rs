@@ -28,7 +28,7 @@ impl FileState {
 }
 
 pub struct CodexReader {
-    sessions_dir: PathBuf,
+    pub(crate) sessions_dir: PathBuf,
     file_positions: HashMap<PathBuf, u64>,
     file_state: HashMap<PathBuf, FileState>,
 }

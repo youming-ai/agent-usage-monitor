@@ -181,6 +181,9 @@ impl UsageSource for GrokReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_files(false)
     }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.sessions_dir.clone()]
+    }
 }
 
 fn read_summary_meta(updates_path: &Path) -> SessionMeta {

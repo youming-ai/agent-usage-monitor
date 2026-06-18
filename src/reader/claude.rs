@@ -8,7 +8,7 @@ use super::find_recursive;
 use super::jsonl_reader::JsonlReader;
 
 pub struct ClaudeReader {
-    data_dir: PathBuf,
+    pub(crate) data_dir: PathBuf,
     file_positions: HashMap<PathBuf, u64>,
 }
 

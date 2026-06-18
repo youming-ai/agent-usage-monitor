@@ -111,6 +111,9 @@ impl UsageSource for KimiCodeReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.do_poll_delta()
     }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.base_dir.clone()]
+    }
 }
 
 fn lookup_work_dir<'a>(

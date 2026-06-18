@@ -95,6 +95,13 @@ pub trait UsageSource: Send {
     fn platform(&self) -> Platform;
     fn scan_all(&mut self) -> Vec<UsageRecord>;
     fn poll_delta(&mut self) -> Vec<UsageRecord>;
+    /// Directories the file watcher should monitor for this platform.
+    /// Default: empty (no watching). JSONL readers return `[data_dir]`
+    /// (recursive). SQLite readers return `[db_path]` (watched as a file
+    /// via its parent dir by the watcher).
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![]
+    }
 }
 
 impl UsageSource for claude::ClaudeReader {
@@ -107,6 +114,9 @@ impl UsageSource for claude::ClaudeReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         JsonlReader::poll_delta(self)
     }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.data_dir.clone()]
+    }
 }
 
 impl UsageSource for codex::CodexReader {
@@ -118,6 +128,9 @@ impl UsageSource for codex::CodexReader {
     }
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         JsonlReader::poll_delta(self)
+    }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.sessions_dir.clone()]
     }
 }
 

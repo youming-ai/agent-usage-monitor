@@ -136,6 +136,9 @@ impl UsageSource for AntigravityReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_files(false)
     }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.data_dir.clone()]
+    }
 }
 
 fn read_transcript_from_offset(

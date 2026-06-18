@@ -87,6 +87,9 @@ impl UsageSource for OpenClawReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_files(false)
     }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.data_dir.clone()]
+    }
 }
 
 fn parse_openclaw_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {

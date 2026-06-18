@@ -7,10 +7,12 @@ use std::path::PathBuf;
 /// Delegates to the shared `SqliteMessageReader`.
 pub struct MimoCodeReader {
     inner: SqliteMessageReader,
+    pub(crate) db_path: PathBuf,
 }
 
 impl MimoCodeReader {
     pub fn new(data_dir: PathBuf) -> Self {
+        let db_path = data_dir.join("mimocode.db");
         Self {
             inner: SqliteMessageReader::new(
                 data_dir,
@@ -18,6 +20,7 @@ impl MimoCodeReader {
                 Platform::MimoCode,
                 "mimocode",
             ),
+            db_path,
         }
     }
 }
@@ -31,6 +34,9 @@ impl UsageSource for MimoCodeReader {
     }
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.inner.poll_delta()
+    }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.db_path.clone()]
     }
 }
 
@@ -72,6 +78,7 @@ mod tests {
         insert(&conn, "m4", 2000, ASSISTANT_2);
         let mut reader = MimoCodeReader {
             inner: SqliteMessageReader::from_connection(conn, Platform::MimoCode, "mimocode"),
+            db_path: PathBuf::new(),
         };
 
         let records = reader.scan_all();
@@ -98,6 +105,7 @@ mod tests {
         insert(&conn, "m1", 1000, ASSISTANT_1);
         let mut reader = MimoCodeReader {
             inner: SqliteMessageReader::from_connection(conn, Platform::MimoCode, "mimocode"),
+            db_path: PathBuf::new(),
         };
 
         assert_eq!(reader.scan_all().len(), 1);
@@ -133,6 +141,7 @@ mod tests {
         .unwrap();
         let mut reader = MimoCodeReader {
             inner: SqliteMessageReader::from_connection(conn, Platform::MimoCode, "mimocode"),
+            db_path: PathBuf::new(),
         };
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
