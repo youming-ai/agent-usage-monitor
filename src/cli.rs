@@ -4,7 +4,9 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "aum")]
 #[command(version)]
-#[command(about = "Real-time usage monitor for Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI & MiMo Code")]
+#[command(
+    about = "Real-time usage monitor for Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI & MiMo Code"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -100,12 +102,12 @@ pub enum Commands {
         /// Force update even if already on latest version
         #[arg(short, long)]
         force: bool,
-        
+
         /// Show what would be updated without installing
         #[arg(short, long)]
         dry_run: bool,
     },
-    
+
     /// Show or edit configuration
     Config {
         #[command(subcommand)]

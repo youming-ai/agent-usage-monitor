@@ -128,10 +128,9 @@ mod tests {
 
     #[test]
     fn apply_session_line_updates_dir_and_sid() {
-        let v: Value = serde_json::from_str(
-            r#"{"type":"session","id":"abc123","cwd":"/Users/me/project"}"#,
-        )
-        .unwrap();
+        let v: Value =
+            serde_json::from_str(r#"{"type":"session","id":"abc123","cwd":"/Users/me/project"}"#)
+                .unwrap();
         let mut st = SessionFileState::default();
         apply_session_line(&v, &mut st);
         assert_eq!(st.sid, "abc123");
@@ -142,14 +141,12 @@ mod tests {
     fn incomplete_trailing_line_does_not_advance_offset() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
-        let session =
-            r#"{"type":"session","id":"s1","cwd":"/tmp/repo"}"#;
+        let session = r#"{"type":"session","id":"s1","cwd":"/tmp/repo"}"#;
         let partial = r#"{"type":"message","message":{"role":"assistant"}}"#;
         write_jsonl(&path, &format!("{session}\n{partial}"));
 
         let mut st = SessionFileState::default();
-        let (records, offset) =
-            read_jsonl_from_offset(&path, 0, &mut st, count_assistant_messages);
+        let (records, offset) = read_jsonl_from_offset(&path, 0, &mut st, count_assistant_messages);
         assert_eq!(records.len(), 0);
         assert!(offset > 0, "session line should be consumed");
         assert!(offset < fs::metadata(&path).unwrap().len());
@@ -158,8 +155,7 @@ mod tests {
         let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
         f.write_all(b"\n").unwrap();
 
-        let (records, _) =
-            read_jsonl_from_offset(&path, offset, &mut st, count_assistant_messages);
+        let (records, _) = read_jsonl_from_offset(&path, offset, &mut st, count_assistant_messages);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].session, "repo s1");
     }
@@ -176,8 +172,7 @@ mod tests {
         );
 
         let mut st = SessionFileState::default();
-        let (records, _) =
-            read_jsonl_from_offset(&path, 9999, &mut st, count_assistant_messages);
+        let (records, _) = read_jsonl_from_offset(&path, 9999, &mut st, count_assistant_messages);
         assert_eq!(records.len(), 1);
         assert_eq!(st.sid, "s1");
         assert_eq!(st.dir, "repo");

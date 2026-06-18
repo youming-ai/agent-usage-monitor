@@ -1,5 +1,5 @@
-use super::sqlite_message_reader::SqliteMessageReader;
 use super::UsageSource;
+use super::sqlite_message_reader::SqliteMessageReader;
 use crate::state::{Platform, UsageRecord};
 use std::path::PathBuf;
 
@@ -12,7 +12,12 @@ pub struct MimoCodeReader {
 impl MimoCodeReader {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
-            inner: SqliteMessageReader::new(data_dir, "mimocode.db", Platform::MimoCode, "mimocode"),
+            inner: SqliteMessageReader::new(
+                data_dir,
+                "mimocode.db",
+                Platform::MimoCode,
+                "mimocode",
+            ),
         }
     }
 }

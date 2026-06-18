@@ -10,8 +10,8 @@ use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
 use clap::Parser;
 use crossterm::event::KeyCode;
-use std::sync::{Arc, RwLock};
 use std::io::IsTerminal;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::task;
 use tracing::{info, warn};
@@ -22,13 +22,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("warn")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
         )
         .init();
 
     let args = cli::Cli::parse();
-    info!("Starting agent-usage-monitor v{}", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Starting agent-usage-monitor v{}",
+        env!("CARGO_PKG_VERSION")
+    );
 
     // Load configuration
     let config = match config::load_config() {
@@ -92,36 +94,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let source = source.clone();
         let reader_state = app_state.clone();
         let refresh_interval = refresh;
-        let platform = source.lock().unwrap_or_else(|e| {
-            warn!("{:?}: reader mutex poisoned, recovering", e.get_ref().platform());
-            e.into_inner()
-        }).platform();
+        let platform = source
+            .lock()
+            .unwrap_or_else(|e| {
+                warn!(
+                    "{:?}: reader mutex poisoned, recovering",
+                    e.get_ref().platform()
+                );
+                e.into_inner()
+            })
+            .platform();
         reader_handles.push(task::spawn(async move {
             // Initial scan
             let s = source.clone();
             let initial = task::spawn_blocking(move || {
-                s.lock().unwrap_or_else(|e| {
-                    warn!("{:?}: reader mutex poisoned during scan_all, recovering", e.get_ref().platform());
-                    e.into_inner()
-                }).scan_all()
+                s.lock()
+                    .unwrap_or_else(|e| {
+                        warn!(
+                            "{:?}: reader mutex poisoned during scan_all, recovering",
+                            e.get_ref().platform()
+                        );
+                        e.into_inner()
+                    })
+                    .scan_all()
             })
             .await
             .unwrap_or_default();
             info!("{:?}: Found {} initial records", platform, initial.len());
             if !initial.is_empty()
-                && let Ok(mut state) = reader_state.write() {
-                    state.add_records(platform, initial);
-                }
+                && let Ok(mut state) = reader_state.write()
+            {
+                state.add_records(platform, initial);
+            }
 
             let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
             loop {
                 interval.tick().await;
                 let s = source.clone();
                 let new_records = task::spawn_blocking(move || {
-                    s.lock().unwrap_or_else(|e| {
-                        warn!("{:?}: reader mutex poisoned during poll_delta, recovering", e.get_ref().platform());
-                        e.into_inner()
-                    }).poll_delta()
+                    s.lock()
+                        .unwrap_or_else(|e| {
+                            warn!(
+                                "{:?}: reader mutex poisoned during poll_delta, recovering",
+                                e.get_ref().platform()
+                            );
+                            e.into_inner()
+                        })
+                        .poll_delta()
                 })
                 .await
                 .unwrap_or_default();
@@ -145,14 +164,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // token-spawns at startup.
         {
             let qs = quota_state.clone();
-            let results: Vec<(Platform, Option<quota::QuotaInfo>)> = task::spawn_blocking(move || {
-                quota::fetchers()
-                    .iter()
-                    .map(|f| (f.platform(), f.fetch()))
-                    .collect()
-            })
-            .await
-            .unwrap_or_default();
+            let results: Vec<(Platform, Option<quota::QuotaInfo>)> =
+                task::spawn_blocking(move || {
+                    quota::fetchers()
+                        .iter()
+                        .map(|f| (f.platform(), f.fetch()))
+                        .collect()
+                })
+                .await
+                .unwrap_or_default();
 
             for (platform, q) in results {
                 let tab = Tab::from_platform(platform);
@@ -182,7 +202,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let stale = quota_state
                     .try_read()
                     .map(|state| {
-                        state.platform(tab).quota.as_ref().is_none_or(|q| q.is_stale())
+                        state
+                            .platform(tab)
+                            .quota
+                            .as_ref()
+                            .is_none_or(|q| q.is_stale())
                     })
                     .unwrap_or(true);
 
@@ -190,16 +214,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     let qs = quota_state.clone();
                     let fetcher_platform = p;
                     if let Some(q) = task::spawn_blocking(move || fetcher.fetch())
-                        .await.unwrap_or_default() {
-                            let tab = match fetcher_platform {
-                                Platform::ClaudeCode => Tab::ClaudeCode,
-                                Platform::Codex => Tab::Codex,
-                                _ => continue,
-                            };
-                            if let Ok(mut s) = qs.write() {
-                                s.platform_mut(tab).quota = Some(q);
-                            }
+                        .await
+                        .unwrap_or_default()
+                    {
+                        let tab = match fetcher_platform {
+                            Platform::ClaudeCode => Tab::ClaudeCode,
+                            Platform::Codex => Tab::Codex,
+                            _ => continue,
+                        };
+                        if let Ok(mut s) = qs.write() {
+                            s.platform_mut(tab).quota = Some(q);
                         }
+                    }
                 }
             }
         }
@@ -223,7 +249,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-fn handle_update(force: bool, dry_run: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn handle_update(
+    force: bool,
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("agent-usage-monitor (aum) updater");
     println!("=================================");
     println!("Current version: v{}", updater::current_version());
@@ -253,7 +282,9 @@ fn handle_update(force: bool, dry_run: bool) -> Result<(), Box<dyn std::error::E
     }
 }
 
-fn handle_config(action: Option<cli::ConfigAction>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn handle_config(
+    action: Option<cli::ConfigAction>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match action {
         Some(cli::ConfigAction::Show) => {
             let config = config::load_config().unwrap_or_default();
@@ -287,7 +318,7 @@ fn handle_config(action: Option<cli::ConfigAction>) -> Result<(), Box<dyn std::e
             println!("{}", content);
         }
     }
-    
+
     Ok(())
 }
 

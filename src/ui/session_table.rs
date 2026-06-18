@@ -17,16 +17,15 @@ struct SessionAgg {
 pub fn session_table(records: &VecDeque<UsageRecord>) -> Table<'static> {
     let mut by_session: HashMap<&str, SessionAgg> = HashMap::new();
     for r in records {
-        let agg = by_session
-            .entry(r.session.as_str())
-            .or_insert(SessionAgg { tokens: 0, requests: 0 });
+        let agg = by_session.entry(r.session.as_str()).or_insert(SessionAgg {
+            tokens: 0,
+            requests: 0,
+        });
         // All billable token categories. cache_read and cache_creation are
         // distinct, additive token types (not duplicates of each other), so
         // both count toward the session's true usage total.
-        agg.tokens += r.input_tokens
-            + r.output_tokens
-            + r.cache_read_tokens
-            + r.cache_creation_tokens;
+        agg.tokens +=
+            r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens;
         agg.requests += 1;
     }
 

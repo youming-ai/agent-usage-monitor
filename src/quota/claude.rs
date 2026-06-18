@@ -16,7 +16,12 @@ fn read_oauth_credentials() -> Option<Value> {
 /// Read Claude OAuth credentials from the macOS Keychain.
 fn read_keychain_credentials() -> Option<Value> {
     let output = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
         .output()
         .ok()?;
 

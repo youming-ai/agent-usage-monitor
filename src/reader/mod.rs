@@ -1,16 +1,16 @@
 pub mod antigravity;
 pub mod claude;
+pub mod codex;
 pub mod copilot;
 pub mod cursor;
-pub mod codex;
 pub mod factory;
 pub mod grok;
 pub mod hermes;
 pub mod jsonl_reader;
 pub mod kimi_code;
 pub mod mimo_code;
-pub mod opencode;
 pub mod openclaw;
+pub mod opencode;
 pub mod pi;
 pub mod pricing;
 pub(crate) mod session_jsonl;
@@ -33,7 +33,8 @@ pub(crate) fn basename(path: &str) -> String {
 
 /// True when `path` has an ancestor directory named `name`.
 pub(crate) fn is_under_dir_named(path: &Path, name: &str) -> bool {
-    path.ancestors().any(|a| a.file_name().is_some_and(|n| n == name))
+    path.ancestors()
+        .any(|a| a.file_name().is_some_and(|n| n == name))
 }
 
 /// True when the file stem matches `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
@@ -119,10 +120,6 @@ impl UsageSource for codex::CodexReader {
         JsonlReader::poll_delta(self)
     }
 }
-
-
-
-
 
 #[cfg(test)]
 mod tests {

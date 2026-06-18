@@ -196,7 +196,7 @@ pub fn config_file_path() -> PathBuf {
 /// Load configuration from file, or create default if not exists
 pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     let config_path = config_file_path();
-    
+
     if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)?;
         let config: Config = toml::from_str(&content)?;
@@ -212,15 +212,15 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
 /// Save configuration to file
 pub fn save_config(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = config_file_path();
-    
+
     // Create parent directory if it doesn't exist
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    
+
     let content = toml::to_string_pretty(config)?;
     std::fs::write(&config_path, content)?;
-    
+
     Ok(())
 }
 

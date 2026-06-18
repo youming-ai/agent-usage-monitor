@@ -55,7 +55,7 @@ impl JsonlReader for CodexReader {
     fn file_positions(&mut self) -> &mut HashMap<PathBuf, u64> {
         &mut self.file_positions
     }
-    
+
     fn find_files(&self) -> Vec<PathBuf> {
         let mut files = Vec::new();
         if self.sessions_dir.exists() {
@@ -68,12 +68,12 @@ impl JsonlReader for CodexReader {
         }
         files
     }
-    
+
     fn parse_line(&self, _line: &str) -> Option<UsageRecord> {
         // Codex needs special handling for file state, so we override scan_all and poll_delta
         None
     }
-    
+
     fn scan_all(&mut self) -> Vec<UsageRecord> {
         let files = self.find_files();
         let mut records = Vec::new();
@@ -91,22 +91,28 @@ impl JsonlReader for CodexReader {
         records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
         records
     }
-    
+
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         let files = self.find_files();
-        
+
         let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
-        self.file_positions.retain(|path, _| current_files.contains(path));
-        self.file_state.retain(|path, _| current_files.contains(path));
-        
+        self.file_positions
+            .retain(|path, _| current_files.contains(path));
+        self.file_state
+            .retain(|path, _| current_files.contains(path));
+
         let mut new_records = Vec::new();
         for file in files {
             let offset = self.file_positions.get(&file).copied().unwrap_or(0);
-            let mut st = self.file_state.get(&file).cloned().unwrap_or_else(|| FileState {
-                model: "unknown".to_string(),
-                dir: "codex".to_string(),
-                sid: extract_codex_project(&file),
-            });
+            let mut st = self
+                .file_state
+                .get(&file)
+                .cloned()
+                .unwrap_or_else(|| FileState {
+                    model: "unknown".to_string(),
+                    dir: "codex".to_string(),
+                    sid: extract_codex_project(&file),
+                });
 
             let (records, bytes_read) = read_codex_from_offset(&file, offset, &mut st);
             self.file_positions.insert(file.clone(), bytes_read);
@@ -182,10 +188,18 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
     }
 
     if event_type == "turn_context" {
-        if let Some(m) = v.get("payload").and_then(|p| p.get("model")).and_then(|m| m.as_str()) {
+        if let Some(m) = v
+            .get("payload")
+            .and_then(|p| p.get("model"))
+            .and_then(|m| m.as_str())
+        {
             st.model = m.to_string();
         }
-        if let Some(cwd) = v.get("payload").and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
+        if let Some(cwd) = v
+            .get("payload")
+            .and_then(|p| p.get("cwd"))
+            .and_then(|c| c.as_str())
+        {
             st.dir = crate::reader::basename(cwd);
         }
         return None;
@@ -311,12 +325,18 @@ mod tests {
         write_rollout(
             &sessions,
             "rollout-1.jsonl",
-            &[turn_context("gpt-5.4"), token_count("2026-05-29T10:01:00Z", 100, 50)],
+            &[
+                turn_context("gpt-5.4"),
+                token_count("2026-05-29T10:01:00Z", 100, 50),
+            ],
         );
 
         let mut reader = reader_for(&sessions);
         assert_eq!(reader.scan_all().len(), 1);
-        assert!(reader.poll_delta().is_empty(), "unchanged file re-emitted records");
+        assert!(
+            reader.poll_delta().is_empty(),
+            "unchanged file re-emitted records"
+        );
     }
 
     #[test]
@@ -327,7 +347,11 @@ mod tests {
 
         // Two sessions with different models, each only a turn_context so far.
         let file_a = write_rollout(&sessions, "rollout-a.jsonl", &[turn_context("gpt-5.4")]);
-        write_rollout(&sessions, "rollout-b.jsonl", &[turn_context("gpt-5.3-codex")]);
+        write_rollout(
+            &sessions,
+            "rollout-b.jsonl",
+            &[turn_context("gpt-5.3-codex")],
+        );
 
         let mut reader = reader_for(&sessions);
         assert!(reader.scan_all().is_empty(), "no token_count yet");
@@ -340,6 +364,9 @@ mod tests {
 
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
-        assert_eq!(delta[0].model, "gpt-5.4", "model leaked from another session");
+        assert_eq!(
+            delta[0].model, "gpt-5.4",
+            "model leaked from another session"
+        );
     }
 }

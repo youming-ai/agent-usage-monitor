@@ -91,10 +91,12 @@ fn format_window_value(label: &str, window: &Value) -> Option<QuotaWindow> {
     // Codex API returns used_percent as percentage (0-100), convert to remaining (0-1)
     let used_percent = window.get("used_percent").and_then(|v| v.as_f64())?;
     let remaining = (100.0 - used_percent) / 100.0;
-    
-    let resets_at = window
-        .get("reset_at")
-        .and_then(|v| v.as_str().map(String::from).or_else(|| v.as_i64().map(|n| n.to_string())));
+
+    let resets_at = window.get("reset_at").and_then(|v| {
+        v.as_str()
+            .map(String::from)
+            .or_else(|| v.as_i64().map(|n| n.to_string()))
+    });
     let reset_in = window
         .get("reset_after_seconds")
         .and_then(|v| v.as_i64())
@@ -110,7 +112,11 @@ fn format_window_value(label: &str, window: &Value) -> Option<QuotaWindow> {
 }
 
 /// Parse usage response into QuotaInfo
-fn parse_usage_response(data: &Value, email: Option<String>, account_id: String) -> Option<QuotaInfo> {
+fn parse_usage_response(
+    data: &Value,
+    email: Option<String>,
+    account_id: String,
+) -> Option<QuotaInfo> {
     let mut windows = Vec::new();
 
     // Prefer email from API response over JWT
@@ -174,10 +180,12 @@ fn parse_usage_response(data: &Value, email: Option<String>, account_id: String)
 
 /// Format window label from limit_window_seconds
 fn format_window_label(window: &Value) -> Option<String> {
-    let seconds = window.get("limit_window_seconds").and_then(|v| v.as_i64())?;
+    let seconds = window
+        .get("limit_window_seconds")
+        .and_then(|v| v.as_i64())?;
     let hours = seconds / 3600;
     let days = seconds / 86400;
-    
+
     if days >= 1 {
         Some(format!("{days}d"))
     } else if hours >= 1 {

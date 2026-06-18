@@ -15,7 +15,11 @@ fn aum_bin() -> Command {
 #[test]
 fn stats_default_produces_valid_json_with_all_platforms() {
     let output = aum_bin().arg("--compact").output().expect("run aum stats");
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
     assert!(json.get("generated_at").is_some());
     assert!(json.get("totals").is_some());
@@ -55,7 +59,10 @@ fn stats_json_keys_are_stably_ordered() {
     let g = s.find("\"generated_at\"").expect("generated_at present");
     let p = s.find("\"platforms\"").expect("platforms present");
     let t = s.find("\"totals\"").expect("totals present");
-    assert!(g < p && p < t, "top-level keys must be ordered: generated_at < platforms < totals");
+    assert!(
+        g < p && p < t,
+        "top-level keys must be ordered: generated_at < platforms < totals"
+    );
 }
 
 #[test]
@@ -80,7 +87,10 @@ fn stats_unknown_platform_errors() {
         .args(["--platform", "nonexistent_agent", "--compact"])
         .output()
         .expect("run aum stats");
-    assert!(!output.status.success(), "unknown platform should exit non-zero");
+    assert!(
+        !output.status.success(),
+        "unknown platform should exit non-zero"
+    );
 }
 
 #[test]
@@ -89,5 +99,8 @@ fn stats_invalid_date_errors() {
         .args(["--since", "not-a-date", "--compact"])
         .output()
         .expect("run aum stats");
-    assert!(!output.status.success(), "invalid date should exit non-zero");
+    assert!(
+        !output.status.success(),
+        "invalid date should exit non-zero"
+    );
 }

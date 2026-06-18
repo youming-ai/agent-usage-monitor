@@ -1,5 +1,5 @@
 use crate::reader::pricing;
-use crate::reader::{basename, find_recursive, session_label, UsageSource};
+use crate::reader::{UsageSource, basename, find_recursive, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -85,8 +85,7 @@ impl CopilotReader {
                     session_id,
                     ..Default::default()
                 });
-            let (entries, bytes_read) =
-                read_events_from_offset(&file, offset, st);
+            let (entries, bytes_read) = read_events_from_offset(&file, offset, st);
             self.file_positions.insert(file, bytes_read);
             records.extend(entries);
         }
@@ -390,7 +389,10 @@ mod tests {
         let mut reader = CopilotReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].timestamp.to_rfc3339(), "2024-06-01T10:00:05+00:00");
+        assert_eq!(
+            records[0].timestamp.to_rfc3339(),
+            "2024-06-01T10:00:05+00:00"
+        );
     }
 
     #[test]
@@ -414,7 +416,10 @@ mod tests {
             .join("session-state")
             .join("append-test")
             .join("events.jsonl");
-        let mut f = fs::OpenOptions::new().append(true).open(&events_path).unwrap();
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(&events_path)
+            .unwrap();
         writeln!(
             f,
             r#"{{"type":"tool.execution_complete","data":{{"toolName":"write","success":true}},"id":"3","timestamp":"2026-06-01T10:01:00Z"}}"#

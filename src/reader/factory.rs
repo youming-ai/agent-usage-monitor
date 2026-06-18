@@ -4,10 +4,10 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use super::UsageSource;
 use super::find_recursive;
 use super::is_uuid_jsonl;
-use super::session_jsonl::{read_jsonl_from_offset, SessionFileState};
-use super::UsageSource;
+use super::session_jsonl::{SessionFileState, read_jsonl_from_offset};
 
 pub struct FactoryReader {
     data_dir: PathBuf,

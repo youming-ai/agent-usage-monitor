@@ -1,5 +1,5 @@
 use crate::reader::pricing;
-use crate::reader::{basename, find_recursive, session_label, UsageSource};
+use crate::reader::{UsageSource, basename, find_recursive, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
@@ -277,15 +277,12 @@ fn parse_updates_line(
     let prompt_id = prompt_meta.get("promptId")?.as_str()?;
     let total_tokens = prompt_meta.get("totalTokens")?.as_u64()?;
 
-    let timestamp = v
-        .get("timestamp")
-        .and_then(|t| t.as_i64())
-        .or_else(|| {
-            prompt_meta
-                .get("agentTimestampMs")
-                .and_then(|t| t.as_i64())
-                .map(|ms| ms / 1000)
-        })?;
+    let timestamp = v.get("timestamp").and_then(|t| t.as_i64()).or_else(|| {
+        prompt_meta
+            .get("agentTimestampMs")
+            .and_then(|t| t.as_i64())
+            .map(|ms| ms / 1000)
+    })?;
 
     tracker.observe_line(prompt_id, total_tokens, timestamp, meta)
 }
@@ -304,10 +301,7 @@ mod tests {
         model: &str,
         updates: &[&str],
     ) -> PathBuf {
-        let dir = root
-            .join("sessions")
-            .join(cwd_segment)
-            .join(session_id);
+        let dir = root.join("sessions").join(cwd_segment).join(session_id);
         fs::create_dir_all(&dir).unwrap();
 
         let summary = format!(
@@ -363,13 +357,18 @@ mod tests {
             "019ea524-5702-7421-a300-ead404f0ee6f",
             "/Users/me/project",
             "grok-composer-2.5-fast",
-            &[r#"{"timestamp":1000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk"},"_meta":{"promptId":"prompt-a","totalTokens":1000,"agentTimestampMs":1000000}}}"#],
+            &[
+                r#"{"timestamp":1000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk"},"_meta":{"promptId":"prompt-a","totalTokens":1000,"agentTimestampMs":1000000}}}"#,
+            ],
         );
 
         let mut reader = GrokReader::new(dir.path().to_path_buf());
         assert!(reader.scan_all().is_empty(), "single in-progress prompt");
 
-        let mut f = fs::OpenOptions::new().append(true).open(&updates_path).unwrap();
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(&updates_path)
+            .unwrap();
         writeln!(
             f,
             r#"{{"timestamp":1001,"method":"session/update","params":{{"sessionId":"s1","update":{{"sessionUpdate":"tool_call"}},"_meta":{{"promptId":"prompt-b","totalTokens":1800,"agentTimestampMs":1001000}}}}}}"#

@@ -122,16 +122,16 @@ fn fetch_latest_release() -> Result<Release, String> {
 /// live binary (the kernel keeps the old inode alive until exit), and free of
 /// the EXDEV failure a direct rename from the OS tempdir would hit.
 fn download_and_install(url: &str, target: &Path) -> Result<(), String> {
-    let tmp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp directory: {e}"))?;
+    let tmp_dir =
+        tempfile::tempdir().map_err(|e| format!("Failed to create temp directory: {e}"))?;
     let archive_path = tmp_dir.path().join("update.tar.gz");
 
     println!("Downloading update...");
-    download_to_path(url, &archive_path)
-        .map_err(|e| format!("Download failed: {e}"))?;
+    download_to_path(url, &archive_path).map_err(|e| format!("Download failed: {e}"))?;
 
     println!("Extracting...");
-    let archive_file = std::fs::File::open(&archive_path)
-        .map_err(|e| format!("Failed to open archive: {e}"))?;
+    let archive_file =
+        std::fs::File::open(&archive_path).map_err(|e| format!("Failed to open archive: {e}"))?;
     let decoder = GzDecoder::new(archive_file);
     let mut archive = tar::Archive::new(decoder);
     archive

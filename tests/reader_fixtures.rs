@@ -2,14 +2,14 @@
 //! regressions when upstream agents change their log formats.
 
 use agent_usage_monitor::platforms;
+use agent_usage_monitor::reader::UsageSource;
 use agent_usage_monitor::reader::antigravity::AntigravityReader;
 use agent_usage_monitor::reader::claude::ClaudeReader;
-use agent_usage_monitor::reader::copilot::CopilotReader;
 use agent_usage_monitor::reader::codex::CodexReader;
+use agent_usage_monitor::reader::copilot::CopilotReader;
 use agent_usage_monitor::reader::cursor::CursorReader;
 use agent_usage_monitor::reader::factory::FactoryReader;
 use agent_usage_monitor::reader::grok::GrokReader;
-use agent_usage_monitor::reader::UsageSource;
 use agent_usage_monitor::state::{Platform, Tab};
 use std::path::PathBuf;
 

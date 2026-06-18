@@ -1,5 +1,5 @@
 use crate::reader::pricing;
-use crate::reader::{basename, find_recursive, session_label, UsageSource};
+use crate::reader::{UsageSource, basename, find_recursive, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -113,8 +113,7 @@ impl AntigravityReader {
             if st.conversation_id.is_empty() {
                 Self::derive_session_info(&file, st);
             }
-            let (entries, bytes_read) =
-                read_transcript_from_offset(&file, offset, st);
+            let (entries, bytes_read) = read_transcript_from_offset(&file, offset, st);
             self.file_positions.insert(file, bytes_read);
             records.extend(entries);
         }

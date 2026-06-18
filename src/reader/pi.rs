@@ -4,9 +4,9 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use super::find_recursive;
-use super::session_jsonl::{read_jsonl_from_offset, SessionFileState};
 use super::UsageSource;
+use super::find_recursive;
+use super::session_jsonl::{SessionFileState, read_jsonl_from_offset};
 
 pub struct PiReader {
     data_dir: PathBuf,
@@ -103,10 +103,7 @@ fn parse_pi_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
 
     let input = usage.get("input")?.as_u64()?;
     let output = usage.get("output")?.as_u64().unwrap_or(0);
-    let cache_read = usage
-        .get("cacheRead")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let cache_read = usage.get("cacheRead").and_then(|v| v.as_u64()).unwrap_or(0);
     let cache_write = usage
         .get("cacheWrite")
         .and_then(|v| v.as_u64())

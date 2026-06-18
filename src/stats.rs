@@ -11,7 +11,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
 pub struct StatsReport {
@@ -121,15 +121,15 @@ impl Filters {
 
     pub fn matches_date(&self, ts: DateTime<Utc>) -> bool {
         let d = ts.date_naive();
-        if let Some(s) = self.since {
-            if d < s {
-                return false;
-            }
+        if let Some(s) = self.since
+            && d < s
+        {
+            return false;
         }
-        if let Some(u) = self.until {
-            if d > u {
-                return false;
-            }
+        if let Some(u) = self.until
+            && d > u
+        {
+            return false;
         }
         true
     }
@@ -171,15 +171,16 @@ pub fn resolve_platform_filter(raw: &[String]) -> Result<BTreeSet<String>> {
         for entry in platforms::entries() {
             let tab_name = format!("{:?}", entry.tab);
             let canonical = platform_canonical_key(entry.tab);
-            if canonical == normalized || tab_name == normalized || entry.log_name == normalized
-            {
+            if canonical == normalized || tab_name == normalized || entry.log_name == normalized {
                 set.insert(canonical);
                 matched = true;
                 break;
             }
         }
         if !matched {
-            anyhow::bail!("unknown platform: `{normalized}`; run `aum config set` to list valid keys");
+            anyhow::bail!(
+                "unknown platform: `{normalized}`; run `aum config set` to list valid keys"
+            );
         }
     }
     Ok(set)
@@ -191,7 +192,7 @@ pub struct CollectOptions {
 }
 
 pub fn build_platform_report(
-    path: &PathBuf,
+    path: &Path,
     available: bool,
     records: Vec<UsageRecord>,
     quota: Option<QuotaView>,
@@ -217,10 +218,12 @@ pub fn build_platform_report(
         m.cache_read_tokens += r.cache_read_tokens;
         m.cache_creation_tokens += r.cache_creation_tokens;
 
-        let s = session_map.entry(r.session.clone()).or_insert_with(|| SessionSummaryView {
-            session: r.session.clone(),
-            ..Default::default()
-        });
+        let s = session_map
+            .entry(r.session.clone())
+            .or_insert_with(|| SessionSummaryView {
+                session: r.session.clone(),
+                ..Default::default()
+            });
         s.calls += 1;
         s.cost_usd += r.cost_usd;
         s.input_tokens += r.input_tokens;
@@ -251,7 +254,7 @@ pub fn build_platform_report(
 
     PlatformReport {
         available,
-        data_path: path.clone(),
+        data_path: path.to_path_buf(),
         totals,
         models,
         sessions: session_map.into_values().collect(),
@@ -313,9 +316,7 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
             .filter(|r| opts.filters.matches_date(r.timestamp))
             .collect();
         let available = path.exists();
-        let quota = quota_views
-            .as_ref()
-            .and_then(|m| m.get(&platform).cloned());
+        let quota = quota_views.as_ref().and_then(|m| m.get(&platform).cloned());
         let pr = build_platform_report(&path, available, filtered, quota);
         if pr.available {
             report.totals.platforms_with_data += 1;
@@ -343,7 +344,14 @@ mod tests {
     use crate::state::Platform;
     use chrono::TimeZone;
 
-    fn rec(model: &str, session: &str, day: u32, input: u64, output: u64, cost: f64) -> UsageRecord {
+    fn rec(
+        model: &str,
+        session: &str,
+        day: u32,
+        input: u64,
+        output: u64,
+        cost: f64,
+    ) -> UsageRecord {
         UsageRecord {
             timestamp: Utc.with_ymd_and_hms(2026, 6, day, 12, 0, 0).unwrap(),
             platform: Platform::ClaudeCode,
@@ -479,11 +487,9 @@ mod tests {
 
     #[test]
     fn resolve_platform_filter_dedupes() {
-        let result = resolve_platform_filter(&[
-            "claude_code".to_string(),
-            "ClaudeCode".to_string(),
-        ])
-        .unwrap();
+        let result =
+            resolve_platform_filter(&["claude_code".to_string(), "ClaudeCode".to_string()])
+                .unwrap();
         assert_eq!(result.len(), 1);
     }
     #[test]
@@ -526,8 +532,10 @@ mod tests {
         let view = QuotaView::from_info(info, Utc::now());
         assert!(view.error.is_some());
         let err_str = view.error.unwrap();
-        assert!(err_str.contains("re-auth") || err_str.contains("no token"),
-                "error string should contain context, got: {err_str}");
+        assert!(
+            err_str.contains("re-auth") || err_str.contains("no token"),
+            "error string should contain context, got: {err_str}"
+        );
     }
     #[test]
     fn write_json_produces_valid_json_compact() {
@@ -581,6 +589,9 @@ mod tests {
         let mut buf = Vec::new();
         write_json(&report, false, &mut buf).unwrap();
         let s = std::str::from_utf8(&buf).unwrap();
-        assert!(!s.contains("\"quota\""), "quota field should be skipped when None");
+        assert!(
+            !s.contains("\"quota\""),
+            "quota field should be skipped when None"
+        );
     }
 }

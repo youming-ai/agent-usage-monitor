@@ -98,11 +98,26 @@ mod tests {
         // and uses the url-safe '-'/'_' alphabet must still decode. "\u{FFFF}x"
         // encodes to a 6-char url-safe string containing '-' and '_'; the old
         // hand-padding + STANDARD-fallback path returned None for it.
-        for s in ["x", "xy", "hello world", "a-b_c", "user+tag@x.io", "\u{FFFF}x"] {
+        for s in [
+            "x",
+            "xy",
+            "hello world",
+            "a-b_c",
+            "user+tag@x.io",
+            "\u{FFFF}x",
+        ] {
             let url = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
-            assert_eq!(base64_decode(&url).as_deref(), Some(s), "url-safe failed for {s:?}");
+            assert_eq!(
+                base64_decode(&url).as_deref(),
+                Some(s),
+                "url-safe failed for {s:?}"
+            );
             let std = base64::engine::general_purpose::STANDARD.encode(s);
-            assert_eq!(base64_decode(&std).as_deref(), Some(s), "standard(padded) failed for {s:?}");
+            assert_eq!(
+                base64_decode(&std).as_deref(),
+                Some(s),
+                "standard(padded) failed for {s:?}"
+            );
         }
     }
 }

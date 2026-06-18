@@ -69,11 +69,7 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    if input_tokens == 0
-        && output_tokens == 0
-        && cache_read == 0
-        && cache_creation == 0
-    {
+    if input_tokens == 0 && output_tokens == 0 && cache_read == 0 && cache_creation == 0 {
         return None;
     }
 
@@ -149,7 +145,11 @@ mod tests {
 
         let mut reader = ClaudeReader::new(dir.path().to_path_buf());
         let initial = reader.scan_all();
-        assert_eq!(initial.len(), 2, "scan_all should find both assistant records");
+        assert_eq!(
+            initial.len(),
+            2,
+            "scan_all should find both assistant records"
+        );
 
         // No new lines were written, so a subsequent poll must yield nothing.
         let delta = reader.poll_delta();
@@ -178,7 +178,11 @@ mod tests {
         f.write_all(appended.as_bytes()).unwrap();
 
         let delta = reader.poll_delta();
-        assert_eq!(delta.len(), 1, "only the one appended record should be returned");
+        assert_eq!(
+            delta.len(),
+            1,
+            "only the one appended record should be returned"
+        );
         assert_eq!(delta[0].input_tokens, 300);
     }
 }

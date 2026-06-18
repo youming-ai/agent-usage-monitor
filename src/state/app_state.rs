@@ -250,9 +250,7 @@ impl Tab {
             Tab::Pi => path.exists(),
             Tab::Factory => path.exists(),
             Tab::Grok => path.join("sessions").exists(),
-            Tab::Cursor => {
-                path.join("projects").exists() || path.join("chats").exists()
-            }
+            Tab::Cursor => path.join("projects").exists() || path.join("chats").exists(),
             Tab::Copilot => path.join("session-state").exists(),
             Tab::Antigravity => path.join("brain").exists(),
             Tab::MimoCode => path.join("mimocode.db").exists(),
@@ -312,8 +310,22 @@ pub struct PlatformState {
 
 impl PlatformState {
     /// Borrow references for the UI render pass.
-    pub fn refs(&self) -> (Option<&QuotaInfo>, &HashMap<String, SessionSummary>, &VecDeque<UsageRecord>, usize, f64) {
-        (self.quota.as_ref(), &self.sessions, &self.records, self.total_calls, self.total_cost)
+    pub fn refs(
+        &self,
+    ) -> (
+        Option<&QuotaInfo>,
+        &HashMap<String, SessionSummary>,
+        &VecDeque<UsageRecord>,
+        usize,
+        f64,
+    ) {
+        (
+            self.quota.as_ref(),
+            &self.sessions,
+            &self.records,
+            self.total_calls,
+            self.total_cost,
+        )
     }
 }
 
@@ -337,8 +349,18 @@ impl AppState {
         };
         Self {
             platforms: [
-                make(), make(), make(), make(), make(), make(),
-                make(), make(), make(), make(), make(), make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
                 make(),
             ],
             active_tab: Tab::ClaudeCode,
@@ -362,9 +384,10 @@ impl AppState {
         let p = &mut self.platforms[platform.index()];
         for r in records {
             if p.records.len() >= p.max_records
-                && let Some(old) = p.records.pop_front() {
-                    reverse_model_aggregate(&mut p.sessions, &old);
-                }
+                && let Some(old) = p.records.pop_front()
+            {
+                reverse_model_aggregate(&mut p.sessions, &old);
+            }
             p.total_cost += r.cost_usd;
             p.total_calls += 1;
             upsert_model_aggregate(&mut p.sessions, &r);
@@ -388,21 +411,27 @@ impl AppState {
             .collect();
 
         if !self.available_tabs.contains(&self.active_tab) {
-            self.active_tab = self.available_tabs.first().copied().unwrap_or(Tab::ClaudeCode);
+            self.active_tab = self
+                .available_tabs
+                .first()
+                .copied()
+                .unwrap_or(Tab::ClaudeCode);
         }
     }
 }
 
 fn upsert_model_aggregate(map: &mut HashMap<String, SessionSummary>, r: &UsageRecord) {
-    let entry = map.entry(r.model.clone()).or_insert_with(|| SessionSummary {
-        model: r.model.clone(),
-        total_input: 0,
-        total_output: 0,
-        total_cache_read: 0,
-        total_cache_creation: 0,
-        total_cost: 0.0,
-        request_count: 0,
-    });
+    let entry = map
+        .entry(r.model.clone())
+        .or_insert_with(|| SessionSummary {
+            model: r.model.clone(),
+            total_input: 0,
+            total_output: 0,
+            total_cache_read: 0,
+            total_cache_creation: 0,
+            total_cost: 0.0,
+            request_count: 0,
+        });
     entry.total_input += r.input_tokens;
     entry.total_output += r.output_tokens;
     entry.total_cache_read += r.cache_read_tokens;
@@ -416,7 +445,9 @@ fn reverse_model_aggregate(map: &mut HashMap<String, SessionSummary>, r: &UsageR
         entry.total_input = entry.total_input.saturating_sub(r.input_tokens);
         entry.total_output = entry.total_output.saturating_sub(r.output_tokens);
         entry.total_cache_read = entry.total_cache_read.saturating_sub(r.cache_read_tokens);
-        entry.total_cache_creation = entry.total_cache_creation.saturating_sub(r.cache_creation_tokens);
+        entry.total_cache_creation = entry
+            .total_cache_creation
+            .saturating_sub(r.cache_creation_tokens);
         entry.total_cost -= r.cost_usd;
         // Clamp f64 drift near zero so the next upsert doesn't start from a
         // tiny negative value.
@@ -454,8 +485,12 @@ mod tests {
         }
     }
 
-    fn claude_idx() -> usize { Tab::ClaudeCode.index() }
-    fn codex_idx() -> usize { Tab::Codex.index() }
+    fn claude_idx() -> usize {
+        Tab::ClaudeCode.index()
+    }
+    fn codex_idx() -> usize {
+        Tab::Codex.index()
+    }
 
     #[test]
     fn platform_and_tab_indices_are_in_sync() {
@@ -483,8 +518,14 @@ mod tests {
     #[test]
     fn add_records_dispatches_by_platform() {
         let mut s = AppState::with_capacity(10);
-        s.add_records(Platform::ClaudeCode, vec![rec(Platform::ClaudeCode, "opus-4", 100, 50, 1.0)]);
-        s.add_records(Platform::Codex, vec![rec(Platform::Codex, "gpt-5", 200, 80, 2.0)]);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![rec(Platform::ClaudeCode, "opus-4", 100, 50, 1.0)],
+        );
+        s.add_records(
+            Platform::Codex,
+            vec![rec(Platform::Codex, "gpt-5", 200, 80, 2.0)],
+        );
         assert_eq!(s.platforms[claude_idx()].total_calls, 1);
         assert_eq!(s.platforms[codex_idx()].total_calls, 1);
         assert!(s.platforms[claude_idx()].sessions.contains_key("opus-4"));
@@ -494,12 +535,18 @@ mod tests {
     #[test]
     fn eviction_reverses_aggregate() {
         let mut s = AppState::with_capacity(2);
-        s.add_records(Platform::ClaudeCode, vec![
-            rec(Platform::ClaudeCode, "opus-4", 100, 50, 1.0),
-            rec(Platform::ClaudeCode, "opus-4", 200, 80, 2.0),
-            rec(Platform::ClaudeCode, "opus-4", 300, 90, 3.0),
-        ]);
-        let m = s.platforms[claude_idx()].sessions.get("opus-4").expect("model present");
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                rec(Platform::ClaudeCode, "opus-4", 100, 50, 1.0),
+                rec(Platform::ClaudeCode, "opus-4", 200, 80, 2.0),
+                rec(Platform::ClaudeCode, "opus-4", 300, 90, 3.0),
+            ],
+        );
+        let m = s.platforms[claude_idx()]
+            .sessions
+            .get("opus-4")
+            .expect("model present");
         assert_eq!(m.total_input, 500);
         assert_eq!(m.total_output, 170);
         assert_eq!(m.total_cost, 5.0);
@@ -511,8 +558,14 @@ mod tests {
     #[test]
     fn evictions_drop_models_at_zero_count() {
         let mut s = AppState::with_capacity(1);
-        s.add_records(Platform::ClaudeCode, vec![rec(Platform::ClaudeCode, "opus-4", 100, 50, 1.0)]);
-        s.add_records(Platform::ClaudeCode, vec![rec(Platform::ClaudeCode, "sonnet-4", 200, 80, 2.0)]);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![rec(Platform::ClaudeCode, "opus-4", 100, 50, 1.0)],
+        );
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![rec(Platform::ClaudeCode, "sonnet-4", 200, 80, 2.0)],
+        );
         let c = &s.platforms[claude_idx()];
         assert!(!c.sessions.contains_key("opus-4"));
         assert!(c.sessions.contains_key("sonnet-4"));

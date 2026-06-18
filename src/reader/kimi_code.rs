@@ -1,6 +1,6 @@
-use crate::reader::session_jsonl::{read_jsonl_from_offset, SessionFileState};
-use crate::reader::{basename, find_recursive, session_label, UsageSource};
 use crate::reader::pricing::calculate_cost;
+use crate::reader::session_jsonl::{SessionFileState, read_jsonl_from_offset};
+use crate::reader::{UsageSource, basename, find_recursive, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
@@ -62,10 +62,9 @@ impl KimiCodeReader {
         //   .../sessions/wd_{dir}/session_{id}/agents/{agent}/wire.jsonl
         let (session_id, session) = extract_session_info(path, &self.session_meta);
         let mut st = SessionFileState::default();
-        let (records, new_offset) =
-            read_jsonl_from_offset(path, offset, &mut st, |line, _| {
-                parse_usage_record(line, &session_id, &session)
-            });
+        let (records, new_offset) = read_jsonl_from_offset(path, offset, &mut st, |line, _| {
+            parse_usage_record(line, &session_id, &session)
+        });
         self.file_positions.insert(path.to_path_buf(), new_offset);
         records
     }
@@ -90,8 +89,7 @@ impl KimiCodeReader {
         self.session_meta = load_session_index(&self.base_dir);
         let files = self.find_wire_files();
         // Clean up stale entries for deleted files.
-        self.file_positions
-            .retain(|p, _| p.exists());
+        self.file_positions.retain(|p, _| p.exists());
 
         let mut all = Vec::new();
         for f in &files {
@@ -148,10 +146,7 @@ fn load_session_index(base_dir: &Path) -> HashMap<String, String> {
 
 /// Extract the session ID and a human-readable session label from a wire.jsonl
 /// path like `.../sessions/wd_{dir}/session_{uuid}/agents/{agent}/wire.jsonl`.
-fn extract_session_info(
-    path: &Path,
-    session_meta: &HashMap<String, String>,
-) -> (String, String) {
+fn extract_session_info(path: &Path, session_meta: &HashMap<String, String>) -> (String, String) {
     // Walk up from wire.jsonl to find the session_{uuid} directory.
     let mut session_id = String::new();
     for ancestor in path.ancestors() {
@@ -172,11 +167,7 @@ fn extract_session_info(
 
 /// Parse one JSONL line into a `UsageRecord` if it's a `usage.record` with
 /// token data. Returns `None` for non-usage lines or zero-token rows.
-fn parse_usage_record(
-    line: &str,
-    session_id: &str,
-    session: &str,
-) -> Option<UsageRecord> {
+fn parse_usage_record(line: &str, session_id: &str, session: &str) -> Option<UsageRecord> {
     let line = line.trim();
     if line.is_empty() {
         return None;
@@ -303,7 +294,9 @@ mod tests {
         let wire = wire_path(dir.path(), "abc12345-0000", "main");
         write_lines(
             &wire,
-            &[r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#],
+            &[
+                r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#,
+            ],
         );
         let mut meta = HashMap::new();
         meta.insert(
@@ -332,11 +325,15 @@ mod tests {
         let sub_wire = wire_path(dir.path(), "abc12345-0000", "agent-0");
         write_lines(
             &main_wire,
-            &[r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#],
+            &[
+                r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#,
+            ],
         );
         write_lines(
             &sub_wire,
-            &[r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":50,"output":20,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625875000}"#],
+            &[
+                r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":50,"output":20,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625875000}"#,
+            ],
         );
         let mut meta = HashMap::new();
         meta.insert(
@@ -351,8 +348,7 @@ mod tests {
 
     #[test]
     fn missing_directory_yields_empty() {
-        let mut reader =
-            KimiCodeReader::new(PathBuf::from("/nonexistent/kimi-code"));
+        let mut reader = KimiCodeReader::new(PathBuf::from("/nonexistent/kimi-code"));
         assert!(reader.scan_all().is_empty());
         assert!(reader.poll_delta().is_empty());
     }
@@ -363,7 +359,9 @@ mod tests {
         let wire = wire_path(dir.path(), "abc12345-0000", "main");
         write_lines(
             &wire,
-            &[r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":0,"output":0,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#],
+            &[
+                r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":0,"output":0,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#,
+            ],
         );
         let mut reader = KimiCodeReader::new(dir.path().to_path_buf());
         assert!(reader.scan_all().is_empty());
@@ -375,7 +373,9 @@ mod tests {
         let wire = wire_path(dir.path(), "abc12345-0000", "main");
         write_lines(
             &wire,
-            &[r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#],
+            &[
+                r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#,
+            ],
         );
         let mut meta = HashMap::new();
         meta.insert(
@@ -393,11 +393,7 @@ mod tests {
         let dir = setup_dir();
         let wire = wire_path(dir.path(), "abc12345-0000", "main");
         let record = r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#;
-        fs::write(
-            &wire,
-            format!("{}\n{}", r#"{"type":"metadata"}"#, record),
-        )
-        .unwrap();
+        fs::write(&wire, format!("{}\n{}", r#"{"type":"metadata"}"#, record)).unwrap();
 
         let mut meta = HashMap::new();
         meta.insert(
@@ -424,10 +420,7 @@ mod tests {
     fn stale_offset_rescans_after_file_shrink() {
         let dir = setup_dir();
         let wire = wire_path(dir.path(), "abc12345-0000", "main");
-        let padding = format!(
-            r#"{{"type":"metadata","padding":"{}"}}"#,
-            "x".repeat(500)
-        );
+        let padding = format!(r#"{{"type":"metadata","padding":"{}"}}"#, "x".repeat(500));
         write_lines(
             &wire,
             &[
@@ -446,7 +439,9 @@ mod tests {
         // Replacement file is much smaller than the tracked offset.
         write_lines(
             &wire,
-            &[r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":200,"output":80,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625875000}"#],
+            &[
+                r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":200,"output":80,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625875000}"#,
+            ],
         );
 
         let delta = reader.poll_delta();
@@ -461,7 +456,9 @@ mod tests {
         let wire = wire_path(dir.path(), "zzz99999-9999", "main");
         write_lines(
             &wire,
-            &[r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#],
+            &[
+                r#"{"type":"usage.record","model":"mimo-v2-pro","usage":{"inputOther":100,"output":40,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1780625874436}"#,
+            ],
         );
         let mut reader = KimiCodeReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();

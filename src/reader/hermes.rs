@@ -1,4 +1,4 @@
-use crate::reader::{basename, session_label, UsageSource};
+use crate::reader::{UsageSource, basename, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
@@ -139,16 +139,13 @@ impl HermesReader {
 
             self.last_seen.insert(session.id.clone(), current);
 
-            if input == 0
-                && output == 0
-                && cache_read == 0
-                && cache_write == 0
-                && cost == 0.0
-            {
+            if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 && cost == 0.0 {
                 continue;
             }
 
-            let timestamp = match Utc.timestamp_millis_opt((session.started_at * 1000.0) as i64).single()
+            let timestamp = match Utc
+                .timestamp_millis_opt((session.started_at * 1000.0) as i64)
+                .single()
             {
                 Some(ts) => ts,
                 None => continue,
@@ -226,7 +223,17 @@ mod tests {
             "INSERT INTO sessions (id, model, started_at, input_tokens, output_tokens, \
              cache_read_tokens, cache_write_tokens, estimated_cost_usd, cwd) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![id, model, started_at, input, output, cache_read, cache_write, cost, cwd],
+            rusqlite::params![
+                id,
+                model,
+                started_at,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                cost,
+                cwd
+            ],
         )
         .unwrap();
     }
@@ -234,9 +241,42 @@ mod tests {
     #[test]
     fn scan_all_parses_sessions_and_skips_empty() {
         let conn = setup();
-        insert(&conn, "s1", "claude-3.5-sonnet", 1000.0, 100, 40, 5, 2, 0.5, "/Users/me/project");
-        insert(&conn, "s2", "claude-3.5-sonnet", 1500.0, 0, 0, 0, 0, 0.0, "/Users/me/project");
-        insert(&conn, "s3", "gpt-4o", 2000.0, 200, 80, 0, 0, 1.5, "/Users/me/other");
+        insert(
+            &conn,
+            "s1",
+            "claude-3.5-sonnet",
+            1000.0,
+            100,
+            40,
+            5,
+            2,
+            0.5,
+            "/Users/me/project",
+        );
+        insert(
+            &conn,
+            "s2",
+            "claude-3.5-sonnet",
+            1500.0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            "/Users/me/project",
+        );
+        insert(
+            &conn,
+            "s3",
+            "gpt-4o",
+            2000.0,
+            200,
+            80,
+            0,
+            0,
+            1.5,
+            "/Users/me/other",
+        );
         let mut reader = HermesReader::from_connection(conn);
 
         let records = reader.scan_all();
@@ -261,7 +301,18 @@ mod tests {
     #[test]
     fn poll_delta_returns_only_new_rows() {
         let conn = setup();
-        insert(&conn, "s1", "claude-3.5-sonnet", 1000.0, 100, 40, 5, 2, 0.5, "/Users/me/project");
+        insert(
+            &conn,
+            "s1",
+            "claude-3.5-sonnet",
+            1000.0,
+            100,
+            40,
+            5,
+            2,
+            0.5,
+            "/Users/me/project",
+        );
         let mut reader = HermesReader::from_connection(conn);
 
         assert_eq!(reader.scan_all().len(), 1);
@@ -285,7 +336,18 @@ mod tests {
     #[test]
     fn poll_delta_emits_in_place_session_updates() {
         let conn = setup();
-        insert(&conn, "s1", "claude-3.5-sonnet", 1000.0, 100, 40, 0, 0, 0.5, "/Users/me/project");
+        insert(
+            &conn,
+            "s1",
+            "claude-3.5-sonnet",
+            1000.0,
+            100,
+            40,
+            0,
+            0,
+            0.5,
+            "/Users/me/project",
+        );
         let mut reader = HermesReader::from_connection(conn);
 
         assert_eq!(reader.scan_all().len(), 1);

@@ -7,10 +7,10 @@ mod util;
 
 use crate::state::AppState;
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout},
     style::Style,
     widgets::{Block, Borders},
-    Frame,
 };
 use std::sync::{Arc, RwLock};
 
@@ -46,7 +46,10 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let acct_w = email.map(|e| e.chars().count() as u16 + 4).unwrap_or(15);
     let header_cols =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(acct_w)]).split(header_inner);
-    frame.render_widget(tabs::tab_line(active, &state.available_tabs), header_cols[0]);
+    frame.render_widget(
+        tabs::tab_line(active, &state.available_tabs),
+        header_cols[0],
+    );
     frame.render_widget(tabs::account(email), header_cols[1]);
 
     // Only Claude and Codex have quota API backends; everything else shows
@@ -61,7 +64,8 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     // Split the main area: the per-model table sized to its rows on top, with
     // the per-session usage table filling the remaining space below.
     let models_h = (sessions.len() as u16 + 3).clamp(3, chunks[2].height.saturating_sub(3));
-    let main = Layout::vertical([Constraint::Length(models_h), Constraint::Min(3)]).split(chunks[2]);
+    let main =
+        Layout::vertical([Constraint::Length(models_h), Constraint::Min(3)]).split(chunks[2]);
     frame.render_widget(
         model_table::model_table(active, sessions, total_calls),
         main[0],
@@ -77,7 +81,7 @@ mod tests {
     use crate::quota::{QuotaInfo, QuotaWindow};
     use crate::state::{Platform, SessionSummary, Tab, UsageRecord};
     use chrono::Utc;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
     use std::time::Instant;
 
     fn dump(width: u16, height: u16, state: AppState) -> String {
@@ -127,7 +131,10 @@ mod tests {
             total_cache_creation: 0,
             total_cost: 12.34,
             request_count: 42,
-        }].into_iter().map(|m| (m.model.clone(), m)).collect();
+        }]
+        .into_iter()
+        .map(|m| (m.model.clone(), m))
+        .collect();
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
             timestamp: Utc::now(),
             platform: Platform::ClaudeCode,
@@ -144,7 +151,8 @@ mod tests {
             mk("ollama-monitor a3f2c1d8", "claude-opus-4", 8400, 512),
             mk("ollama-monitor 9b4e7f02", "claude-sonnet-4", 2100, 180),
             mk("my-web-app 1c2d3e4f", "claude-opus-4", 5000, 600),
-        ].into();
+        ]
+        .into();
         claude.total_calls = 42;
         claude.total_cost = 12.34;
         s

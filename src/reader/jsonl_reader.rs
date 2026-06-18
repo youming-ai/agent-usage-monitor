@@ -77,7 +77,8 @@ pub trait JsonlReader {
         let files = self.find_files();
 
         let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
-        self.file_positions().retain(|path, _| current_files.contains(path));
+        self.file_positions()
+            .retain(|path, _| current_files.contains(path));
 
         let mut new_records = Vec::new();
         for file in files {

@@ -39,8 +39,9 @@ pub fn fetchers() -> &'static [Box<dyn QuotaFetcher>] {
 
 /// Reason a quota fetch failed. Surfaced verbatim in the UI and used to decide
 /// whether the cached result should be re-tried sooner than the regular TTL.
-#[allow(dead_code)] // NoCredentials/Network are reserved for future use
-                    // (today fetch_quota returns None on those paths).
+#[allow(dead_code)]
+// NoCredentials/Network are reserved for future use
+// (today fetch_quota returns None on those paths).
 #[derive(Debug, Clone, PartialEq)]
 pub enum QuotaError {
     /// No local credentials found (Keychain, credentials.json, or auth.json).
