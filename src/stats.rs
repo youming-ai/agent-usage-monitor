@@ -91,6 +91,18 @@ pub struct QuotaView {
     pub error: Option<String>,
 }
 
+impl QuotaView {
+    pub fn from_info(q: QuotaInfo, fetched_at: DateTime<Utc>) -> Self {
+        Self {
+            tool_name: q.tool_name,
+            email: q.email,
+            windows: q.windows,
+            fetched_at: fetched_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            error: q.error.map(|e| e.display()),
+        }
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct Filters {
     pub platforms: Option<std::collections::BTreeSet<String>>,
@@ -236,6 +248,7 @@ pub fn build_platform_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quota::QuotaError;
     use crate::state::Platform;
     use chrono::TimeZone;
 
@@ -381,5 +394,48 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(result.len(), 1);
+    }
+    #[test]
+    fn quota_view_from_info_copies_fields() {
+        use crate::quota::QuotaWindow;
+        use std::time::Instant;
+        let info = QuotaInfo {
+            tool_name: "Claude Code".to_string(),
+            email: Some("me@example.com".to_string()),
+            account_id: None,
+            windows: vec![QuotaWindow {
+                label: "5h".to_string(),
+                remaining_percent: Some(0.85),
+                resets_at: None,
+                reset_in: Some("3h 25m".to_string()),
+            }],
+            fetched_at: Instant::now(),
+            error: None,
+        };
+        let fetched_at = Utc::now();
+        let view = QuotaView::from_info(info, fetched_at);
+        assert_eq!(view.tool_name, "Claude Code");
+        assert_eq!(view.email, Some("me@example.com".to_string()));
+        assert_eq!(view.windows.len(), 1);
+        assert_eq!(view.windows[0].label, "5h");
+        assert!(view.fetched_at.contains("T"));
+    }
+
+    #[test]
+    fn quota_view_from_info_captures_error_string() {
+        use std::time::Instant;
+        let info = QuotaInfo {
+            tool_name: "Codex".to_string(),
+            email: None,
+            account_id: None,
+            windows: vec![],
+            fetched_at: Instant::now(),
+            error: Some(QuotaError::Auth("no token".to_string())),
+        };
+        let view = QuotaView::from_info(info, Utc::now());
+        assert!(view.error.is_some());
+        let err_str = view.error.unwrap();
+        assert!(err_str.contains("re-auth") || err_str.contains("no token"),
+                "error string should contain context, got: {err_str}");
     }
 }
