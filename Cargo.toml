@@ -32,3 +32,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 toml = "0.8"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 anyhow = "1"
+notify = "8"
+notify-debouncer-full = "0.6"
