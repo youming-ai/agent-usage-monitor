@@ -5,7 +5,7 @@
 //! the TUI: no event loop, no ratatui, no background tasks.
 
 use crate::quota::{QuotaInfo, QuotaWindow};
-use crate::state::{Tab, UsageRecord};
+use crate::state::{AgentPaths, Tab, UsageRecord};
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
@@ -82,7 +82,7 @@ pub struct PlatformReport {
     pub quota: Option<QuotaView>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct QuotaView {
     pub tool_name: String,
     pub email: Option<String>,
@@ -257,6 +257,73 @@ pub fn build_platform_report(
         dates,
         quota,
     }
+}
+pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsReport> {
+    use crate::platforms;
+
+    use crate::state::Platform;
+    use std::collections::HashMap;
+
+    // 第一遍：scan_all 收集记录（顺序，task::spawn_blocking 包 I/O）
+    let mut entries: Vec<(String, Platform, PathBuf, Vec<UsageRecord>)> = Vec::new();
+    for entry in platforms::entries() {
+        let key = platform_canonical_key(entry.tab);
+        if !opts.filters.matches_platform(&key) {
+            continue;
+        }
+        let path = paths.path_for(entry.tab);
+        let mut reader = entry.build_reader(path.clone());
+        let records = tokio::task::spawn_blocking(move || reader.scan_all())
+            .await
+            .unwrap_or_default();
+        entries.push((key, entry.platform, path, records));
+    }
+
+    // Quota：仅在 --include-quota 时拉取。fetch() 是阻塞 HTTP，调完后取时间戳
+    // 作为 fetched_at 写入 QuotaView（Instant 无法转 RFC3339，必须用 DateTime<Utc>）。
+    let quota_views: Option<HashMap<Platform, QuotaView>> = if opts.include_quota {
+        let q = tokio::task::spawn_blocking(|| {
+            crate::quota::fetchers()
+                .iter()
+                .map(|f| (f.platform(), f.fetch()))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        let now = Utc::now();
+        Some(
+            q.into_iter()
+                .filter_map(|(p, q)| q.map(|qi| (p, QuotaView::from_info(qi, now))))
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    // 第二遍：聚合
+    let mut report = StatsReport {
+        generated_at: Utc::now(),
+        platforms: BTreeMap::new(),
+        totals: Totals::default(),
+    };
+    for (key, platform, path, records) in entries {
+        let filtered: Vec<UsageRecord> = records
+            .into_iter()
+            .filter(|r| opts.filters.matches_date(r.timestamp))
+            .collect();
+        let available = path.exists();
+        let quota = quota_views
+            .as_ref()
+            .and_then(|m| m.get(&platform).cloned());
+        let pr = build_platform_report(&path, available, filtered, quota);
+        if pr.available {
+            report.totals.platforms_with_data += 1;
+        }
+        report.totals.total_calls += pr.totals.calls;
+        report.totals.total_cost_usd += pr.totals.cost_usd;
+        report.platforms.insert(key, pr);
+    }
+    Ok(report)
 }
 
 #[cfg(test)]
