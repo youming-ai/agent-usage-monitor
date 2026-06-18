@@ -5,11 +5,13 @@ use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
 use agent_usage_monitor::reader::UsageSource;
 use agent_usage_monitor::state::{AppState, Platform, Tab};
+use agent_usage_monitor::stats;
 use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
 use clap::Parser;
 use crossterm::event::KeyCode;
 use std::sync::{Arc, RwLock};
+use std::io::IsTerminal;
 use std::time::Duration;
 use tokio::task;
 use tracing::{info, warn};
@@ -28,19 +30,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = cli::Cli::parse();
     info!("Starting agent-usage-monitor v{}", env!("CARGO_PKG_VERSION"));
 
-    // Handle subcommands
-    match args.command {
-        Some(cli::Commands::Update { force, dry_run }) => {
-            return handle_update(force, dry_run);
-        }
-        Some(cli::Commands::Config { action }) => {
-            return handle_config(action);
-        }
-        None => {
-            // Continue with normal monitor mode
-        }
-    }
-
     // Load configuration
     let config = match config::load_config() {
         Ok(config) => {
@@ -52,6 +41,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Config::default()
         }
     };
+
+    // Handle subcommands
+    match args.command {
+        Some(cli::Commands::Update { force, dry_run }) => {
+            return handle_update(force, dry_run);
+        }
+        Some(cli::Commands::Config { action }) => {
+            return handle_config(action);
+        }
+        Some(cli::Commands::Stats(args)) => {
+            return handle_stats(args, &config).await;
+        }
+        None => {
+            // Continue with normal monitor mode
+        }
+    }
 
     // CLI `Option` paths override config; see `platforms::resolve_paths`.
     let agent_paths = platforms::resolve_paths(&args, &config);
@@ -283,6 +288,49 @@ fn handle_config(action: Option<cli::ConfigAction>) -> Result<(), Box<dyn std::e
         }
     }
     
+    Ok(())
+}
+
+async fn handle_stats(
+    args: cli::StatsArgs,
+    config: &Config,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let since = args
+        .since
+        .as_deref()
+        .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+        .transpose()
+        .map_err(|e| format!("--since must be YYYY-MM-DD: {e}"))?;
+    let until = args
+        .until
+        .as_deref()
+        .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+        .transpose()
+        .map_err(|e| format!("--until must be YYYY-MM-DD: {e}"))?;
+
+    let platform_filter = if args.platform.is_empty() {
+        None
+    } else {
+        Some(stats::resolve_platform_filter(&args.platform)?)
+    };
+
+    // Re-parse CLI to give resolve_paths a &Cli. Stats subcommand has not yet
+    // consumed CLI args, so the global parse is cheap and safe.
+    let cli = cli::Cli::parse();
+    let paths = platforms::resolve_paths(&cli, config);
+
+    let opts = stats::CollectOptions {
+        include_quota: args.include_quota,
+        filters: stats::Filters {
+            platforms: platform_filter,
+            since,
+            until,
+        },
+    };
+    let report = stats::collect(&paths, opts).await?;
+    let pretty = args.pretty || (!args.compact && std::io::stdout().is_terminal());
+    let stdout = std::io::stdout().lock();
+    stats::write_json(&report, pretty, stdout)?;
     Ok(())
 }
 
