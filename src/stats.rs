@@ -122,6 +122,42 @@ impl Filters {
     }
 }
 
+pub fn resolve_platform_filter(raw: &[String]) -> Result<BTreeSet<String>> {
+    use crate::platforms;
+    let mut set = BTreeSet::new();
+    for r in raw {
+        let normalized = r.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        let mut matched = false;
+        for entry in platforms::entries() {
+            let tab_name = format!("{:?}", entry.tab);
+            let mut canonical = String::with_capacity(tab_name.len() + 2);
+            let mut chars = tab_name.chars();
+            if let Some(first) = chars.next() {
+                canonical.push(first.to_ascii_lowercase());
+                for c in chars {
+                    if c.is_ascii_uppercase() {
+                        canonical.push('_');
+                    }
+                    canonical.push(c.to_ascii_lowercase());
+                }
+            }
+            if canonical == normalized || tab_name == normalized || entry.log_name == normalized
+            {
+                set.insert(canonical);
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            anyhow::bail!("unknown platform: `{normalized}`; run `aum config set` to list valid keys");
+        }
+    }
+    Ok(set)
+}
+
 pub struct CollectOptions {
     pub include_quota: bool,
     pub filters: Filters,
@@ -312,5 +348,38 @@ mod tests {
         assert!(f.matches_date(day_15));
         assert!(f.matches_date(day_20));
         assert!(!f.matches_date(day_21));
+    }
+    #[test]
+    fn resolve_platform_filter_accepts_config_key() {
+        let result = resolve_platform_filter(&["claude_code".to_string()]).unwrap();
+        assert!(result.contains("claude_code"));
+    }
+
+    #[test]
+    fn resolve_platform_filter_accepts_tab_variant() {
+        let result = resolve_platform_filter(&["ClaudeCode".to_string()]).unwrap();
+        assert!(result.contains("claude_code"));
+    }
+
+    #[test]
+    fn resolve_platform_filter_accepts_log_name() {
+        let result = resolve_platform_filter(&["Claude Code".to_string()]).unwrap();
+        assert!(result.contains("claude_code"));
+    }
+
+    #[test]
+    fn resolve_platform_filter_rejects_unknown() {
+        let result = resolve_platform_filter(&["nonexistent_agent".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_platform_filter_dedupes() {
+        let result = resolve_platform_filter(&[
+            "claude_code".to_string(),
+            "ClaudeCode".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(result.len(), 1);
     }
 }
