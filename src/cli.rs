@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -66,6 +66,33 @@ pub struct Cli {
     pub refresh: Option<u64>,
 }
 
+#[derive(Args, Debug)]
+pub struct StatsArgs {
+    /// 仅输出指定平台 (逗号分隔, 支持 config_key / Tab variant / log_name)
+    #[arg(long, value_delimiter = ',')]
+    pub platform: Vec<String>,
+
+    /// 起始日期（含） YYYY-MM-DD
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// 结束日期（含） YYYY-MM-DD
+    #[arg(long)]
+    pub until: Option<String>,
+
+    /// 拉取 quota (Claude/Codex 需本地凭据)
+    #[arg(long)]
+    pub include_quota: bool,
+
+    /// Pretty-print JSON (默认: stdout 是 TTY 时 pretty)
+    #[arg(long)]
+    pub pretty: bool,
+
+    /// 显式 compact 输出 (反 --pretty)
+    #[arg(long, conflicts_with = "pretty")]
+    pub compact: bool,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Check for updates and install the latest version
@@ -84,6 +111,8 @@ pub enum Commands {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
+    /// 输出 JSON 用量报告（不启动 TUI）
+    Stats(StatsArgs),
 }
 
 #[derive(Subcommand, Debug)]
