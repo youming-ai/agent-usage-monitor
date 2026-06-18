@@ -22,6 +22,7 @@ aum update         # self-update to the latest release (--dry-run / --force)
 aum config         # show current configuration
 aum config set <key> <value>  # set a configuration value
 aum config reset   # reset configuration to defaults
+aum stats         # print JSON usage report (no TUI)
 ```
 
 | Flag | Default | Description |
@@ -44,6 +45,46 @@ aum config reset   # reset configuration to defaults
 **Keys:** `Tab` / `←` / `→` switch tab · `r` clear current tab · `q` quit
 
 Only tabs for agents whose data directory exists are shown in the TUI.
+
+## JSON stats
+
+For scripts, CI, and external monitoring, `aum` can emit a structured JSON
+report without launching the TUI:
+
+```bash
+# Pretty-printed to stdout (TTY auto-detected)
+aum stats
+
+# Compact JSON, suitable for `jq`
+aum stats --compact | jq '.platforms.claude_code.totals.cost_usd'
+
+# Filter to specific agents
+aum stats --platform claude_code,codex
+
+# Time-bounded report
+aum stats --since 2026-06-01 --until 2026-06-30
+
+# Include live quota (Claude / Codex; requires local credentials)
+aum stats --platform claude_code --include-quota
+```
+
+### Schema
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | RFC 3339 timestamp | When the report was generated |
+| `platforms` | object | Per-platform breakdown keyed by `config_key` (e.g. `claude_code`) |
+| `platforms.<k>.available` | bool | Whether the data directory exists |
+| `platforms.<k>.data_path` | path | Resolved path (CLI override > config > default) |
+| `platforms.<k>.totals` | object | Aggregate: `calls`, `cost_usd`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens` |
+| `platforms.<k>.models` | object | Per-model breakdown, same fields plus `sessions` |
+| `platforms.<k>.sessions[]` | array | Per-session summary with `models` list |
+| `platforms.<k>.dates` | object | Per-day bucket keyed by `YYYY-MM-DD` |
+| `platforms.<k>.quota` | object | Only present with `--include-quota`, only for Claude / Codex |
+| `totals` | object | Cross-platform: `total_calls`, `total_cost_usd`, `platforms_with_data` |
+
+Top-level keys are alphabetically ordered (BTreeMap). Use `--compact` for
+scripting, default (pretty) for human reading.
 
 ### Configuration
 
