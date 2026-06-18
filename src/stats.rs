@@ -6,10 +6,11 @@
 
 use crate::quota::{QuotaInfo, QuotaWindow};
 use crate::state::{AgentPaths, Tab, UsageRecord};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Serialize)]
@@ -325,6 +326,15 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
     }
     Ok(report)
 }
+pub fn write_json<W: Write>(report: &StatsReport, pretty: bool, out: W) -> Result<()> {
+    let writer = std::io::BufWriter::new(out);
+    if pretty {
+        serde_json::to_writer_pretty(writer, report).context("serialize pretty json")?;
+    } else {
+        serde_json::to_writer(writer, report).context("serialize compact json")?;
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -518,5 +528,59 @@ mod tests {
         let err_str = view.error.unwrap();
         assert!(err_str.contains("re-auth") || err_str.contains("no token"),
                 "error string should contain context, got: {err_str}");
+    }
+    #[test]
+    fn write_json_produces_valid_json_compact() {
+        let report = StatsReport {
+            generated_at: Utc::now(),
+            platforms: BTreeMap::new(),
+            totals: Totals::default(),
+        };
+        let mut buf = Vec::new();
+        write_json(&report, false, &mut buf).unwrap();
+        let s = std::str::from_utf8(&buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(s).unwrap();
+        assert!(parsed.get("platforms").is_some());
+        assert!(parsed.get("totals").is_some());
+        assert!(parsed.get("generated_at").is_some());
+    }
+
+    #[test]
+    fn write_json_pretty_has_newlines() {
+        let report = StatsReport {
+            generated_at: Utc::now(),
+            platforms: BTreeMap::new(),
+            totals: Totals::default(),
+        };
+        let mut buf = Vec::new();
+        write_json(&report, true, &mut buf).unwrap();
+        let s = std::str::from_utf8(&buf).unwrap();
+        assert!(s.contains('\n'), "pretty JSON should contain newlines");
+    }
+
+    #[test]
+    fn write_json_skips_quota_field_when_none() {
+        let mut platforms = BTreeMap::new();
+        platforms.insert(
+            "claude_code".to_string(),
+            PlatformReport {
+                available: true,
+                data_path: PathBuf::from("/tmp/x"),
+                totals: PlatformTotals::default(),
+                models: BTreeMap::new(),
+                sessions: vec![],
+                dates: BTreeMap::new(),
+                quota: None,
+            },
+        );
+        let report = StatsReport {
+            generated_at: Utc::now(),
+            platforms,
+            totals: Totals::default(),
+        };
+        let mut buf = Vec::new();
+        write_json(&report, false, &mut buf).unwrap();
+        let s = std::str::from_utf8(&buf).unwrap();
+        assert!(!s.contains("\"quota\""), "quota field should be skipped when None");
     }
 }
