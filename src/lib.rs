@@ -8,3 +8,4 @@ pub mod state;
 pub mod stats;
 pub mod ui;
 pub mod updater;
+pub mod watcher;
