@@ -5,7 +5,7 @@
 //! the TUI: no event loop, no ratatui, no background tasks.
 
 use crate::quota::{QuotaInfo, QuotaWindow};
-use crate::state::UsageRecord;
+use crate::state::{Tab, UsageRecord};
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
@@ -134,6 +134,30 @@ impl Filters {
     }
 }
 
+/// Derive the canonical snake_case JSON key for a Tab variant.
+///
+/// The registry's `config_key` field uses inconsistent forms (`claude_path`,
+/// `opencode_path`, `kimi_code_path`, `mimo_code_path`, etc.) — stripping
+/// `_path` would yield `claude` for ClaudeCode instead of the expected
+/// `claude_code`. We instead derive the key from the Tab variant's
+/// PascalCase Debug form (e.g. `ClaudeCode` -> `claude_code`,
+/// `OpenClaw` -> `open_claw`, `OpenCode` -> `open_code`).
+pub fn platform_canonical_key(tab: Tab) -> String {
+    let tab_name = format!("{:?}", tab);
+    let mut canonical = String::with_capacity(tab_name.len() + 2);
+    let mut chars = tab_name.chars();
+    if let Some(first) = chars.next() {
+        canonical.push(first.to_ascii_lowercase());
+        for c in chars {
+            if c.is_ascii_uppercase() {
+                canonical.push('_');
+            }
+            canonical.push(c.to_ascii_lowercase());
+        }
+    }
+    canonical
+}
+
 pub fn resolve_platform_filter(raw: &[String]) -> Result<BTreeSet<String>> {
     use crate::platforms;
     let mut set = BTreeSet::new();
@@ -145,17 +169,7 @@ pub fn resolve_platform_filter(raw: &[String]) -> Result<BTreeSet<String>> {
         let mut matched = false;
         for entry in platforms::entries() {
             let tab_name = format!("{:?}", entry.tab);
-            let mut canonical = String::with_capacity(tab_name.len() + 2);
-            let mut chars = tab_name.chars();
-            if let Some(first) = chars.next() {
-                canonical.push(first.to_ascii_lowercase());
-                for c in chars {
-                    if c.is_ascii_uppercase() {
-                        canonical.push('_');
-                    }
-                    canonical.push(c.to_ascii_lowercase());
-                }
-            }
+            let canonical = platform_canonical_key(entry.tab);
             if canonical == normalized || tab_name == normalized || entry.log_name == normalized
             {
                 set.insert(canonical);
