@@ -10,9 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{
-    new_debouncer, DebounceEventResult, Debouncer, RecommendedCache,
-};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use tokio::sync::mpsc;
 
 use crate::platforms;
@@ -36,7 +34,9 @@ pub struct PlatformWatcher {
 }
 
 impl PlatformWatcher {
-    pub fn platform(&self) -> Platform { self.platform }
+    pub fn platform(&self) -> Platform {
+        self.platform
+    }
 }
 
 impl Drop for PlatformWatcher {
@@ -68,8 +68,7 @@ pub fn start_watchers(
     // directory (e.g. tests, or a user pointing two readers at one path),
     // collapse duplicate events for the same path within the debounce
     // window so downstream consumers see one event per logical change.
-    let recent: Arc<Mutex<HashMap<PathBuf, Instant>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let recent: Arc<Mutex<HashMap<PathBuf, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
     let mut watchers = Vec::with_capacity(13);
 
     for entry in platforms::entries() {
@@ -106,7 +105,12 @@ pub fn start_watchers(
                             let should_send = {
                                 let mut map = recent.lock().expect("dedup lock");
                                 match map.get(path) {
-                                    Some(last) if now.duration_since(*last) < Duration::from_millis(50) => false,
+                                    Some(last)
+                                        if now.duration_since(*last)
+                                            < Duration::from_millis(50) =>
+                                    {
+                                        false
+                                    }
                                     _ => {
                                         map.insert(path.clone(), now);
                                         true
@@ -142,7 +146,10 @@ pub fn start_watchers(
                 .expect("watch path");
         }
 
-        watchers.push(PlatformWatcher { platform, debouncer: Some(debouncer) });
+        watchers.push(PlatformWatcher {
+            platform,
+            debouncer: Some(debouncer),
+        });
     }
 
     (watchers, rx)
@@ -167,7 +174,9 @@ mod tests {
 
     #[tokio::test]
     async fn start_watchers_skips_unavailable_platforms() {
-        let paths = synthetic_paths(std::path::Path::new("/tmp/aum_test_definitely_does_not_exist_xyz"));
+        let paths = synthetic_paths(std::path::Path::new(
+            "/tmp/aum_test_definitely_does_not_exist_xyz",
+        ));
         let (watchers, _rx) = start_watchers(&paths);
         assert_eq!(watchers.len(), 0, "no path exists => no watchers");
     }
@@ -219,7 +228,9 @@ mod tests {
         let mut count = 0;
         loop {
             let now = tokio::time::Instant::now();
-            if now >= deadline { break; }
+            if now >= deadline {
+                break;
+            }
             match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
                 Ok(Some(WatcherMessage::Event { .. })) => count += 1,
                 Ok(Some(WatcherMessage::FallbackTick)) => {}
@@ -227,7 +238,10 @@ mod tests {
                 Err(_) => continue,
             }
         }
-        assert!(count <= 3, "5 writes should debounce to <= 3 events, got {count}");
+        assert!(
+            count <= 3,
+            "5 writes should debounce to <= 3 events, got {count}"
+        );
     }
 
     #[tokio::test]
@@ -242,7 +256,9 @@ mod tests {
         fs::write(&f, b"after drop\n").expect("write");
 
         let r = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await;
-        assert!(r.is_err() || matches!(r, Ok(Some(WatcherMessage::FallbackTick))),
-                "after dropping watchers, no file events should arrive");
+        assert!(
+            r.is_err() || matches!(r, Ok(Some(WatcherMessage::FallbackTick))),
+            "after dropping watchers, no file events should arrive"
+        );
     }
 }

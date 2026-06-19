@@ -1,11 +1,11 @@
 use agent_usage_monitor::cli;
 use agent_usage_monitor::config::{self, Config};
 use agent_usage_monitor::event::{AppEvent, EventLoop};
+use agent_usage_monitor::mcp;
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
 use agent_usage_monitor::state::{AppState, Platform, Tab};
 use agent_usage_monitor::stats;
-use agent_usage_monitor::mcp;
 use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
 use agent_usage_monitor::watcher::{self, WatcherMessage};
@@ -90,8 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let agent_paths = agent_paths.clone();
         let app_state = app_state.clone();
         async move {
-            let (_platform_watchers, mut watcher_rx) =
-                watcher::start_watchers(&agent_paths);
+            let (_platform_watchers, mut watcher_rx) = watcher::start_watchers(&agent_paths);
             let mut fallback = tokio::time::interval(Duration::from_secs(30));
             fallback.tick().await; // discard immediate first tick
 
@@ -354,17 +353,14 @@ async fn handle_stats(
     Ok(())
 }
 
-async fn handle_mcp(
-    config: &Config,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn handle_mcp(config: &Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = cli::Cli::parse();
     let paths = platforms::resolve_paths(&cli, config);
     mcp::server::run_mcp_server(paths).await?;
     Ok(())
- }
+}
 
 fn run_tui(
-
     terminal: &mut ratatui::DefaultTerminal,
     app_state: Arc<RwLock<AppState>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

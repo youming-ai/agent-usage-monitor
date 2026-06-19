@@ -7,12 +7,15 @@ use std::sync::Arc;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    AnnotateAble, Implementation, ListResourcesResult, PaginatedRequestParam,
-    ProtocolVersion, RawResource, ReadResourceRequestParam, ReadResourceResult,
-    ResourceContents, ServerCapabilities, ServerInfo,
+    AnnotateAble, Implementation, ListResourcesResult, PaginatedRequestParam, ProtocolVersion,
+    RawResource, ReadResourceRequestParam, ReadResourceResult, ResourceContents,
+    ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
-use rmcp::{ErrorData as McpError, Json, RoleServer, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use rmcp::{
+    ErrorData as McpError, Json, RoleServer, ServerHandler, ServiceExt, tool, tool_handler,
+    tool_router,
+};
 
 use crate::mcp::types::*;
 use crate::state::AgentPaths;
@@ -51,7 +54,10 @@ impl AumMcpServer {
 
 #[tool_router]
 impl AumMcpServer {
-    #[tool(name = "get_daily_stats", description = "Get daily usage statistics, optionally filtered by analyzer and date.")]
+    #[tool(
+        name = "get_daily_stats",
+        description = "Get daily usage statistics, optionally filtered by analyzer and date."
+    )]
     async fn get_daily_stats(
         &self,
         Parameters(req): Parameters<GetDailyStatsRequest>,
@@ -60,9 +66,17 @@ impl AumMcpServer {
         let limit = req.limit.unwrap_or(30) as usize;
         let mut results: Vec<DailyStat> = Vec::new();
         for (key, pr) in &report.platforms {
-            if let Some(a) = &req.analyzer { if key != a { continue; } }
+            if let Some(a) = &req.analyzer {
+                if key != a {
+                    continue;
+                }
+            }
             for (date, bucket) in &pr.dates {
-                if let Some(d) = &req.date { if date != d { continue; } }
+                if let Some(d) = &req.date {
+                    if date != d {
+                        continue;
+                    }
+                }
                 results.push(DailyStat {
                     date: date.clone(),
                     calls: bucket.calls,
@@ -80,7 +94,10 @@ impl AumMcpServer {
         Ok(Json(DailyStatsResponse { results }))
     }
 
-    #[tool(name = "get_model_usage", description = "Get AI model usage breakdown for the requested analyzer (default: all).")]
+    #[tool(
+        name = "get_model_usage",
+        description = "Get AI model usage breakdown for the requested analyzer (default: all)."
+    )]
     async fn get_model_usage(
         &self,
         Parameters(req): Parameters<GetModelUsageRequest>,
@@ -88,23 +105,41 @@ impl AumMcpServer {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
         let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
         for (key, pr) in &report.platforms {
-            if let Some(a) = &req.analyzer { if key != a { continue; } }
+            if let Some(a) = &req.analyzer {
+                if key != a {
+                    continue;
+                }
+            }
             for (date, bucket) in &pr.dates {
-                if let Some(d) = &req.date { if date != d { continue; } }
+                if let Some(d) = &req.date {
+                    if date != d {
+                        continue;
+                    }
+                }
                 for (model, count) in &bucket.models {
                     *counts.entry(model.clone()).or_insert(0) += count;
                 }
             }
         }
         let total: u64 = counts.values().sum();
-        let mut models: Vec<ModelCount> = counts.into_iter()
-            .map(|(model, message_count)| ModelCount { model, message_count })
+        let mut models: Vec<ModelCount> = counts
+            .into_iter()
+            .map(|(model, message_count)| ModelCount {
+                model,
+                message_count,
+            })
             .collect();
         models.sort_by(|a, b| b.message_count.cmp(&a.message_count));
-        Ok(Json(ModelUsageResponse { models, total_messages: total }))
+        Ok(Json(ModelUsageResponse {
+            models,
+            total_messages: total,
+        }))
     }
 
-    #[tool(name = "get_cost_breakdown", description = "Get cost breakdown for an analyzer over a date range.")]
+    #[tool(
+        name = "get_cost_breakdown",
+        description = "Get cost breakdown for an analyzer over a date range."
+    )]
     async fn get_cost_breakdown(
         &self,
         Parameters(req): Parameters<GetCostBreakRequest>,
@@ -112,16 +147,29 @@ impl AumMcpServer {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
         let mut daily: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
         for (key, pr) in &report.platforms {
-            if let Some(a) = &req.analyzer { if key != a { continue; } }
+            if let Some(a) = &req.analyzer {
+                if key != a {
+                    continue;
+                }
+            }
             for (date, bucket) in &pr.dates {
-                if let Some(s) = &req.start_date { if date < s { continue; } }
-                if let Some(e) = &req.end_date { if date > e { continue; } }
+                if let Some(s) = &req.start_date {
+                    if date < s {
+                        continue;
+                    }
+                }
+                if let Some(e) = &req.end_date {
+                    if date > e {
+                        continue;
+                    }
+                }
                 *daily.entry(date.clone()).or_insert(0.0) += bucket.cost_usd;
             }
         }
         let total: f64 = daily.values().sum();
         let days = daily.len().max(1) as f64;
-        let daily_costs: Vec<DailyCost> = daily.into_iter()
+        let daily_costs: Vec<DailyCost> = daily
+            .into_iter()
             .map(|(date, cost)| DailyCost { date, cost })
             .collect();
         Ok(Json(CostBreakdownResponse {
@@ -131,7 +179,10 @@ impl AumMcpServer {
         }))
     }
 
-    #[tool(name = "get_file_operations", description = "Get file operation statistics (returns 0 in spec 2; reader-side data not yet collected).")]
+    #[tool(
+        name = "get_file_operations",
+        description = "Get file operation statistics (returns 0 in spec 2; reader-side data not yet collected)."
+    )]
     async fn get_file_operations(
         &self,
         _req: Parameters<GetFileOpsRequest>,
@@ -147,7 +198,11 @@ impl AumMcpServer {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
         let mut sessions: Vec<SessionEntry> = Vec::new();
         for (key, pr) in &report.platforms {
-            if let Some(a) = &req.analyzer { if key != a { continue; } }
+            if let Some(a) = &req.analyzer {
+                if key != a {
+                    continue;
+                }
+            }
             for s in &pr.sessions {
                 sessions.push(SessionEntry {
                     session: s.session.clone(),
@@ -160,13 +215,21 @@ impl AumMcpServer {
             }
         }
         let total = sessions.len() as u64;
-        Ok(Json(SessionStatsResponse { sessions, total_sessions: total }))
+        Ok(Json(SessionStatsResponse {
+            sessions,
+            total_sessions: total,
+        }))
     }
 
-    #[tool(name = "get_quota", description = "Get live quota for Claude Code and Codex.")]
+    #[tool(
+        name = "get_quota",
+        description = "Get live quota for Claude Code and Codex."
+    )]
     async fn get_quota(&self) -> Result<Json<QuotaResponse>, String> {
         let report = self.collect(true).await.map_err(|e| e.to_string())?;
-        let quota: Vec<QuotaEntry> = report.platforms.values()
+        let quota: Vec<QuotaEntry> = report
+            .platforms
+            .values()
             .filter(|pr| pr.quota.is_some())
             .map(|pr| {
                 let q = pr.quota.as_ref().unwrap();
@@ -225,7 +288,8 @@ impl ServerHandler for AumMcpServer {
                     size: None,
                     icons: None,
                     meta: None,
-                }.no_annotation(),
+                }
+                .no_annotation(),
                 RawResource {
                     uri: resource_uris::PLATFORMS.to_string(),
                     name: "platforms".to_string(),
@@ -235,7 +299,8 @@ impl ServerHandler for AumMcpServer {
                     size: None,
                     icons: None,
                     meta: None,
-                }.no_annotation(),
+                }
+                .no_annotation(),
             ],
             next_cursor: None,
             meta: None,
@@ -263,16 +328,19 @@ impl ServerHandler for AumMcpServer {
             }
             resource_uris::PLATFORMS => {
                 let _report = self.collect(false).await?;
-                let platforms: Vec<serde_json::Value> = crate::platforms::entries().iter().map(|entry| {
-                    let key = crate::stats::platform_canonical_key(entry.tab);
-                    let data_path = self.paths.path_for(entry.tab);
-                    serde_json::json!({
-                        "key": key,
-                        "display_name": entry.log_name,
-                        "available": data_path.exists(),
-                        "data_path": data_path.to_string_lossy(),
+                let platforms: Vec<serde_json::Value> = crate::platforms::entries()
+                    .iter()
+                    .map(|entry| {
+                        let key = crate::stats::platform_canonical_key(entry.tab);
+                        let data_path = self.paths.path_for(entry.tab);
+                        serde_json::json!({
+                            "key": key,
+                            "display_name": entry.log_name,
+                            "available": data_path.exists(),
+                            "data_path": data_path.to_string_lossy(),
+                        })
                     })
-                }).collect();
+                    .collect();
                 let body = serde_json::to_string(&serde_json::json!({ "platforms": platforms }))
                     .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
                 Ok(ReadResourceResult {

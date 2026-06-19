@@ -10,8 +10,7 @@ use agent_usage_monitor::state::AgentPaths;
 
 use agent_usage_monitor::platforms;
 
-
-use agent_usage_monitor::watcher::{start_watchers, WatcherMessage};
+use agent_usage_monitor::watcher::{WatcherMessage, start_watchers};
 
 fn synthetic_paths(root: &std::path::Path) -> AgentPaths {
     let mut map = std::collections::HashMap::new();
@@ -35,7 +34,9 @@ async fn watcher_detects_new_file_in_tempdir() {
     let result = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             match rx.recv().await {
-                Some(WatcherMessage::Event { path, .. }) if path.ends_with("new.jsonl") => return true,
+                Some(WatcherMessage::Event { path, .. }) if path.ends_with("new.jsonl") => {
+                    return true;
+                }
                 Some(_) => continue,
                 None => return false,
             }
@@ -62,7 +63,9 @@ async fn watcher_detects_modify() {
     let result = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             match rx.recv().await {
-                Some(WatcherMessage::Event { path, .. }) if path.ends_with("modify.jsonl") => return true,
+                Some(WatcherMessage::Event { path, .. }) if path.ends_with("modify.jsonl") => {
+                    return true;
+                }
                 Some(_) => continue,
                 None => return false,
             }
