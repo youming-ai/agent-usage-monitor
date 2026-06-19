@@ -247,7 +247,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, Json, RoleServer, ServerHandler, ServiceExt, tool_handler, tool_router};
 
 use crate::mcp::types::*;
-use crate::platforms::AgentPaths;
+use crate::state::AgentPaths;
 use crate::stats;
 
 mod resource_uris {
@@ -288,7 +288,7 @@ impl AumMcpServer {
 
 #[tool_handler]
 impl ServerHandler for AumMcpServer {
-    fn server_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder()
@@ -671,7 +671,7 @@ Append to `src/mcp/server.rs` (after the impl block):
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platforms::AgentPaths;
+    use crate::state::AgentPaths;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
