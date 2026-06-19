@@ -102,8 +102,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             WatcherMessage::FallbackTick => None,
                         };
                         for entry in platforms::entries() {
-                            if let Some(p) = platform_filter {
-                                if entry.platform != p { continue; }
+                            if platform_filter.is_some_and(|p| entry.platform != p) {
+                                continue;
                             }
                             let path = agent_paths.path_for(entry.tab);
                             if !path.exists() { continue; }

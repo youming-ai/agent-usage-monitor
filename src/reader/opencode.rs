@@ -122,7 +122,10 @@ mod tests {
 
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
-        assert_eq!(crate::state::resolve(delta[0].model), "opencode-go/minimax-m3");
+        assert_eq!(
+            crate::state::resolve(delta[0].model),
+            "opencode-go/minimax-m3"
+        );
     }
 
     #[test]

@@ -289,7 +289,10 @@ mod tests {
 
         let records = reader.scan_all();
         assert_eq!(records.len(), 2);
-        assert_eq!(crate::state::resolve(records[0].model), "xiaomi-token-plan-cn/mimo-v2.5-pro");
+        assert_eq!(
+            crate::state::resolve(records[0].model),
+            "xiaomi-token-plan-cn/mimo-v2.5-pro"
+        );
         assert_eq!(records[0].input_tokens, 100);
         assert_eq!(records[0].output_tokens, 40);
         assert_eq!(records[0].cache_read_tokens, 10);

@@ -372,7 +372,8 @@ mod tests {
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
         assert_eq!(
-            crate::state::resolve(delta[0].model), "gpt-5.4",
+            crate::state::resolve(delta[0].model),
+            "gpt-5.4",
             "model leaked from another session"
         );
     }

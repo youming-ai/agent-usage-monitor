@@ -246,18 +246,16 @@ pub fn build_platform_report(
         m.cache_read_tokens += r.cache_read_tokens;
         m.cache_creation_tokens += r.cache_creation_tokens;
 
-        let s = session_map
-            .entry(r.session)
-            .or_insert_with(|| SessionAcc {
-                session: r.session,
-                calls: 0,
-                cost_usd: 0.0,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_creation_tokens: 0,
-                models: Vec::new(),
-            });
+        let s = session_map.entry(r.session).or_insert_with(|| SessionAcc {
+            session: r.session,
+            calls: 0,
+            cost_usd: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            models: Vec::new(),
+        });
         s.calls += 1;
         s.cost_usd += r.cost_usd;
         s.input_tokens += r.input_tokens;
@@ -301,7 +299,11 @@ pub fn build_platform_report(
             output_tokens: s.output_tokens,
             cache_read_tokens: s.cache_read_tokens,
             cache_creation_tokens: s.cache_creation_tokens,
-            models: s.models.into_iter().map(|m| crate::state::resolve(m).to_string()).collect(),
+            models: s
+                .models
+                .into_iter()
+                .map(|m| crate::state::resolve(m).to_string())
+                .collect(),
         });
     }
 
@@ -468,9 +470,15 @@ mod tests {
         ];
         let pr = build_platform_report(&path, true, records, None, "claude_code".to_string());
         assert_eq!(pr.dates.len(), 2);
-        let day_15 = pr.dates.get(&crate::state::CompactDate::new(2026, 6, 15)).unwrap();
+        let day_15 = pr
+            .dates
+            .get(&crate::state::CompactDate::new(2026, 6, 15))
+            .unwrap();
         assert_eq!(day_15.calls, 2);
-        assert_eq!(day_15.models.get(&crate::state::intern("claude-sonnet-4")), Some(&2));
+        assert_eq!(
+            day_15.models.get(&crate::state::intern("claude-sonnet-4")),
+            Some(&2)
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! MCP server implementation.
 //!
 //! Wraps `stats::collect()` behind 6 tools + 2 resources per the spec.
+#![allow(clippy::collapsible_if)]
 
 use std::sync::Arc;
 
@@ -380,7 +381,6 @@ pub async fn run_mcp_server(paths: AgentPaths) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::state::AgentPaths;
-    use std::collections::HashMap;
 
     /// Build a synthetic AgentPaths whose every registered Tab points at
     /// `root`. The tempdir exists but has no parseable data, so all 13

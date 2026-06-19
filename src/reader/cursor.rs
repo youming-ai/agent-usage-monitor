@@ -740,7 +740,10 @@ mod tests {
         assert!(records[0].input_tokens > 0);
         assert!(records[0].output_tokens > 0);
         assert_eq!(records[0].platform, Platform::Cursor);
-        assert_eq!(crate::state::resolve(records[0].session), "myproject a3f2c1d8");
+        assert_eq!(
+            crate::state::resolve(records[0].session),
+            "myproject a3f2c1d8"
+        );
     }
 
     #[test]

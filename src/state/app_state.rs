@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
+use lasso::{Spur, ThreadedRodeo};
 use std::sync::OnceLock;
-use lasso::{ThreadedRodeo, Spur};
 
 pub type InternedString = Spur;
 pub static INTERNER: OnceLock<ThreadedRodeo> = OnceLock::new();
@@ -34,12 +34,13 @@ impl CompactDate {
         let naive = dt.date_naive();
         Self::new(naive.year() as u16, naive.month() as u8, naive.day() as u8)
     }
-
-    pub fn to_string(&self) -> String {
+}
+impl std::fmt::Display for CompactDate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let year = (self.0 >> 16) & 0xFFFF;
         let month = (self.0 >> 8) & 0xFF;
         let day = self.0 & 0xFF;
-        format!("{:04}-{:02}-{:02}", year, month, day)
+        write!(f, "{:04}-{:02}-{:02}", year, month, day)
     }
 }
 
@@ -502,7 +503,9 @@ fn reverse_model_aggregate(map: &mut HashMap<InternedString, SessionSummary>, r:
         s.total_input = s.total_input.saturating_sub(r.input_tokens);
         s.total_output = s.total_output.saturating_sub(r.output_tokens);
         s.total_cache_read = s.total_cache_read.saturating_sub(r.cache_read_tokens);
-        s.total_cache_creation = s.total_cache_creation.saturating_sub(r.cache_creation_tokens);
+        s.total_cache_creation = s
+            .total_cache_creation
+            .saturating_sub(r.cache_creation_tokens);
         s.total_cost -= r.cost_usd;
         s.request_count = s.request_count.saturating_sub(1);
         if s.request_count == 0 {
@@ -585,8 +588,16 @@ mod tests {
         );
         assert_eq!(s.platforms[claude_idx()].total_calls, 1);
         assert_eq!(s.platforms[codex_idx()].total_calls, 1);
-        assert!(s.platforms[claude_idx()].sessions.contains_key(&intern("opus-4")));
-        assert!(s.platforms[codex_idx()].sessions.contains_key(&intern("gpt-5")));
+        assert!(
+            s.platforms[claude_idx()]
+                .sessions
+                .contains_key(&intern("opus-4"))
+        );
+        assert!(
+            s.platforms[codex_idx()]
+                .sessions
+                .contains_key(&intern("gpt-5"))
+        );
     }
 
     #[test]

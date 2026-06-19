@@ -121,7 +121,10 @@ mod tests {
 
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
-        assert_eq!(crate::state::resolve(delta[0].model), "anthropic/claude-sonnet-4");
+        assert_eq!(
+            crate::state::resolve(delta[0].model),
+            "anthropic/claude-sonnet-4"
+        );
     }
 
     #[test]

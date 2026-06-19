@@ -133,7 +133,7 @@ mod tests {
             request_count: 42,
         }]
         .into_iter()
-        .map(|m| (m.model.clone(), m))
+        .map(|m| (m.model, m))
         .collect();
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
             timestamp: Utc::now(),

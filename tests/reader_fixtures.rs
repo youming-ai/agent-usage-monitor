@@ -10,9 +10,9 @@ use agent_usage_monitor::reader::copilot::CopilotReader;
 use agent_usage_monitor::reader::cursor::CursorReader;
 use agent_usage_monitor::reader::factory::FactoryReader;
 use agent_usage_monitor::reader::grok::GrokReader;
+use agent_usage_monitor::state::resolve;
 use agent_usage_monitor::state::{Platform, Tab};
 use std::path::PathBuf;
-use agent_usage_monitor::state::resolve;
 
 fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
