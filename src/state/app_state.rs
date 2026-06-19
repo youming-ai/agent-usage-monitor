@@ -3,6 +3,55 @@ use chrono::{DateTime, Utc};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
+use std::sync::OnceLock;
+use lasso::{ThreadedRodeo, Spur};
+
+pub type InternedString = Spur;
+pub static INTERNER: OnceLock<ThreadedRodeo> = OnceLock::new();
+
+pub fn get_interner() -> &'static ThreadedRodeo {
+    INTERNER.get_or_init(ThreadedRodeo::new)
+}
+
+pub fn intern(s: &str) -> InternedString {
+    get_interner().get_or_intern(s)
+}
+
+pub fn resolve(key: InternedString) -> &'static str {
+    get_interner().resolve(&key)
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CompactDate(u32);
+
+impl CompactDate {
+    pub fn new(year: u16, month: u8, day: u8) -> Self {
+        Self(((year as u32) << 16) | ((month as u32) << 8) | day as u32)
+    }
+
+    pub fn from_datetime(dt: chrono::DateTime<chrono::Utc>) -> Self {
+        use chrono::Datelike;
+        let naive = dt.date_naive();
+        Self::new(naive.year() as u16, naive.month() as u8, naive.day() as u8)
+    }
+
+    pub fn to_string(&self) -> String {
+        let year = (self.0 >> 16) & 0xFFFF;
+        let month = (self.0 >> 8) & 0xFF;
+        let day = self.0 & 0xFF;
+        format!("{:04}-{:02}-{:02}", year, month, day)
+    }
+}
+
+impl serde::Serialize for CompactDate {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
 /// Resolved agent data paths (from config + CLI). Used for tab detection so
 /// custom paths are honored instead of always checking defaults.
 #[derive(Debug, Clone)]
@@ -624,5 +673,26 @@ mod tests {
             p.ends_with("opencode"),
             "opencode default path should end with 'opencode', got {p:?}"
         );
+    }
+
+    #[test]
+    fn test_compact_date_ymd_roundtrip() {
+        let cd = CompactDate::new(2026, 6, 19);
+        assert_eq!(cd.to_string(), "2026-06-19");
+    }
+
+    #[test]
+    fn test_compact_date_serialize() {
+        let cd = CompactDate::new(2026, 6, 19);
+        let s = serde_json::to_string(&cd).unwrap();
+        assert_eq!(s, "\"2026-06-19\"");
+    }
+
+    #[test]
+    fn test_interner_roundtrip() {
+        let s = "test-string-123";
+        let spur = intern(s);
+        let resolved = resolve(spur);
+        assert_eq!(resolved, s);
     }
 }
