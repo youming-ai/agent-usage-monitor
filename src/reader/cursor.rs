@@ -482,6 +482,13 @@ fn finalize_transcript_turn(st: &mut TranscriptTurnState) -> Option<UsageRecord>
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         cost_usd: cost,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }
 
@@ -549,6 +556,13 @@ fn parse_store_blob(
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             cost_usd: cost,
+            files_read: 0,
+            files_edited: 0,
+            files_added: 0,
+            files_deleted: 0,
+            terminal_commands: 0,
+            lines_read: 0,
+            lines_edited: 0,
         });
     }
 
@@ -615,6 +629,13 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         cost_usd: cost,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }
 

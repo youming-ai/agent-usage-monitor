@@ -164,6 +164,13 @@ impl HermesReader {
                 cache_read_tokens: cache_read,
                 cache_creation_tokens: cache_write,
                 cost_usd: cost,
+                files_read: 0,
+                files_edited: 0,
+                files_added: 0,
+                files_deleted: 0,
+                terminal_commands: 0,
+                lines_read: 0,
+                lines_edited: 0,
             });
         }
 

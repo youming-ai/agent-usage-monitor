@@ -145,6 +145,13 @@ mod tests {
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             cost_usd: 0.0,
+            files_read: 0,
+            files_edited: 0,
+            files_added: 0,
+            files_deleted: 0,
+            terminal_commands: 0,
+            lines_read: 0,
+            lines_edited: 0,
         };
         claude.records = vec![
             mk("ollama-monitor a3f2c1d8", "claude-opus-4", 1200, 340),

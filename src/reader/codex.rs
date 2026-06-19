@@ -275,6 +275,13 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         cache_read_tokens: delta_cached,
         cache_creation_tokens: 0,
         cost_usd,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }
 

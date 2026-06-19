@@ -283,6 +283,13 @@ pub struct UsageRecord {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cost_usd: f64,
+    pub files_read: u64,
+    pub files_edited: u64,
+    pub files_added: u64,
+    pub files_deleted: u64,
+    pub terminal_commands: u64,
+    pub lines_read: u64,
+    pub lines_edited: u64,
 }
 
 /// Aggregated per-model totals.
@@ -482,6 +489,13 @@ mod tests {
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             cost_usd: cost,
+            files_read: 0,
+            files_edited: 0,
+            files_added: 0,
+            files_deleted: 0,
+            terminal_commands: 0,
+            lines_read: 0,
+            lines_edited: 0,
         }
     }
 

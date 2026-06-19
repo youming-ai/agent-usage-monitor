@@ -204,6 +204,13 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
                 cost_usd: cost,
+                files_read: 0,
+                files_edited: 0,
+                files_added: 0,
+                files_deleted: 0,
+                terminal_commands: 0,
+                lines_read: 0,
+                lines_edited: 0,
             })
         }
         "session.compaction_complete" => {
@@ -238,6 +245,13 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
                 cost_usd: cost,
+                files_read: 0,
+                files_edited: 0,
+                files_added: 0,
+                files_deleted: 0,
+                terminal_commands: 0,
+                lines_read: 0,
+                lines_edited: 0,
             })
         }
         _ => None,
