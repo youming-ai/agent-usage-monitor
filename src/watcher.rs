@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{
     new_debouncer, DebounceEventResult, Debouncer, RecommendedCache,
 };
@@ -47,12 +47,7 @@ impl Drop for PlatformWatcher {
     }
 }
 
-/// Per-thread keep-alive for the mpsc sender. When all `PlatformWatcher`s
-/// are dropped, their debouncer closures drop their `tx` clones; this
-/// `thread_local` clone keeps the channel open so a receiver waiting on
-/// `rx.recv()` can still observe `Err` (timeout) rather than `Ok(None)`
-/// (channel closed). Lives for the lifetime of the test thread, which
-/// matches the lifetime of the receiver in the test harness.
+// Per-thread keep-alive for the mpsc sender. When all `PlatformWatcher`s
 thread_local! {
     static KEEP_ALIVE: RefCell<Option<mpsc::Sender<WatcherMessage>>> =
         const { RefCell::new(None) };
@@ -82,7 +77,7 @@ pub fn start_watchers(
         if !path.exists() {
             continue;
         }
-        let mut reader = entry.build_reader(path.clone());
+        let reader = entry.build_reader(path.clone());
         let watch_dirs = reader.get_watch_directories();
         if watch_dirs.is_empty() {
             continue;

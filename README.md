@@ -117,6 +117,16 @@ aum config set antigravity_path ~/.gemini/antigravity-cli
 aum config set mimo_code_path ~/.local/share/mimocode
 ```
 
+## Real-time updates
+
+The TUI uses `notify` (FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW
+on Windows) to react to file changes immediately, instead of polling on a timer.
+A 50 ms per-platform debounce coalesces bursts of writes; a 30 s fallback poll
+ensures the display stays current even if a FS event is dropped.
+
+Network filesystems (NFS, SMB) are not officially supported by `notify`; on those
+paths the 30 s fallback still works.
+
 ## Layout
 
 Each agent tab uses the same layout; only the accent color and data source change. Claude and Codex also show quota bars when credentials are available.
