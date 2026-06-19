@@ -296,19 +296,19 @@ mod tests {
         assert_eq!(records.len(), 2);
 
         let r1 = &records[0];
-        assert_eq!(r1.model, "claude-3.5-sonnet");
+        assert_eq!(crate::state::resolve(r1.model), "claude-3.5-sonnet");
         assert_eq!(r1.input_tokens, 100);
         assert_eq!(r1.output_tokens, 40);
         assert_eq!(r1.cache_read_tokens, 5);
         assert_eq!(r1.cache_creation_tokens, 2);
         assert_eq!(r1.cost_usd, 0.5);
-        assert_eq!(r1.session, "project s1");
+        assert_eq!(crate::state::resolve(r1.session), "project s1");
         assert_eq!(r1.platform, Platform::Hermes);
 
         let r2 = &records[1];
-        assert_eq!(r2.model, "gpt-4o");
+        assert_eq!(crate::state::resolve(r2.model), "gpt-4o");
         assert_eq!(r2.cost_usd, 1.5);
-        assert_eq!(r2.session, "other s3");
+        assert_eq!(crate::state::resolve(r2.session), "other s3");
     }
 
     #[test]
@@ -343,7 +343,7 @@ mod tests {
 
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
-        assert_eq!(delta[0].model, "gpt-4o");
+        assert_eq!(crate::state::resolve(delta[0].model), "gpt-4o");
     }
 
     #[test]
@@ -401,7 +401,7 @@ mod tests {
         let mut reader = HermesReader::from_connection(conn);
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "unknown");
+        assert_eq!(crate::state::resolve(records[0].model), "unknown");
         assert_eq!(records[0].cost_usd, 0.0);
     }
 
@@ -418,6 +418,6 @@ mod tests {
         let mut reader = HermesReader::from_connection(conn);
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].session, "unknown s1");
+        assert_eq!(crate::state::resolve(records[0].session), "unknown s1");
     }
 }

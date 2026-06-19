@@ -353,8 +353,8 @@ mod tests {
         let records = reader.scan_all();
         assert_eq!(records.len(), 1, "only the first completed prompt emits");
         assert_eq!(records[0].input_tokens, 1500);
-        assert_eq!(records[0].model, "grok-build");
-        assert_eq!(records[0].session, "project 019ea524");
+        assert_eq!(crate::state::resolve(records[0].model), "grok-build");
+        assert_eq!(crate::state::resolve(records[0].session), "project 019ea524");
         assert_eq!(records[0].platform, Platform::Grok);
     }
 
@@ -388,7 +388,7 @@ mod tests {
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
         assert_eq!(delta[0].input_tokens, 1000);
-        assert_eq!(delta[0].model, "grok-composer-2.5-fast");
+        assert_eq!(crate::state::resolve(delta[0].model), "grok-composer-2.5-fast");
     }
 
     #[test]

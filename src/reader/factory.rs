@@ -200,13 +200,13 @@ mod tests {
         let mut reader = FactoryReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "claude-sonnet-4-5");
+        assert_eq!(crate::state::resolve(records[0].model), "claude-sonnet-4-5");
         assert_eq!(records[0].input_tokens, 1200);
         assert_eq!(records[0].output_tokens, 450);
         assert_eq!(records[0].cache_read_tokens, 800);
         assert_eq!(records[0].cache_creation_tokens, 150);
         assert_eq!(records[0].platform, Platform::Factory);
-        assert_eq!(records[0].session, "project abc123");
+        assert_eq!(crate::state::resolve(records[0].session), "project abc123");
     }
 
     #[test]

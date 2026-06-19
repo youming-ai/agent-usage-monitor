@@ -196,13 +196,13 @@ mod tests {
         let mut reader = OpenClawReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "claude-opus-4");
+        assert_eq!(crate::state::resolve(records[0].model), "claude-opus-4");
         assert_eq!(records[0].input_tokens, 100);
         assert_eq!(records[0].output_tokens, 50);
         assert_eq!(records[0].cache_read_tokens, 10);
         assert_eq!(records[0].cache_creation_tokens, 5);
         assert_eq!(records[0].platform, Platform::OpenClaw);
-        assert_eq!(records[0].session, "project abc123");
+        assert_eq!(crate::state::resolve(records[0].session), "project abc123");
     }
 
     #[test]

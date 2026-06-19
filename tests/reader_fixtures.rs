@@ -12,6 +12,7 @@ use agent_usage_monitor::reader::factory::FactoryReader;
 use agent_usage_monitor::reader::grok::GrokReader;
 use agent_usage_monitor::state::{Platform, Tab};
 use std::path::PathBuf;
+use agent_usage_monitor::state::resolve;
 
 fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -23,11 +24,11 @@ fn claude_fixture_parses_assistant_records() {
     let records = reader.scan_all();
     assert_eq!(records.len(), 2, "expected two assistant lines");
     assert_eq!(records[0].platform, Platform::ClaudeCode);
-    assert_eq!(records[0].model, "claude-opus-4");
+    assert_eq!(resolve(records[0].model), "claude-opus-4");
     assert_eq!(records[0].input_tokens, 100);
     assert_eq!(records[0].output_tokens, 50);
     assert_eq!(records[0].cost_usd, 0.01);
-    assert_eq!(records[0].session, "agent-usage-monitor a3f2c1d8");
+    assert_eq!(resolve(records[0].session), "agent-usage-monitor a3f2c1d8");
     assert!(reader.poll_delta().is_empty());
 }
 
@@ -37,7 +38,7 @@ fn codex_fixture_parses_token_count() {
     let records = reader.scan_all();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].platform, Platform::Codex);
-    assert_eq!(records[0].model, "gpt-5.4");
+    assert_eq!(resolve(records[0].model), "gpt-5.4");
     assert_eq!(records[0].input_tokens, 100);
     assert_eq!(records[0].output_tokens, 50);
 }
@@ -48,9 +49,9 @@ fn factory_fixture_parses_uuid_session() {
     let records = reader.scan_all();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].platform, Platform::Factory);
-    assert_eq!(records[0].model, "claude-sonnet-4-5");
+    assert_eq!(resolve(records[0].model), "claude-sonnet-4-5");
     assert_eq!(records[0].input_tokens, 1200);
-    assert_eq!(records[0].session, "project abc123");
+    assert_eq!(resolve(records[0].session), "project abc123");
 }
 
 #[test]
@@ -59,9 +60,9 @@ fn grok_fixture_parses_prompt_deltas() {
     let records = reader.scan_all();
     assert_eq!(records.len(), 1, "first completed prompt only");
     assert_eq!(records[0].platform, Platform::Grok);
-    assert_eq!(records[0].model, "grok-build");
+    assert_eq!(resolve(records[0].model), "grok-build");
     assert_eq!(records[0].input_tokens, 1500);
-    assert_eq!(records[0].session, "project 019ea524");
+    assert_eq!(resolve(records[0].session), "project 019ea524");
 }
 
 #[test]
@@ -72,7 +73,7 @@ fn cursor_fixture_parses_transcript_turns() {
     assert_eq!(records[0].platform, Platform::Cursor);
     assert!(records[0].input_tokens > 0);
     assert!(records[0].output_tokens > 0);
-    assert_eq!(records[0].session, "myproject a3f2c1d8");
+    assert_eq!(resolve(records[0].session), "myproject a3f2c1d8");
 }
 
 #[test]
@@ -82,9 +83,9 @@ fn copilot_fixture_parses_events() {
     // One tool.execution_complete + one session.compaction_complete
     assert_eq!(records.len(), 2);
     assert_eq!(records[0].platform, Platform::Copilot);
-    assert_eq!(records[0].model, "gpt-4.1");
+    assert_eq!(resolve(records[0].model), "gpt-4.1");
     assert_eq!(records[1].input_tokens, 52000); // 50000 + 2000
-    assert_eq!(records[1].session, "myproject abc12345");
+    assert_eq!(resolve(records[1].session), "myproject abc12345");
 }
 
 #[test]
@@ -93,7 +94,7 @@ fn antigravity_fixture_parses_transcript() {
     let records = reader.scan_all();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].platform, Platform::Antigravity);
-    assert_eq!(records[0].model, "gemini-3");
+    assert_eq!(resolve(records[0].model), "gemini-3");
     assert!(records[0].output_tokens > 0);
     assert_eq!(records[0].input_tokens, 0);
 }

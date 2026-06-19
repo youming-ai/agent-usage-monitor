@@ -289,13 +289,13 @@ mod tests {
 
         let records = reader.scan_all();
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].model, "xiaomi-token-plan-cn/mimo-v2.5-pro");
+        assert_eq!(crate::state::resolve(records[0].model), "xiaomi-token-plan-cn/mimo-v2.5-pro");
         assert_eq!(records[0].input_tokens, 100);
         assert_eq!(records[0].output_tokens, 40);
         assert_eq!(records[0].cache_read_tokens, 10);
         assert_eq!(records[0].cache_creation_tokens, 0);
         assert_eq!(records[0].platform, Platform::KimiCode);
-        assert!(records[0].session.starts_with("myproject"));
+        assert!(crate::state::resolve(records[0].session).starts_with("myproject"));
         assert_eq!(records[1].input_tokens, 200);
         assert_eq!(records[1].cache_creation_tokens, 5);
     }
@@ -397,7 +397,7 @@ mod tests {
         let mut reader = KimiCodeReader::new_with_meta(dir.path().to_path_buf(), meta);
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert!(records[0].session.starts_with("myproject"));
+        assert!(crate::state::resolve(records[0].session).starts_with("myproject"));
     }
 
     #[test]
@@ -475,6 +475,6 @@ mod tests {
         let mut reader = KimiCodeReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert!(records[0].session.starts_with("unknown"));
+        assert!(crate::state::resolve(records[0].session).starts_with("unknown"));
     }
 }

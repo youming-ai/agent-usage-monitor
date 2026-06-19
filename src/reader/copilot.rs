@@ -307,9 +307,9 @@ mod tests {
         let mut reader = CopilotReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].model, "gpt-4.1");
+        assert_eq!(crate::state::resolve(records[0].model), "gpt-4.1");
         assert_eq!(records[0].platform, Platform::Copilot);
-        assert_eq!(records[0].session, "project abc-123");
+        assert_eq!(crate::state::resolve(records[0].session), "project abc-123");
         assert_eq!(records[1].input_tokens, 52000); // 50000 + 2000
     }
 
@@ -329,7 +329,7 @@ mod tests {
         let mut reader = CopilotReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "claude-sonnet-4");
+        assert_eq!(crate::state::resolve(records[0].model), "claude-sonnet-4");
     }
 
     #[test]
@@ -370,7 +370,7 @@ mod tests {
         let mut reader = CopilotReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "gpt-4.1");
+        assert_eq!(crate::state::resolve(records[0].model), "gpt-4.1");
     }
 
     #[test]
@@ -445,6 +445,6 @@ mod tests {
 
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
-        assert_eq!(delta[0].model, "gpt-4.1");
+        assert_eq!(crate::state::resolve(delta[0].model), "gpt-4.1");
     }
 }

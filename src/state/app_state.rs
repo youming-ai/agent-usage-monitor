@@ -525,8 +525,8 @@ mod tests {
         UsageRecord {
             timestamp: Utc::now(),
             platform,
-            model: model.into(),
-            session: "test".into(),
+            model: intern(model),
+            session: intern("test"),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: 0,
@@ -585,8 +585,8 @@ mod tests {
         );
         assert_eq!(s.platforms[claude_idx()].total_calls, 1);
         assert_eq!(s.platforms[codex_idx()].total_calls, 1);
-        assert!(s.platforms[claude_idx()].sessions.contains_key("opus-4"));
-        assert!(s.platforms[codex_idx()].sessions.contains_key("gpt-5"));
+        assert!(s.platforms[claude_idx()].sessions.contains_key(&intern("opus-4")));
+        assert!(s.platforms[codex_idx()].sessions.contains_key(&intern("gpt-5")));
     }
 
     #[test]
@@ -602,7 +602,7 @@ mod tests {
         );
         let m = s.platforms[claude_idx()]
             .sessions
-            .get("opus-4")
+            .get(&intern("opus-4"))
             .expect("model present");
         assert_eq!(m.total_input, 500);
         assert_eq!(m.total_output, 170);
@@ -624,8 +624,8 @@ mod tests {
             vec![rec(Platform::ClaudeCode, "sonnet-4", 200, 80, 2.0)],
         );
         let c = &s.platforms[claude_idx()];
-        assert!(!c.sessions.contains_key("opus-4"));
-        assert!(c.sessions.contains_key("sonnet-4"));
+        assert!(!c.sessions.contains_key(&intern("opus-4")));
+        assert!(c.sessions.contains_key(&intern("sonnet-4")));
         assert_eq!(c.sessions.len(), 1);
     }
 

@@ -124,7 +124,7 @@ mod tests {
             error: None,
         });
         claude.sessions = vec![SessionSummary {
-            model: "claude-opus-4".into(),
+            model: crate::state::intern("claude-opus-4"),
             total_input: 1_200_000,
             total_output: 340_000,
             total_cache_read: 8_100_000,
@@ -138,8 +138,8 @@ mod tests {
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
             timestamp: Utc::now(),
             platform: Platform::ClaudeCode,
-            model: model.into(),
-            session: session.into(),
+            model: crate::state::intern(model),
+            session: crate::state::intern(session),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: 0,

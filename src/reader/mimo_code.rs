@@ -85,17 +85,17 @@ mod tests {
         assert_eq!(records.len(), 2);
 
         let r1 = &records[0];
-        assert_eq!(r1.model, "xiaomi/mimo-v2.5-pro");
+        assert_eq!(crate::state::resolve(r1.model), "xiaomi/mimo-v2.5-pro");
         assert_eq!(r1.input_tokens, 100);
         assert_eq!(r1.output_tokens, 50);
         assert_eq!(r1.cache_read_tokens, 5);
         assert_eq!(r1.cache_creation_tokens, 2);
         assert_eq!(r1.cost_usd, 0.0);
-        assert_eq!(r1.session, "myproject ses_abc");
+        assert_eq!(crate::state::resolve(r1.session), "myproject ses_abc");
         assert_eq!(r1.platform, Platform::MimoCode);
 
         let r2 = &records[1];
-        assert_eq!(r2.model, "anthropic/claude-sonnet-4");
+        assert_eq!(crate::state::resolve(r2.model), "anthropic/claude-sonnet-4");
         assert_eq!(r2.cost_usd, 1.5);
     }
 
@@ -121,7 +121,7 @@ mod tests {
 
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
-        assert_eq!(delta[0].model, "anthropic/claude-sonnet-4");
+        assert_eq!(crate::state::resolve(delta[0].model), "anthropic/claude-sonnet-4");
     }
 
     #[test]
@@ -146,9 +146,9 @@ mod tests {
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
         assert!(
-            records[0].session.starts_with("unknown"),
+            crate::state::resolve(records[0].session).starts_with("unknown"),
             "got {}",
-            records[0].session
+            crate::state::resolve(records[0].session)
         );
     }
 }

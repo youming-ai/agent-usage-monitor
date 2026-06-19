@@ -164,7 +164,7 @@ mod tests {
 
         let (records, _) = read_jsonl_from_offset(&path, offset, &mut st, count_assistant_messages);
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].session, "repo s1");
+        assert_eq!(crate::state::resolve(records[0].session), "repo s1");
     }
 
     #[test]
