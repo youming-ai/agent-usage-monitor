@@ -325,8 +325,8 @@ pub struct UsageRecord {
     pub timestamp: DateTime<Utc>,
     #[allow(dead_code)]
     pub platform: Platform,
-    pub model: String,
-    pub session: String,
+    pub model: InternedString,
+    pub session: InternedString,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
@@ -344,7 +344,7 @@ pub struct UsageRecord {
 /// Aggregated per-model totals.
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
-    pub model: String,
+    pub model: InternedString,
     pub total_input: u64,
     pub total_output: u64,
     pub total_cache_read: u64,
@@ -357,7 +357,7 @@ pub struct SessionSummary {
 #[derive(Debug)]
 pub struct PlatformState {
     pub records: VecDeque<UsageRecord>,
-    pub sessions: HashMap<String, SessionSummary>,
+    pub sessions: HashMap<InternedString, SessionSummary>,
     pub total_calls: usize,
     pub total_cost: f64,
     pub quota: Option<QuotaInfo>,
@@ -370,7 +370,7 @@ impl PlatformState {
         &self,
     ) -> (
         Option<&QuotaInfo>,
-        &HashMap<String, SessionSummary>,
+        &HashMap<InternedString, SessionSummary>,
         &VecDeque<UsageRecord>,
         usize,
         f64,
@@ -476,11 +476,11 @@ impl AppState {
     }
 }
 
-fn upsert_model_aggregate(map: &mut HashMap<String, SessionSummary>, r: &UsageRecord) {
+fn upsert_model_aggregate(map: &mut HashMap<InternedString, SessionSummary>, r: &UsageRecord) {
     let entry = map
-        .entry(r.model.clone())
+        .entry(r.model) // r.model is Spur (Copy), no clone needed!
         .or_insert_with(|| SessionSummary {
-            model: r.model.clone(),
+            model: r.model,
             total_input: 0,
             total_output: 0,
             total_cache_read: 0,
@@ -496,23 +496,17 @@ fn upsert_model_aggregate(map: &mut HashMap<String, SessionSummary>, r: &UsageRe
     entry.request_count += 1;
 }
 
-fn reverse_model_aggregate(map: &mut HashMap<String, SessionSummary>, r: &UsageRecord) {
-    if let Some(entry) = map.get_mut(&r.model) {
-        entry.total_input = entry.total_input.saturating_sub(r.input_tokens);
-        entry.total_output = entry.total_output.saturating_sub(r.output_tokens);
-        entry.total_cache_read = entry.total_cache_read.saturating_sub(r.cache_read_tokens);
-        entry.total_cache_creation = entry
-            .total_cache_creation
-            .saturating_sub(r.cache_creation_tokens);
-        entry.total_cost -= r.cost_usd;
-        // Clamp f64 drift near zero so the next upsert doesn't start from a
-        // tiny negative value.
-        if entry.total_cost < 0.0 && entry.total_cost > -1e-9 {
-            entry.total_cost = 0.0;
-        }
-        entry.request_count = entry.request_count.saturating_sub(1);
-        if entry.request_count == 0 {
-            map.remove(&r.model);
+fn reverse_model_aggregate(map: &mut HashMap<InternedString, SessionSummary>, r: &UsageRecord) {
+    if let std::collections::hash_map::Entry::Occupied(mut entry) = map.entry(r.model) {
+        let s = entry.get_mut();
+        s.total_input = s.total_input.saturating_sub(r.input_tokens);
+        s.total_output = s.total_output.saturating_sub(r.output_tokens);
+        s.total_cache_read = s.total_cache_read.saturating_sub(r.cache_read_tokens);
+        s.total_cache_creation = s.total_cache_creation.saturating_sub(r.cache_creation_tokens);
+        s.total_cost -= r.cost_usd;
+        s.request_count = s.request_count.saturating_sub(1);
+        if s.request_count == 0 {
+            entry.remove();
         }
     }
 }
