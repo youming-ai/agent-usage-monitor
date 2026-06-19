@@ -155,8 +155,8 @@ fn parse_message(
     Some(UsageRecord {
         timestamp,
         platform,
-        model,
-        session,
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session),
         input_tokens: input,
         output_tokens: output + reasoning,
         cache_read_tokens: cache_read,

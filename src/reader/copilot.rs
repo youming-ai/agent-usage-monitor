@@ -195,8 +195,8 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
             Some(UsageRecord {
                 timestamp,
                 platform: Platform::Copilot,
-                model,
-                session: st.session_label(),
+                model: crate::state::intern(&model),
+                session: crate::state::intern(&st.session_label()),
                 // Tool executions don't expose token counts directly;
                 // the record serves as a request counter.
                 input_tokens: 0,
@@ -238,8 +238,8 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
             Some(UsageRecord {
                 timestamp,
                 platform: Platform::Copilot,
-                model,
-                session: st.session_label(),
+                model: crate::state::intern(&model),
+                session: crate::state::intern(&st.session_label()),
                 input_tokens: total_input,
                 output_tokens: 0,
                 cache_read_tokens: 0,

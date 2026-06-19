@@ -111,8 +111,8 @@ mod tests {
         Some(UsageRecord {
             timestamp: Utc::now(),
             platform: Platform::Pi,
-            model: "test".to_string(),
-            session: st.session_label(),
+            model: crate::state::intern("test"),
+            session: crate::state::intern(&st.session_label()),
             input_tokens: 1,
             output_tokens: 0,
             cache_read_tokens: 0,

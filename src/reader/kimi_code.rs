@@ -204,20 +204,22 @@ fn parse_usage_record(line: &str, session_id: &str, session: &str) -> Option<Usa
     let timestamp = Utc.timestamp_millis_opt(time_ms).single()?;
     let cost = calculate_cost(&model, input, output, cache_read, cache_creation);
 
+    let session_str = if session.is_empty() {
+        let short: String = session_id.chars().take(8).collect();
+        if short.is_empty() {
+            "unknown".to_string()
+        } else {
+            format!("unknown {short}")
+        }
+    } else {
+        session.to_string()
+    };
+
     Some(UsageRecord {
         timestamp,
         platform: Platform::KimiCode,
-        model,
-        session: if session.is_empty() {
-            let short: String = session_id.chars().take(8).collect();
-            if short.is_empty() {
-                "unknown".to_string()
-            } else {
-                format!("unknown {short}")
-            }
-        } else {
-            session.to_string()
-        },
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session_str),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,

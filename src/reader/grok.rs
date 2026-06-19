@@ -62,8 +62,8 @@ impl PromptTracker {
         Some(UsageRecord {
             timestamp: ts,
             platform: Platform::Grok,
-            model: meta.model.clone(),
-            session: meta.session_label(),
+            model: crate::state::intern(&meta.model),
+            session: crate::state::intern(&meta.session_label()),
             // Grok exposes cumulative context size per inference step, not an
             // input/output split — store the step delta as input tokens.
             input_tokens: delta,

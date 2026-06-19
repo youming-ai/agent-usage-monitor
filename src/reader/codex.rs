@@ -268,8 +268,8 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
     Some(UsageRecord {
         timestamp,
         platform: Platform::Codex,
-        model: st.model.clone(),
-        session: st.session(),
+        model: crate::state::intern(&st.model),
+        session: crate::state::intern(&st.session()),
         input_tokens: delta_input,
         output_tokens: delta_output,
         cache_read_tokens: delta_cached,

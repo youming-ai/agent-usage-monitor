@@ -235,8 +235,8 @@ fn parse_transcript_line(line: &str, st: &AgFileState) -> Option<UsageRecord> {
     Some(UsageRecord {
         timestamp,
         platform: Platform::Antigravity,
-        model,
-        session: st.session_label(),
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&st.session_label()),
         input_tokens: 0,
         output_tokens: estimated_tokens,
         cache_read_tokens: 0,

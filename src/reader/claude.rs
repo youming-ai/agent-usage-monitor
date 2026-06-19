@@ -100,8 +100,8 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
     Some(UsageRecord {
         timestamp,
         platform: Platform::ClaudeCode,
-        model,
-        session,
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session),
         input_tokens,
         output_tokens,
         cache_read_tokens: cache_read,

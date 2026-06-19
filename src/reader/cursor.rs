@@ -475,8 +475,8 @@ fn finalize_transcript_turn(st: &mut TranscriptTurnState) -> Option<UsageRecord>
     Some(UsageRecord {
         timestamp: ts,
         platform: Platform::Cursor,
-        model,
-        session: session_label(&st.project, &st.conversation_id),
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session_label(&st.project, &st.conversation_id)),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: 0,
@@ -549,8 +549,8 @@ fn parse_store_blob(
         return Some(UsageRecord {
             timestamp: Utc::now(),
             platform: Platform::Cursor,
-            model,
-            session: session.to_string(),
+            model: crate::state::intern(&model),
+            session: crate::state::intern(session),
             input_tokens: 0,
             output_tokens: output,
             cache_read_tokens: 0,
@@ -622,8 +622,8 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
     Some(UsageRecord {
         timestamp,
         platform: Platform::Cursor,
-        model,
-        session: session.to_string(),
+        model: crate::state::intern(&model),
+        session: crate::state::intern(session),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: 0,

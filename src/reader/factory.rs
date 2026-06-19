@@ -149,8 +149,8 @@ fn parse_factory_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> 
     Some(UsageRecord {
         timestamp,
         platform: Platform::Factory,
-        model,
-        session,
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,

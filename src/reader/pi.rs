@@ -134,8 +134,8 @@ fn parse_pi_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
     Some(UsageRecord {
         timestamp,
         platform: Platform::Pi,
-        model,
-        session: st.session_label(),
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&st.session_label()),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,

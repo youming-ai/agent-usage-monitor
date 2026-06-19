@@ -157,8 +157,8 @@ impl HermesReader {
             records.push(UsageRecord {
                 timestamp,
                 platform: Platform::Hermes,
-                model: session.model,
-                session: session_label,
+                model: crate::state::intern(&session.model),
+                session: crate::state::intern(&session_label),
                 input_tokens: input,
                 output_tokens: output,
                 cache_read_tokens: cache_read,
