@@ -72,20 +72,25 @@ impl AumMcpServer {
                 }
             }
             for (date, bucket) in &pr.dates {
+                let date_str = date.to_string();
                 if let Some(d) = &req.date {
-                    if date != d {
+                    if &date_str != d {
                         continue;
                     }
                 }
+                let mut resolved_models = std::collections::BTreeMap::new();
+                for (k, v) in &bucket.models {
+                    resolved_models.insert(crate::state::resolve(*k).to_string(), *v);
+                }
                 results.push(DailyStat {
-                    date: date.clone(),
+                    date: date_str,
                     calls: bucket.calls,
                     cost_usd: bucket.cost_usd,
                     input_tokens: bucket.input_tokens,
                     output_tokens: bucket.output_tokens,
                     cache_read_tokens: bucket.cache_read_tokens,
                     cache_creation_tokens: bucket.cache_creation_tokens,
-                    models: bucket.models.clone(),
+                    models: resolved_models,
                 });
             }
         }
@@ -111,13 +116,15 @@ impl AumMcpServer {
                 }
             }
             for (date, bucket) in &pr.dates {
+                let date_str = date.to_string();
                 if let Some(d) = &req.date {
-                    if date != d {
+                    if &date_str != d {
                         continue;
                     }
                 }
-                for (model, count) in &bucket.models {
-                    *counts.entry(model.clone()).or_insert(0) += count;
+                for (model_spur, count) in &bucket.models {
+                    let model_name = crate::state::resolve(*model_spur).to_string();
+                    *counts.entry(model_name).or_insert(0) += count;
                 }
             }
         }
@@ -153,17 +160,18 @@ impl AumMcpServer {
                 }
             }
             for (date, bucket) in &pr.dates {
+                let date_str = date.to_string();
                 if let Some(s) = &req.start_date {
-                    if date < s {
+                    if &date_str < s {
                         continue;
                     }
                 }
                 if let Some(e) = &req.end_date {
-                    if date > e {
+                    if &date_str > e {
                         continue;
                     }
                 }
-                *daily.entry(date.clone()).or_insert(0.0) += bucket.cost_usd;
+                *daily.entry(date_str).or_insert(0.0) += bucket.cost_usd;
             }
         }
         let total: f64 = daily.values().sum();
