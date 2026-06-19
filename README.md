@@ -22,6 +22,7 @@ aum update         # self-update to the latest release (--dry-run / --force)
 aum config         # show current configuration
 aum config set <key> <value>  # set a configuration value
 aum config reset   # reset configuration to defaults
+aum mcp           # run as MCP server over stdio (no TUI)
 aum stats         # print JSON usage report (no TUI)
 ```
 
@@ -126,6 +127,56 @@ ensures the display stays current even if a FS event is dropped.
 
 Network filesystems (NFS, SMB) are not officially supported by `notify`; on those
 paths the 30 s fallback still works.
+
+## MCP server
+
+`aum` can run as an MCP (Model Context Protocol) server, exposing usage
+data to AI agent CLIs (Claude Code, Cursor, Copilot) via JSON-RPC over stdio:
+
+```bash
+aum mcp
+```
+
+### Client configuration
+
+Add to your client's MCP config (e.g., `~/.config/claude-code/.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "aum": {
+      "command": "aum",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Tools
+
+| Tool | Description |
+|---|---|
+| `get_daily_stats` | Daily usage breakdown (calls, cost, tokens, models) |
+| `get_model_usage` | AI model usage counts (sorted desc) |
+| `get_cost_breakdown` | Cost over a date range |
+| `get_file_operations` | File read/edited/added/deleted counts (returns 0 in current spec; reader-side data not yet collected) |
+| `get_session_stats` | Per-session summary |
+| `get_quota` | Live Claude Code / Codex quota |
+
+### Resources
+
+| URI | Description |
+|---|---|
+| `aum://summary` | Cross-platform totals (calls, cost, platforms with data) |
+| `aum://platforms` | 13-platform index with availability and resolved paths |
+
+### Manual smoke test
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' | aum mcp
+```
+
+Expect a JSON response with `serverInfo.name = "aum"`.
 
 ## Layout
 
