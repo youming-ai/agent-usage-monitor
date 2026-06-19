@@ -214,17 +214,81 @@ impl ServerHandler for AumMcpServer {
         _req: Option<PaginatedRequestParam>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        // Implemented in Task 5.
-        Ok(ListResourcesResult { resources: vec![], next_cursor: None, meta: None })
+        Ok(ListResourcesResult {
+            resources: vec![
+                RawResource {
+                    uri: resource_uris::SUMMARY.to_string(),
+                    name: "summary".to_string(),
+                    title: Some("Overall usage summary".to_string()),
+                    description: Some("Cross-platform totals".to_string()),
+                    mime_type: None,
+                    size: None,
+                    icons: None,
+                    meta: None,
+                }.no_annotation(),
+                RawResource {
+                    uri: resource_uris::PLATFORMS.to_string(),
+                    name: "platforms".to_string(),
+                    title: Some("Supported platforms".to_string()),
+                    description: Some("13-platform index with availability status".to_string()),
+                    mime_type: None,
+                    size: None,
+                    icons: None,
+                    meta: None,
+                }.no_annotation(),
+            ],
+            next_cursor: None,
+            meta: None,
+        })
     }
 
     async fn read_resource(
         &self,
-        _req: ReadResourceRequestParam,
+        req: ReadResourceRequestParam,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
-        // Implemented in Task 5.
-        Err(McpError::resource_not_found("not implemented yet".to_string(), None))
+        match req.uri.as_str() {
+            resource_uris::SUMMARY => {
+                let report = self.collect(false).await?;
+                let body = serde_json::to_string(&report.totals)
+                    .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::TextResourceContents {
+                        uri: req.uri,
+                        mime_type: Some("application/json".to_string()),
+                        text: body,
+                        meta: None,
+                    }],
+                })
+            }
+            resource_uris::PLATFORMS => {
+                let _report = self.collect(false).await?;
+                let platforms: Vec<serde_json::Value> = crate::platforms::entries().iter().map(|entry| {
+                    let key = crate::stats::platform_canonical_key(entry.tab);
+                    let data_path = self.paths.path_for(entry.tab);
+                    serde_json::json!({
+                        "key": key,
+                        "display_name": entry.log_name,
+                        "available": data_path.exists(),
+                        "data_path": data_path.to_string_lossy(),
+                    })
+                }).collect();
+                let body = serde_json::to_string(&serde_json::json!({ "platforms": platforms }))
+                    .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::TextResourceContents {
+                        uri: req.uri,
+                        mime_type: Some("application/json".to_string()),
+                        text: body,
+                        meta: None,
+                    }],
+                })
+            }
+            _ => Err(McpError::resource_not_found(
+                format!("unknown resource: {}", req.uri),
+                None,
+            )),
+        }
     }
 }
 
@@ -306,8 +370,12 @@ mod tests {
         let server = AumMcpServer::new(empty_paths());
         let result = server.get_quota().await.unwrap();
         // No assertions on content — quota fetch depends on local credentials
-        // which may or may not exist in the test env. We just verify the
-        // response is a well-formed QuotaResponse (one that deserializes).
+        // which may or may not exist in the test env.
         let _ = result.0;
     }
+
+    // Resource tests require constructing a `RequestContext`, which has no
+    // `Default` impl in rmcp 0.12 and requires Peer/CancellationToken setup.
+    // Resources are verified end-to-end by the black-box integration test
+    // in `tests/mcp.rs` (Task 7).
 }
