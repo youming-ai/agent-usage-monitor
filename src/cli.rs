@@ -115,6 +115,8 @@ pub enum Commands {
     },
     /// 输出 JSON 用量报告（不启动 TUI）
     Stats(StatsArgs),
+    /// Run as an MCP (Model Context Protocol) server over stdio
+    Mcp,
 }
 
 #[derive(Subcommand, Debug)]

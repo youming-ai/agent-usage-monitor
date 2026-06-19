@@ -5,6 +5,7 @@ use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
 use agent_usage_monitor::state::{AppState, Platform, Tab};
 use agent_usage_monitor::stats;
+use agent_usage_monitor::mcp;
 use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
 use agent_usage_monitor::watcher::{self, WatcherMessage};
@@ -54,6 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         Some(cli::Commands::Stats(args)) => {
             return handle_stats(args, &config).await;
+        }
+
+        Some(cli::Commands::Mcp) => {
+            return handle_mcp(&config).await;
         }
         None => {
             // Continue with normal monitor mode
@@ -349,7 +354,17 @@ async fn handle_stats(
     Ok(())
 }
 
+async fn handle_mcp(
+    config: &Config,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let cli = cli::Cli::parse();
+    let paths = platforms::resolve_paths(&cli, config);
+    mcp::server::run_mcp_server(paths).await?;
+    Ok(())
+ }
+
 fn run_tui(
+
     terminal: &mut ratatui::DefaultTerminal,
     app_state: Arc<RwLock<AppState>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
