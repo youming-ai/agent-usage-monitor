@@ -60,6 +60,21 @@ pub struct SessionSummaryView {
     pub models: Vec<String>,
 }
 
+fn serialize_interned_map<S>(
+    map: &BTreeMap<crate::state::InternedString, u64>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map_ser = serializer.serialize_map(Some(map.len()))?;
+    for (k, v) in map {
+        map_ser.serialize_entry(crate::state::resolve(*k), v)?;
+    }
+    map_ser.end()
+}
+
 #[derive(Serialize, Default)]
 pub struct DateBucket {
     pub calls: u64,
@@ -68,7 +83,8 @@ pub struct DateBucket {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
-    pub models: BTreeMap<String, u64>,
+    #[serde(serialize_with = "serialize_interned_map")]
+    pub models: BTreeMap<crate::state::InternedString, u64>,
 }
 
 #[derive(Serialize)]
@@ -79,7 +95,7 @@ pub struct PlatformReport {
     pub totals: PlatformTotals,
     pub models: BTreeMap<String, ModelSummary>,
     pub sessions: Vec<SessionSummaryView>,
-    pub dates: BTreeMap<String, DateBucket>,
+    pub dates: BTreeMap<crate::state::CompactDate, DateBucket>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quota: Option<QuotaView>,
 }
@@ -200,9 +216,19 @@ pub fn build_platform_report(
     platform_key: String,
 ) -> PlatformReport {
     let mut totals = PlatformTotals::default();
-    let mut models: BTreeMap<String, ModelSummary> = BTreeMap::new();
-    let mut session_map: BTreeMap<String, SessionSummaryView> = BTreeMap::new();
-    let mut dates: BTreeMap<String, DateBucket> = BTreeMap::new();
+    let mut models: BTreeMap<crate::state::InternedString, ModelSummary> = BTreeMap::new();
+    struct SessionAcc {
+        session: crate::state::InternedString,
+        calls: u64,
+        cost_usd: f64,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+        models: Vec<crate::state::InternedString>,
+    }
+    let mut session_map: BTreeMap<crate::state::InternedString, SessionAcc> = BTreeMap::new();
+    let mut dates: BTreeMap<crate::state::CompactDate, DateBucket> = BTreeMap::new();
 
     for r in records {
         totals.calls += 1;
@@ -212,7 +238,7 @@ pub fn build_platform_report(
         totals.cache_read_tokens += r.cache_read_tokens;
         totals.cache_creation_tokens += r.cache_creation_tokens;
 
-        let m = models.entry(r.model.clone()).or_default();
+        let m = models.entry(r.model).or_default();
         m.calls += 1;
         m.cost_usd += r.cost_usd;
         m.input_tokens += r.input_tokens;
@@ -221,10 +247,16 @@ pub fn build_platform_report(
         m.cache_creation_tokens += r.cache_creation_tokens;
 
         let s = session_map
-            .entry(r.session.clone())
-            .or_insert_with(|| SessionSummaryView {
-                session: r.session.clone(),
-                ..Default::default()
+            .entry(r.session)
+            .or_insert_with(|| SessionAcc {
+                session: r.session,
+                calls: 0,
+                cost_usd: 0.0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                models: Vec::new(),
             });
         s.calls += 1;
         s.cost_usd += r.cost_usd;
@@ -233,10 +265,10 @@ pub fn build_platform_report(
         s.cache_read_tokens += r.cache_read_tokens;
         s.cache_creation_tokens += r.cache_creation_tokens;
         if !s.models.contains(&r.model) {
-            s.models.push(r.model.clone());
+            s.models.push(r.model);
         }
 
-        let date_key = r.timestamp.format("%Y-%m-%d").to_string();
+        let date_key = crate::state::CompactDate::from_datetime(r.timestamp);
         let d = dates.entry(date_key).or_default();
         d.calls += 1;
         d.cost_usd += r.cost_usd;
@@ -254,13 +286,32 @@ pub fn build_platform_report(
             .count() as u32;
     }
 
+    let mut serialized_models = BTreeMap::new();
+    for (k, v) in models {
+        serialized_models.insert(crate::state::resolve(k).to_string(), v);
+    }
+
+    let mut serialized_sessions = Vec::new();
+    for s in session_map.into_values() {
+        serialized_sessions.push(SessionSummaryView {
+            session: crate::state::resolve(s.session).to_string(),
+            calls: s.calls,
+            cost_usd: s.cost_usd,
+            input_tokens: s.input_tokens,
+            output_tokens: s.output_tokens,
+            cache_read_tokens: s.cache_read_tokens,
+            cache_creation_tokens: s.cache_creation_tokens,
+            models: s.models.into_iter().map(|m| crate::state::resolve(m).to_string()).collect(),
+        });
+    }
+
     PlatformReport {
         platform_key,
         available,
         data_path: path.to_path_buf(),
         totals,
-        models,
-        sessions: session_map.into_values().collect(),
+        models: serialized_models,
+        sessions: serialized_sessions,
         dates,
         quota,
     }
@@ -358,8 +409,8 @@ mod tests {
         UsageRecord {
             timestamp: Utc.with_ymd_and_hms(2026, 6, day, 12, 0, 0).unwrap(),
             platform: Platform::ClaudeCode,
-            model: model.to_string(),
-            session: session.to_string(),
+            model: crate::state::intern(model),
+            session: crate::state::intern(session),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: 0,
@@ -417,9 +468,9 @@ mod tests {
         ];
         let pr = build_platform_report(&path, true, records, None, "claude_code".to_string());
         assert_eq!(pr.dates.len(), 2);
-        let day_15 = pr.dates.get("2026-06-15").unwrap();
+        let day_15 = pr.dates.get(&crate::state::CompactDate::new(2026, 6, 15)).unwrap();
         assert_eq!(day_15.calls, 2);
-        assert_eq!(day_15.models.get("claude-sonnet-4"), Some(&2));
+        assert_eq!(day_15.models.get(&crate::state::intern("claude-sonnet-4")), Some(&2));
     }
 
     #[test]
