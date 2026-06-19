@@ -13,7 +13,7 @@ use std::collections::HashMap;
 /// `HashMap` iteration would reshuffle on rehash / key removal.
 pub fn model_table(
     active_tab: Tab,
-    models: &HashMap<String, SessionSummary>,
+    models: &HashMap<crate::state::InternedString, SessionSummary>,
     total_calls: usize,
 ) -> Table<'static> {
     let label = active_tab.label();
@@ -23,14 +23,14 @@ pub fn model_table(
         b.total_cost
             .partial_cmp(&a.total_cost)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.model.cmp(&b.model))
+            .then_with(|| crate::state::resolve(a.model).cmp(crate::state::resolve(b.model)))
     });
 
     let rows: Vec<Row> = models
         .into_iter()
         .map(|s| {
             Row::new(vec![
-                Cell::from(s.model.clone()),
+                Cell::from(crate::state::resolve(s.model)),
                 Cell::from(format_tokens(s.total_input)),
                 Cell::from(format_tokens(s.total_output)),
                 Cell::from(format_tokens(s.total_cache_read)),
