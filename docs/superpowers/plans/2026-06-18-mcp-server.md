@@ -373,7 +373,7 @@ git commit -m "feat(mcp): add MCP server skeleton with AumMcpServer struct"
 //! Request/Response types for the 6 MCP tools.
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct GetDailyStatsRequest {
     /// Optional analyzer filter (e.g. "claude_code").
@@ -384,7 +384,7 @@ pub struct GetDailyStatsRequest {
     pub limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DailyStat {
     pub date: String,
     pub calls: u64,
@@ -396,33 +396,33 @@ pub struct DailyStat {
     pub models: std::collections::BTreeMap<String, u64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct DailyStatsResponse {
     pub results: Vec<DailyStat>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct GetModelUsageRequest {
     pub analyzer: Option<String>,
     pub date: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelCount {
     pub model: String,
     pub message_count: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ModelUsageResponse {
     pub models: Vec<ModelCount>,
     pub total_messages: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct GetCostBreakRequest {
     pub analyzer: Option<String>,
@@ -430,13 +430,13 @@ pub struct GetCostBreakRequest {
     pub end_date: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DailyCost {
     pub date: String,
     pub cost: f64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct CostBreakdownResponse {
     pub total_cost: f64,
@@ -444,14 +444,14 @@ pub struct CostBreakdownResponse {
     pub average_daily_cost: f64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct GetFileOpsRequest {
     pub analyzer: Option<String>,
     pub date: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct FileOpsResponse {
     pub files_read: u64,
@@ -463,14 +463,14 @@ pub struct FileOpsResponse {
     pub lines_edited: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct GetSessionStatsRequest {
     pub analyzer: Option<String>,
     pub date: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionEntry {
     pub session: String,
     pub analyzer: String,
@@ -480,14 +480,14 @@ pub struct SessionEntry {
     pub output_tokens: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SessionStatsResponse {
     pub sessions: Vec<SessionEntry>,
     pub total_sessions: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct QuotaEntry {
     pub platform: String,
@@ -498,7 +498,7 @@ pub struct QuotaEntry {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct QuotaResponse {
     pub quota: Vec<QuotaEntry>,
@@ -508,7 +508,7 @@ pub struct QuotaResponse {
 - [ ] **Step 2: Verify the build (types compile)**
 
 Run: `cargo build 2>&1 | tail -5`
-Expected: success, exit 0. The `rmcp::schemars` re-export is verified here.
+Expected: success, exit 0. The `schemars` direct dep is verified here.
 
 - [ ] **Step 3: Implement 6 tool handlers in `src/mcp/server.rs`**
 
