@@ -73,6 +73,7 @@ pub struct DateBucket {
 
 #[derive(Serialize)]
 pub struct PlatformReport {
+    pub platform_key: String,
     pub available: bool,
     pub data_path: PathBuf,
     pub totals: PlatformTotals,
@@ -196,6 +197,7 @@ pub fn build_platform_report(
     available: bool,
     records: Vec<UsageRecord>,
     quota: Option<QuotaView>,
+    platform_key: String,
 ) -> PlatformReport {
     let mut totals = PlatformTotals::default();
     let mut models: BTreeMap<String, ModelSummary> = BTreeMap::new();
@@ -253,6 +255,7 @@ pub fn build_platform_report(
     }
 
     PlatformReport {
+        platform_key,
         available,
         data_path: path.to_path_buf(),
         totals,
@@ -317,7 +320,7 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
             .collect();
         let available = path.exists();
         let quota = quota_views.as_ref().and_then(|m| m.get(&platform).cloned());
-        let pr = build_platform_report(&path, available, filtered, quota);
+        let pr = build_platform_report(&path, available, filtered, quota, key.clone());
         if pr.available {
             report.totals.platforms_with_data += 1;
         }
@@ -380,7 +383,7 @@ mod tests {
             rec("claude-sonnet-4", "s1", 15, 100, 50, 0.10),
             rec("claude-opus-4", "s1", 15, 200, 100, 0.50),
         ];
-        let pr = build_platform_report(&path, true, records, None);
+        let pr = build_platform_report(&path, true, records, None, "claude_code".to_string());
         assert_eq!(pr.totals.calls, 3);
         assert!((pr.totals.cost_usd - 0.70).abs() < 1e-9);
         assert_eq!(pr.models.len(), 2);
@@ -397,7 +400,7 @@ mod tests {
             rec("claude-sonnet-4", "s1", 15, 100, 50, 0.10),
             rec("claude-sonnet-4", "s2", 15, 200, 100, 0.20),
         ];
-        let pr = build_platform_report(&path, true, records, None);
+        let pr = build_platform_report(&path, true, records, None, "claude_code".to_string());
         assert_eq!(pr.sessions.len(), 2);
         let s1 = pr.sessions.iter().find(|s| s.session == "s1").unwrap();
         assert_eq!(s1.calls, 1);
@@ -412,7 +415,7 @@ mod tests {
             rec("claude-sonnet-4", "s1", 15, 100, 50, 0.10),
             rec("claude-sonnet-4", "s1", 15, 100, 50, 0.10),
         ];
-        let pr = build_platform_report(&path, true, records, None);
+        let pr = build_platform_report(&path, true, records, None, "claude_code".to_string());
         assert_eq!(pr.dates.len(), 2);
         let day_15 = pr.dates.get("2026-06-15").unwrap();
         assert_eq!(day_15.calls, 2);
@@ -427,7 +430,7 @@ mod tests {
             rec("claude-opus-4", "s1", 15, 200, 100, 0.50),
             rec("claude-sonnet-4", "s1", 15, 100, 50, 0.10),
         ];
-        let pr = build_platform_report(&path, true, records, None);
+        let pr = build_platform_report(&path, true, records, None, "claude_code".to_string());
         let s1 = pr.sessions.iter().find(|s| s.session == "s1").unwrap();
         assert_eq!(s1.calls, 3);
         let mut models = s1.models.clone();
@@ -579,6 +582,7 @@ mod tests {
         platforms.insert(
             "claude_code".to_string(),
             PlatformReport {
+                platform_key: "claude_code".to_string(),
                 available: true,
                 data_path: PathBuf::from("/tmp/x"),
                 totals: PlatformTotals::default(),

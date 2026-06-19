@@ -66,7 +66,7 @@ impl QuotaError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct QuotaWindow {
     pub label: String,
     pub remaining_percent: Option<f64>,
