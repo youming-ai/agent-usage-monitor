@@ -1,5 +1,5 @@
 use crate::reader::pricing;
-use crate::reader::{basename, find_recursive, session_label, UsageSource};
+use crate::reader::{UsageSource, basename, find_recursive, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -85,8 +85,7 @@ impl CopilotReader {
                     session_id,
                     ..Default::default()
                 });
-            let (entries, bytes_read) =
-                read_events_from_offset(&file, offset, st);
+            let (entries, bytes_read) = read_events_from_offset(&file, offset, st);
             self.file_positions.insert(file, bytes_read);
             records.extend(entries);
         }
@@ -108,6 +107,9 @@ impl UsageSource for CopilotReader {
 
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_files(false)
+    }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.data_dir.clone()]
     }
 }
 
@@ -193,8 +195,8 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
             Some(UsageRecord {
                 timestamp,
                 platform: Platform::Copilot,
-                model,
-                session: st.session_label(),
+                model: crate::state::intern(&model),
+                session: crate::state::intern(&st.session_label()),
                 // Tool executions don't expose token counts directly;
                 // the record serves as a request counter.
                 input_tokens: 0,
@@ -202,6 +204,13 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
                 cost_usd: cost,
+                files_read: 0,
+                files_edited: 0,
+                files_added: 0,
+                files_deleted: 0,
+                terminal_commands: 0,
+                lines_read: 0,
+                lines_edited: 0,
             })
         }
         "session.compaction_complete" => {
@@ -229,13 +238,20 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
             Some(UsageRecord {
                 timestamp,
                 platform: Platform::Copilot,
-                model,
-                session: st.session_label(),
+                model: crate::state::intern(&model),
+                session: crate::state::intern(&st.session_label()),
                 input_tokens: total_input,
                 output_tokens: 0,
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
                 cost_usd: cost,
+                files_read: 0,
+                files_edited: 0,
+                files_added: 0,
+                files_deleted: 0,
+                terminal_commands: 0,
+                lines_read: 0,
+                lines_edited: 0,
             })
         }
         _ => None,
@@ -291,9 +307,9 @@ mod tests {
         let mut reader = CopilotReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].model, "gpt-4.1");
+        assert_eq!(crate::state::resolve(records[0].model), "gpt-4.1");
         assert_eq!(records[0].platform, Platform::Copilot);
-        assert_eq!(records[0].session, "project abc-123");
+        assert_eq!(crate::state::resolve(records[0].session), "project abc-123");
         assert_eq!(records[1].input_tokens, 52000); // 50000 + 2000
     }
 
@@ -313,7 +329,7 @@ mod tests {
         let mut reader = CopilotReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "claude-sonnet-4");
+        assert_eq!(crate::state::resolve(records[0].model), "claude-sonnet-4");
     }
 
     #[test]
@@ -354,7 +370,7 @@ mod tests {
         let mut reader = CopilotReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "gpt-4.1");
+        assert_eq!(crate::state::resolve(records[0].model), "gpt-4.1");
     }
 
     #[test]
@@ -390,7 +406,10 @@ mod tests {
         let mut reader = CopilotReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].timestamp.to_rfc3339(), "2024-06-01T10:00:05+00:00");
+        assert_eq!(
+            records[0].timestamp.to_rfc3339(),
+            "2024-06-01T10:00:05+00:00"
+        );
     }
 
     #[test]
@@ -414,7 +433,10 @@ mod tests {
             .join("session-state")
             .join("append-test")
             .join("events.jsonl");
-        let mut f = fs::OpenOptions::new().append(true).open(&events_path).unwrap();
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(&events_path)
+            .unwrap();
         writeln!(
             f,
             r#"{{"type":"tool.execution_complete","data":{{"toolName":"write","success":true}},"id":"3","timestamp":"2026-06-01T10:01:00Z"}}"#
@@ -423,6 +445,6 @@ mod tests {
 
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
-        assert_eq!(delta[0].model, "gpt-4.1");
+        assert_eq!(crate::state::resolve(delta[0].model), "gpt-4.1");
     }
 }

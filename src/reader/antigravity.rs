@@ -1,5 +1,5 @@
 use crate::reader::pricing;
-use crate::reader::{basename, find_recursive, session_label, UsageSource};
+use crate::reader::{UsageSource, basename, find_recursive, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -113,8 +113,7 @@ impl AntigravityReader {
             if st.conversation_id.is_empty() {
                 Self::derive_session_info(&file, st);
             }
-            let (entries, bytes_read) =
-                read_transcript_from_offset(&file, offset, st);
+            let (entries, bytes_read) = read_transcript_from_offset(&file, offset, st);
             self.file_positions.insert(file, bytes_read);
             records.extend(entries);
         }
@@ -136,6 +135,9 @@ impl UsageSource for AntigravityReader {
 
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_files(false)
+    }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.data_dir.clone()]
     }
 }
 
@@ -233,13 +235,20 @@ fn parse_transcript_line(line: &str, st: &AgFileState) -> Option<UsageRecord> {
     Some(UsageRecord {
         timestamp,
         platform: Platform::Antigravity,
-        model,
-        session: st.session_label(),
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&st.session_label()),
         input_tokens: 0,
         output_tokens: estimated_tokens,
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         cost_usd: cost,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }
 
@@ -279,8 +288,8 @@ mod tests {
         let records = reader.scan_all();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].platform, Platform::Antigravity);
-        assert_eq!(records[0].model, "gemini-3"); // default model
-        assert_eq!(records[0].session, "conv-abc-123");
+        assert_eq!(crate::state::resolve(records[0].model), "gemini-3"); // default model
+        assert_eq!(crate::state::resolve(records[0].session), "conv-abc-123");
         assert_eq!(records[0].input_tokens, 0); // model responses are output
         assert!(records[0].output_tokens > 0);
         assert!(records[1].output_tokens > 0);
@@ -343,7 +352,7 @@ mod tests {
         let mut reader = AntigravityReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "gemini-3");
+        assert_eq!(crate::state::resolve(records[0].model), "gemini-3");
     }
 
     #[test]

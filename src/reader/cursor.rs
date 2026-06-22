@@ -1,5 +1,5 @@
 use crate::reader::pricing;
-use crate::reader::{find_recursive, is_under_dir_named, session_label, UsageSource};
+use crate::reader::{UsageSource, find_recursive, is_under_dir_named, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
@@ -65,8 +65,7 @@ impl CursorReader {
 
     fn reload_conversation_models(&mut self) {
         let db_path = self.data_dir.join("ai-tracking/ai-code-tracking.db");
-        let Ok(conn) =
-            Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        let Ok(conn) = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         else {
             return;
         };
@@ -121,8 +120,7 @@ impl CursorReader {
 
         let transcript_files = self.find_transcript_files();
         let store_files = self.find_store_db_files();
-        let current_transcripts: HashSet<PathBuf> =
-            transcript_files.iter().cloned().collect();
+        let current_transcripts: HashSet<PathBuf> = transcript_files.iter().cloned().collect();
         let current_stores: HashSet<PathBuf> = store_files.iter().cloned().collect();
 
         self.transcript_positions
@@ -161,9 +159,14 @@ impl CursorReader {
                 if let Ok(md) = std::fs::metadata(&file) {
                     if let Ok(modified) = md.modified() {
                         if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
-                            if let Some(file_ts) = Utc.timestamp_opt(dur.as_secs() as i64, 0).single() {
+                            if let Some(file_ts) =
+                                Utc.timestamp_opt(dur.as_secs() as i64, 0).single()
+                            {
                                 for r in &mut entries {
-                                    let age_secs = scan_now.signed_duration_since(r.timestamp).num_seconds().abs();
+                                    let age_secs = scan_now
+                                        .signed_duration_since(r.timestamp)
+                                        .num_seconds()
+                                        .abs();
                                     let rec_year = r.timestamp.format("%Y").to_string();
                                     let scan_year = scan_now.format("%Y").to_string();
                                     if age_secs < 300 || rec_year == scan_year {
@@ -219,9 +222,9 @@ impl CursorReader {
         let project = extract_store_project(path);
         let session = session_label(&project, &session_id);
 
-        let mut stmt = match conn.prepare(
-            "SELECT rowid, key, value FROM blobs WHERE rowid > ?1 ORDER BY rowid",
-        ) {
+        let mut stmt = match conn
+            .prepare("SELECT rowid, key, value FROM blobs WHERE rowid > ?1 ORDER BY rowid")
+        {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
@@ -236,10 +239,7 @@ impl CursorReader {
             return Vec::new();
         };
 
-        let seen = self
-            .store_seen_keys
-            .entry(path.to_path_buf())
-            .or_default();
+        let seen = self.store_seen_keys.entry(path.to_path_buf()).or_default();
         let mut records = Vec::new();
         let mut max_rowid = query_start_rowid;
 
@@ -268,6 +268,9 @@ impl UsageSource for CursorReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_all_inner(false)
     }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.data_dir.clone()]
+    }
 }
 
 fn transcript_meta_for(path: &Path, models: &HashMap<String, String>) -> TranscriptTurnState {
@@ -291,7 +294,10 @@ fn extract_transcript_paths(path: &Path) -> (String, String) {
     for ancestor in path.ancestors() {
         if let Some(name) = ancestor.file_name().and_then(|n| n.to_str()) {
             if name == "agent-transcripts" {
-                if let Some(proj) = ancestor.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+                if let Some(proj) = ancestor
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
                 {
                     project = prettify_project_id(proj);
                 }
@@ -328,7 +334,10 @@ fn extract_store_project(path: &Path) -> String {
             let name = a.file_name()?.to_str()?;
             if name == "chats" {
                 None
-            } else if a.parent().is_some_and(|p| p.file_name().is_some_and(|n| n == "chats")) {
+            } else if a
+                .parent()
+                .is_some_and(|p| p.file_name().is_some_and(|n| n == "chats"))
+            {
                 Some(prettify_project_id(name))
             } else {
                 None
@@ -417,15 +426,11 @@ fn parse_transcript_line(line: &str, st: &mut TranscriptTurnState) -> Option<Usa
 
     // Capture embedded timestamp if the transcript line carries one (consistent with
     // grok/codex/claude/pi/etc readers). This is used in finalize for the turn.
-    if let Some(ts) = v
-        .get("timestamp")
-        .and_then(|t| t.as_str())
-        .and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(s)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .ok()
-        })
-    {
+    if let Some(ts) = v.get("timestamp").and_then(|t| t.as_str()).and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .ok()
+    }) {
         st.current_turn_timestamp = Some(ts);
     }
 
@@ -470,13 +475,20 @@ fn finalize_transcript_turn(st: &mut TranscriptTurnState) -> Option<UsageRecord>
     Some(UsageRecord {
         timestamp: ts,
         platform: Platform::Cursor,
-        model,
-        session: session_label(&st.project, &st.conversation_id),
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session_label(&st.project, &st.conversation_id)),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         cost_usd: cost,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }
 
@@ -519,10 +531,7 @@ fn parse_store_blob(
         if role != "assistant" {
             return None;
         }
-        let id = v
-            .get("id")
-            .and_then(|i| i.as_str())
-            .unwrap_or(key);
+        let id = v.get("id").and_then(|i| i.as_str()).unwrap_or(key);
         let dedup = format!("msg:{session_id}:{id}");
         if !seen.insert(dedup) {
             return None;
@@ -540,13 +549,20 @@ fn parse_store_blob(
         return Some(UsageRecord {
             timestamp: Utc::now(),
             platform: Platform::Cursor,
-            model,
-            session: session.to_string(),
+            model: crate::state::intern(&model),
+            session: crate::state::intern(session),
             input_tokens: 0,
             output_tokens: output,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             cost_usd: cost,
+            files_read: 0,
+            files_edited: 0,
+            files_added: 0,
+            files_deleted: 0,
+            terminal_commands: 0,
+            lines_read: 0,
+            lines_edited: 0,
         });
     }
 
@@ -606,13 +622,20 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
     Some(UsageRecord {
         timestamp,
         platform: Platform::Cursor,
-        model,
-        session: session.to_string(),
+        model: crate::state::intern(&model),
+        session: crate::state::intern(session),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         cost_usd: cost,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }
 
@@ -686,10 +709,8 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
         let db_path = path.join("store.db");
         let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE blobs (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-        )
-        .unwrap();
+        conn.execute_batch("CREATE TABLE blobs (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
         for (key, value) in blobs {
             conn.execute(
                 "INSERT INTO blobs (key, value) VALUES (?1, ?2)",
@@ -719,7 +740,10 @@ mod tests {
         assert!(records[0].input_tokens > 0);
         assert!(records[0].output_tokens > 0);
         assert_eq!(records[0].platform, Platform::Cursor);
-        assert_eq!(records[0].session, "myproject a3f2c1d8");
+        assert_eq!(
+            crate::state::resolve(records[0].session),
+            "myproject a3f2c1d8"
+        );
     }
 
     #[test]
@@ -740,7 +764,7 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].input_tokens, 120);
         assert_eq!(records[0].output_tokens, 45);
-        assert_eq!(records[0].model, "claude-sonnet-4-5");
+        assert_eq!(crate::state::resolve(records[0].model), "claude-sonnet-4-5");
     }
 
     #[test]
@@ -820,7 +844,11 @@ mod tests {
         // With the bug, last_rowid=1 and new rowid=1 => WHERE rowid > 1 yields nothing.
         // poll_delta (or any subsequent) should still surface the new record.
         let delta = reader.poll_delta();
-        assert_eq!(delta.len(), 1, "expected to read new records after store.db replacement/rotation");
+        assert_eq!(
+            delta.len(),
+            1,
+            "expected to read new records after store.db replacement/rotation"
+        );
         assert_eq!(delta[0].input_tokens, 20);
         assert_eq!(delta[0].output_tokens, 7);
     }

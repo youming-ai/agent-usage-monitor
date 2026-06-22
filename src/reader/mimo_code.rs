@@ -1,5 +1,5 @@
-use super::sqlite_message_reader::SqliteMessageReader;
 use super::UsageSource;
+use super::sqlite_message_reader::SqliteMessageReader;
 use crate::state::{Platform, UsageRecord};
 use std::path::PathBuf;
 
@@ -7,12 +7,20 @@ use std::path::PathBuf;
 /// Delegates to the shared `SqliteMessageReader`.
 pub struct MimoCodeReader {
     inner: SqliteMessageReader,
+    pub(crate) db_path: PathBuf,
 }
 
 impl MimoCodeReader {
     pub fn new(data_dir: PathBuf) -> Self {
+        let db_path = data_dir.join("mimocode.db");
         Self {
-            inner: SqliteMessageReader::new(data_dir, "mimocode.db", Platform::MimoCode, "mimocode"),
+            inner: SqliteMessageReader::new(
+                data_dir,
+                "mimocode.db",
+                Platform::MimoCode,
+                "mimocode",
+            ),
+            db_path,
         }
     }
 }
@@ -26,6 +34,9 @@ impl UsageSource for MimoCodeReader {
     }
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.inner.poll_delta()
+    }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.db_path.clone()]
     }
 }
 
@@ -67,23 +78,24 @@ mod tests {
         insert(&conn, "m4", 2000, ASSISTANT_2);
         let mut reader = MimoCodeReader {
             inner: SqliteMessageReader::from_connection(conn, Platform::MimoCode, "mimocode"),
+            db_path: PathBuf::new(),
         };
 
         let records = reader.scan_all();
         assert_eq!(records.len(), 2);
 
         let r1 = &records[0];
-        assert_eq!(r1.model, "xiaomi/mimo-v2.5-pro");
+        assert_eq!(crate::state::resolve(r1.model), "xiaomi/mimo-v2.5-pro");
         assert_eq!(r1.input_tokens, 100);
         assert_eq!(r1.output_tokens, 50);
         assert_eq!(r1.cache_read_tokens, 5);
         assert_eq!(r1.cache_creation_tokens, 2);
         assert_eq!(r1.cost_usd, 0.0);
-        assert_eq!(r1.session, "myproject ses_abc");
+        assert_eq!(crate::state::resolve(r1.session), "myproject ses_abc");
         assert_eq!(r1.platform, Platform::MimoCode);
 
         let r2 = &records[1];
-        assert_eq!(r2.model, "anthropic/claude-sonnet-4");
+        assert_eq!(crate::state::resolve(r2.model), "anthropic/claude-sonnet-4");
         assert_eq!(r2.cost_usd, 1.5);
     }
 
@@ -93,6 +105,7 @@ mod tests {
         insert(&conn, "m1", 1000, ASSISTANT_1);
         let mut reader = MimoCodeReader {
             inner: SqliteMessageReader::from_connection(conn, Platform::MimoCode, "mimocode"),
+            db_path: PathBuf::new(),
         };
 
         assert_eq!(reader.scan_all().len(), 1);
@@ -108,7 +121,10 @@ mod tests {
 
         let delta = reader.poll_delta();
         assert_eq!(delta.len(), 1);
-        assert_eq!(delta[0].model, "anthropic/claude-sonnet-4");
+        assert_eq!(
+            crate::state::resolve(delta[0].model),
+            "anthropic/claude-sonnet-4"
+        );
     }
 
     #[test]
@@ -128,13 +144,14 @@ mod tests {
         .unwrap();
         let mut reader = MimoCodeReader {
             inner: SqliteMessageReader::from_connection(conn, Platform::MimoCode, "mimocode"),
+            db_path: PathBuf::new(),
         };
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
         assert!(
-            records[0].session.starts_with("unknown"),
+            crate::state::resolve(records[0].session).starts_with("unknown"),
             "got {}",
-            records[0].session
+            crate::state::resolve(records[0].session)
         );
     }
 }

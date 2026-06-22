@@ -4,10 +4,10 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use super::UsageSource;
 use super::find_recursive;
 use super::is_uuid_jsonl;
-use super::session_jsonl::{read_jsonl_from_offset, SessionFileState};
-use super::UsageSource;
+use super::session_jsonl::{SessionFileState, read_jsonl_from_offset};
 
 pub struct FactoryReader {
     data_dir: PathBuf,
@@ -86,6 +86,9 @@ impl UsageSource for FactoryReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_files(false)
     }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.data_dir.clone()]
+    }
 }
 
 fn parse_factory_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
@@ -146,13 +149,20 @@ fn parse_factory_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> 
     Some(UsageRecord {
         timestamp,
         platform: Platform::Factory,
-        model,
-        session,
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_write,
         cost_usd,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }
 
@@ -190,13 +200,13 @@ mod tests {
         let mut reader = FactoryReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "claude-sonnet-4-5");
+        assert_eq!(crate::state::resolve(records[0].model), "claude-sonnet-4-5");
         assert_eq!(records[0].input_tokens, 1200);
         assert_eq!(records[0].output_tokens, 450);
         assert_eq!(records[0].cache_read_tokens, 800);
         assert_eq!(records[0].cache_creation_tokens, 150);
         assert_eq!(records[0].platform, Platform::Factory);
-        assert_eq!(records[0].session, "project abc123");
+        assert_eq!(crate::state::resolve(records[0].session), "project abc123");
     }
 
     #[test]

@@ -22,6 +22,8 @@ aum update         # self-update to the latest release (--dry-run / --force)
 aum config         # show current configuration
 aum config set <key> <value>  # set a configuration value
 aum config reset   # reset configuration to defaults
+aum mcp           # run as MCP server over stdio (no TUI)
+aum stats         # print JSON usage report (no TUI)
 ```
 
 | Flag | Default | Description |
@@ -44,6 +46,46 @@ aum config reset   # reset configuration to defaults
 **Keys:** `Tab` / `←` / `→` switch tab · `r` clear current tab · `q` quit
 
 Only tabs for agents whose data directory exists are shown in the TUI.
+
+## JSON stats
+
+For scripts, CI, and external monitoring, `aum` can emit a structured JSON
+report without launching the TUI:
+
+```bash
+# Pretty-printed to stdout (TTY auto-detected)
+aum stats
+
+# Compact JSON, suitable for `jq`
+aum stats --compact | jq '.platforms.claude_code.totals.cost_usd'
+
+# Filter to specific agents
+aum stats --platform claude_code,codex
+
+# Time-bounded report
+aum stats --since 2026-06-01 --until 2026-06-30
+
+# Include live quota (Claude / Codex; requires local credentials)
+aum stats --platform claude_code --include-quota
+```
+
+### Schema
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | RFC 3339 timestamp | When the report was generated |
+| `platforms` | object | Per-platform breakdown keyed by `config_key` (e.g. `claude_code`) |
+| `platforms.<k>.available` | bool | Whether the data directory exists |
+| `platforms.<k>.data_path` | path | Resolved path (CLI override > config > default) |
+| `platforms.<k>.totals` | object | Aggregate: `calls`, `cost_usd`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens` |
+| `platforms.<k>.models` | object | Per-model breakdown, same fields plus `sessions` |
+| `platforms.<k>.sessions[]` | array | Per-session summary with `models` list |
+| `platforms.<k>.dates` | object | Per-day bucket keyed by `YYYY-MM-DD` |
+| `platforms.<k>.quota` | object | Only present with `--include-quota`, only for Claude / Codex |
+| `totals` | object | Cross-platform: `total_calls`, `total_cost_usd`, `platforms_with_data` |
+
+Top-level keys are alphabetically ordered (BTreeMap). Use `--compact` for
+scripting, default (pretty) for human reading.
 
 ### Configuration
 
@@ -75,6 +117,66 @@ aum config set copilot_path ~/.copilot
 aum config set antigravity_path ~/.gemini/antigravity-cli
 aum config set mimo_code_path ~/.local/share/mimocode
 ```
+
+## Real-time updates
+
+The TUI uses `notify` (FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW
+on Windows) to react to file changes immediately, instead of polling on a timer.
+A 50 ms per-platform debounce coalesces bursts of writes; a 30 s fallback poll
+ensures the display stays current even if a FS event is dropped.
+
+Network filesystems (NFS, SMB) are not officially supported by `notify`; on those
+paths the 30 s fallback still works.
+
+## MCP server
+
+`aum` can run as an MCP (Model Context Protocol) server, exposing usage
+data to AI agent CLIs (Claude Code, Cursor, Copilot) via JSON-RPC over stdio:
+
+```bash
+aum mcp
+```
+
+### Client configuration
+
+Add to your client's MCP config (e.g., `~/.config/claude-code/.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "aum": {
+      "command": "aum",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Tools
+
+| Tool | Description |
+|---|---|
+| `get_daily_stats` | Daily usage breakdown (calls, cost, tokens, models) |
+| `get_model_usage` | AI model usage counts (sorted desc) |
+| `get_cost_breakdown` | Cost over a date range |
+| `get_file_operations` | File read/edited/added/deleted counts (returns 0 in current spec; reader-side data not yet collected) |
+| `get_session_stats` | Per-session summary |
+| `get_quota` | Live Claude Code / Codex quota |
+
+### Resources
+
+| URI | Description |
+|---|---|
+| `aum://summary` | Cross-platform totals (calls, cost, platforms with data) |
+| `aum://platforms` | 13-platform index with availability and resolved paths |
+
+### Manual smoke test
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' | aum mcp
+```
+
+Expect a JSON response with `serverInfo.name = "aum"`.
 
 ## Layout
 

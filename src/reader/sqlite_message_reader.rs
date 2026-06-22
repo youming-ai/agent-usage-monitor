@@ -1,4 +1,4 @@
-use crate::reader::{basename, session_label, UsageSource};
+use crate::reader::{UsageSource, basename, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
@@ -22,14 +22,28 @@ pub(crate) struct SqliteMessageReader {
 }
 
 impl SqliteMessageReader {
-    pub fn new(data_dir: PathBuf, db_name: &str, platform: Platform, default_provider: &'static str) -> Self {
+    pub fn new(
+        data_dir: PathBuf,
+        db_name: &str,
+        platform: Platform,
+        default_provider: &'static str,
+    ) -> Self {
         let db_path = data_dir.join(db_name);
         let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
-        Self { conn, cursor: 0, platform, default_provider }
+        Self {
+            conn,
+            cursor: 0,
+            platform,
+            default_provider,
+        }
     }
 
     #[cfg(test)]
-    pub(crate) fn from_connection(conn: Connection, platform: Platform, default_provider: &'static str) -> Self {
+    pub(crate) fn from_connection(
+        conn: Connection,
+        platform: Platform,
+        default_provider: &'static str,
+    ) -> Self {
         Self {
             conn: Some(conn),
             cursor: 0,
@@ -70,9 +84,14 @@ impl SqliteMessageReader {
                 if time_created > max_seen {
                     max_seen = time_created;
                 }
-                if let Some(rec) =
-                    parse_message(&data, &directory, &session_id, time_created, self.platform, self.default_provider)
-                {
+                if let Some(rec) = parse_message(
+                    &data,
+                    &directory,
+                    &session_id,
+                    time_created,
+                    self.platform,
+                    self.default_provider,
+                ) {
                     records.push(rec);
                 }
             }
@@ -120,7 +139,10 @@ fn parse_message(
         return None;
     }
 
-    let model_id = v.get("modelID").and_then(|x| x.as_str()).unwrap_or("unknown");
+    let model_id = v
+        .get("modelID")
+        .and_then(|x| x.as_str())
+        .unwrap_or("unknown");
     let provider_id = v
         .get("providerID")
         .and_then(|x| x.as_str())
@@ -133,12 +155,19 @@ fn parse_message(
     Some(UsageRecord {
         timestamp,
         platform,
-        model,
-        session,
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session),
         input_tokens: input,
         output_tokens: output + reasoning,
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_write,
         cost_usd: cost,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }

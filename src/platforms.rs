@@ -1,9 +1,10 @@
 use crate::cli::Cli;
 use crate::config::Config;
+use crate::reader::UsageSource;
 use crate::reader::antigravity::AntigravityReader;
 use crate::reader::claude::ClaudeReader;
-use crate::reader::copilot::CopilotReader;
 use crate::reader::codex::CodexReader;
+use crate::reader::copilot::CopilotReader;
 use crate::reader::cursor::CursorReader;
 use crate::reader::factory::FactoryReader;
 use crate::reader::grok::GrokReader;
@@ -13,7 +14,6 @@ use crate::reader::mimo_code::MimoCodeReader;
 use crate::reader::openclaw::OpenClawReader;
 use crate::reader::opencode::OpencodeReader;
 use crate::reader::pi::PiReader;
-use crate::reader::UsageSource;
 use crate::state::{AgentPaths, Platform, Tab};
 use std::path::PathBuf;
 
@@ -197,11 +197,7 @@ pub fn resolve_paths(cli: &Cli, config: &Config) -> AgentPaths {
 
 /// Apply a `aum config set <key> <value>` update. Path keys are driven by the
 /// registry; `refresh` and `max_records` are handled separately.
-pub fn apply_config_key(
-    config: &mut Config,
-    key: &str,
-    value: &str,
-) -> Result<(), String> {
+pub fn apply_config_key(config: &mut Config, key: &str, value: &str) -> Result<(), String> {
     for entry in REGISTRY {
         if entry.config_key == key {
             (entry.set_config_path)(config, PathBuf::from(value));
@@ -230,14 +226,14 @@ pub fn apply_config_key(
 /// Comma-separated path keys plus global settings, for error messages.
 pub fn config_key_list() -> String {
     let path_keys: Vec<_> = REGISTRY.iter().map(|e| e.config_key).collect();
-    format!(
-        "{}, refresh, max_records",
-        path_keys.join(", ")
-    )
+    format!("{}, refresh, max_records", path_keys.join(", "))
 }
 
 fn format_unknown_key(key: &str) -> String {
-    format!("Unknown configuration key: {key}\nAvailable keys: {}", config_key_list())
+    format!(
+        "Unknown configuration key: {key}\nAvailable keys: {}",
+        config_key_list()
+    )
 }
 
 #[cfg(test)]
@@ -295,7 +291,10 @@ mod tests {
             refresh: None,
         };
         let paths = resolve_paths(&cli, &config);
-        assert_eq!(paths.path_for(Tab::ClaudeCode), PathBuf::from("/cli/claude"));
+        assert_eq!(
+            paths.path_for(Tab::ClaudeCode),
+            PathBuf::from("/cli/claude")
+        );
         assert_eq!(paths.path_for(Tab::Codex), config.codex_path);
     }
 }

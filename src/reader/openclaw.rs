@@ -4,10 +4,10 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use super::UsageSource;
 use super::find_recursive;
 use super::is_under_dir_named;
-use super::session_jsonl::{read_jsonl_from_offset, SessionFileState};
-use super::UsageSource;
+use super::session_jsonl::{SessionFileState, read_jsonl_from_offset};
 
 pub struct OpenClawReader {
     data_dir: PathBuf,
@@ -87,6 +87,9 @@ impl UsageSource for OpenClawReader {
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_files(false)
     }
+    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
+        vec![self.data_dir.clone()]
+    }
 }
 
 fn parse_openclaw_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
@@ -105,10 +108,7 @@ fn parse_openclaw_line(line: &str, st: &SessionFileState) -> Option<UsageRecord>
 
     let input = usage.get("input")?.as_u64()?;
     let output = usage.get("output")?.as_u64().unwrap_or(0);
-    let cache_read = usage
-        .get("cacheRead")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let cache_read = usage.get("cacheRead").and_then(|v| v.as_u64()).unwrap_or(0);
     let cache_write = usage
         .get("cacheWrite")
         .and_then(|v| v.as_u64())
@@ -147,13 +147,20 @@ fn parse_openclaw_line(line: &str, st: &SessionFileState) -> Option<UsageRecord>
     Some(UsageRecord {
         timestamp,
         platform: Platform::OpenClaw,
-        model,
-        session,
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_write,
         cost_usd,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }
 
@@ -189,13 +196,13 @@ mod tests {
         let mut reader = OpenClawReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].model, "claude-opus-4");
+        assert_eq!(crate::state::resolve(records[0].model), "claude-opus-4");
         assert_eq!(records[0].input_tokens, 100);
         assert_eq!(records[0].output_tokens, 50);
         assert_eq!(records[0].cache_read_tokens, 10);
         assert_eq!(records[0].cache_creation_tokens, 5);
         assert_eq!(records[0].platform, Platform::OpenClaw);
-        assert_eq!(records[0].session, "project abc123");
+        assert_eq!(crate::state::resolve(records[0].session), "project abc123");
     }
 
     #[test]

@@ -8,7 +8,7 @@ use super::find_recursive;
 use super::jsonl_reader::JsonlReader;
 
 pub struct ClaudeReader {
-    data_dir: PathBuf,
+    pub(crate) data_dir: PathBuf,
     file_positions: HashMap<PathBuf, u64>,
 }
 
@@ -69,11 +69,7 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    if input_tokens == 0
-        && output_tokens == 0
-        && cache_read == 0
-        && cache_creation == 0
-    {
+    if input_tokens == 0 && output_tokens == 0 && cache_read == 0 && cache_creation == 0 {
         return None;
     }
 
@@ -104,13 +100,20 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
     Some(UsageRecord {
         timestamp,
         platform: Platform::ClaudeCode,
-        model,
-        session,
+        model: crate::state::intern(&model),
+        session: crate::state::intern(&session),
         input_tokens,
         output_tokens,
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_creation,
         cost_usd,
+        files_read: 0,
+        files_edited: 0,
+        files_added: 0,
+        files_deleted: 0,
+        terminal_commands: 0,
+        lines_read: 0,
+        lines_edited: 0,
     })
 }
 
@@ -149,7 +152,11 @@ mod tests {
 
         let mut reader = ClaudeReader::new(dir.path().to_path_buf());
         let initial = reader.scan_all();
-        assert_eq!(initial.len(), 2, "scan_all should find both assistant records");
+        assert_eq!(
+            initial.len(),
+            2,
+            "scan_all should find both assistant records"
+        );
 
         // No new lines were written, so a subsequent poll must yield nothing.
         let delta = reader.poll_delta();
@@ -178,7 +185,11 @@ mod tests {
         f.write_all(appended.as_bytes()).unwrap();
 
         let delta = reader.poll_delta();
-        assert_eq!(delta.len(), 1, "only the one appended record should be returned");
+        assert_eq!(
+            delta.len(),
+            1,
+            "only the one appended record should be returned"
+        );
         assert_eq!(delta[0].input_tokens, 300);
     }
 }
