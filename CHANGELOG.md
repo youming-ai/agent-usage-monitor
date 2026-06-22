@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.15.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.14.2...v0.15.0) (2026-06-22)
+
+
+### Features
+
+* **mcp:** adapt all 13 readers to construct UsageRecord using intern() ([d25a7ed](https://github.com/youming-ai/agent-usage-monitor/commit/d25a7edcfa1eb4aa0478a2f534886948bcd1e871))
+* **mcp:** adapt MCP server handlers to CompactDate and Spur ([84d27e1](https://github.com/youming-ai/agent-usage-monitor/commit/84d27e1f73a9f0e5a67cbeee74de395828e2ed42))
+* **mcp:** adapt stats module to CompactDate and Spur ([a8106bf](https://github.com/youming-ai/agent-usage-monitor/commit/a8106bf44976f29530fcadbc2656465cd1341876))
+* **mcp:** adapt TUI model and session tables to Spur + resolve() ([7b833cb](https://github.com/youming-ai/agent-usage-monitor/commit/7b833cb342f1ac07774269cba931a0801d52c9f0))
+* **mcp:** add 7 file_ops fields to UsageRecord (default 0) ([e3de62c](https://github.com/youming-ai/agent-usage-monitor/commit/e3de62ce4980e091d6671c8d1d582c8ade629e61))
+* **mcp:** add aum mcp subcommand with main.rs routing ([77824a7](https://github.com/youming-ai/agent-usage-monitor/commit/77824a7f6e11af9e8722bad293e67642045c4190))
+* **mcp:** add MCP server skeleton with AumMcpServer struct (fix plan bugs: get_info, AgentPaths from state) ([f6d61c8](https://github.com/youming-ai/agent-usage-monitor/commit/f6d61c86f0c7b5ab4cc89a437231201284f07d55))
+* **mcp:** implement 2 resources (aum://summary, aum://platforms) ([6cf7eed](https://github.com/youming-ai/agent-usage-monitor/commit/6cf7eed4aa0cb03f8a9bc1273266d884031be0f8))
+* **mcp:** implement 6 tool handlers (get_daily_stats, get_model_usage, get_cost_breakdown, get_file_operations, get_session_stats, get_quota) ([7a8286b](https://github.com/youming-ai/agent-usage-monitor/commit/7a8286b07db0fc2731da6b9860440b3705a51016))
+* **mcp:** update UsageRecord and state definition fields to Spur ([475569c](https://github.com/youming-ai/agent-usage-monitor/commit/475569c96046f67bf70c9dad4b3d781e0f457d2d))
+* stats, watcher, MCP server, and memory refactor ([5be6f6c](https://github.com/youming-ai/agent-usage-monitor/commit/5be6f6cda4dabbecfc780c30549335270ccec221))
+* **stats:** add build_platform_report aggregator with tests ([a5eb91d](https://github.com/youming-ai/agent-usage-monitor/commit/a5eb91d513af61a0e4603525a8c17e7b5fbcd069))
+* **stats:** add collect() function wiring readers + quota ([eb23dce](https://github.com/youming-ai/agent-usage-monitor/commit/eb23dceb9ef599d750e7b9182f78ebe34b322c56))
+* **stats:** add Filters struct with platform/date matching ([528d845](https://github.com/youming-ai/agent-usage-monitor/commit/528d845c93babf17632e03ec405acbd1d5d0161b))
+* **stats:** add QuotaView::from_info constructor ([b6377da](https://github.com/youming-ai/agent-usage-monitor/commit/b6377da3bd14967af9de1012c8106c3f6c23ebb7))
+* **stats:** add resolve_platform_filter accepting 3 key forms ([9b2b1ac](https://github.com/youming-ai/agent-usage-monitor/commit/9b2b1ac7c198035f82dfe230d48476f155178b00))
+* **stats:** add stats module with data types ([6372afa](https://github.com/youming-ai/agent-usage-monitor/commit/6372afaa13417b2edd3f03c8f2be6b2ee6d1e01c))
+* **stats:** add stats subcommand to CLI ([b99e281](https://github.com/youming-ai/agent-usage-monitor/commit/b99e281a0d8458dc66fdac19d3ae164dd92fde68))
+* **stats:** add write_json with pretty/compact modes ([22a1d99](https://github.com/youming-ai/agent-usage-monitor/commit/22a1d9937cc2326f2546b7b555dac5a69a4273db))
+* **stats:** route stats subcommand in main ([e4e34ed](https://github.com/youming-ai/agent-usage-monitor/commit/e4e34edcb6b8dc439c6fe01c170684887b968a6a))
+* **watcher:** add get_watch_directories() to UsageSource trait + 13 impls ([3711f0a](https://github.com/youming-ai/agent-usage-monitor/commit/3711f0a53d8a2dff729271a5cf69adb09f74a498))
+* **watcher:** add PlatformWatcher with notify 50ms debounce per platform ([da35fa7](https://github.com/youming-ai/agent-usage-monitor/commit/da35fa77346be27b4276cf20924fbd86542bdea9))
+* **watcher:** implement global INTERNER and CompactDate with tests ([9152e95](https://github.com/youming-ai/agent-usage-monitor/commit/9152e951b4f0e7666ab1900a4f7318661a9eaa18))
+* **watcher:** replace 1s polling with FS events + 30s fallback in main ([b8ebbc8](https://github.com/youming-ai/agent-usage-monitor/commit/b8ebbc86c36b16e46805bc358de62741c773f91c))
+
+
+### Refactors
+
+* **stats:** extract platform_canonical_key helper for reuse in collect() ([97f599e](https://github.com/youming-ai/agent-usage-monitor/commit/97f599ee74be3a1e8a1cc16b74235844e1627674))
+
+
+### Build System
+
+* add lasso 0.7 dependency with multi-threaded feature ([e27e3f2](https://github.com/youming-ai/agent-usage-monitor/commit/e27e3f269e753fd5c34cf769ce9c725d66bb434d))
+* add notify 8 and notify-debouncer-full 0.6 for FS watcher ([7120d70](https://github.com/youming-ai/agent-usage-monitor/commit/7120d709635ef51bf36e72a9b66037f72561c5b5))
+* add rmcp 0.12 for MCP server ([6f8d030](https://github.com/youming-ai/agent-usage-monitor/commit/6f8d030da29f7bdca0c7f5b4b88facd929fcf64d))
+
+
+### Documentation
+
+* add design spec for aum mcp server ([ab884cf](https://github.com/youming-ai/agent-usage-monitor/commit/ab884cf2f808a460d26cd5eba78b3da38fd57f08))
+* add design spec for aum stats --json subcommand ([e41ff59](https://github.com/youming-ai/agent-usage-monitor/commit/e41ff595d2aaf1da55af3b16a497e251dd272292))
+* add design spec for memory refactor ([d2fb2bc](https://github.com/youming-ai/agent-usage-monitor/commit/d2fb2bc790c61370cb2bab6f22b8a10c4f7126df))
+* add design spec for notify watcher ([a8228ba](https://github.com/youming-ai/agent-usage-monitor/commit/a8228ba8509f2f955f83255fb7c428a716bbb69e))
+* add implementation plan for aum mcp server ([3de6113](https://github.com/youming-ai/agent-usage-monitor/commit/3de61137eed902228d53eb195af50a1fb85f2895))
+* add implementation plan for aum stats --json subcommand ([b863d1e](https://github.com/youming-ai/agent-usage-monitor/commit/b863d1e72fa0fe7252398fe496417dd80ef3dfe7))
+* add implementation plan for notify watcher ([da32a14](https://github.com/youming-ai/agent-usage-monitor/commit/da32a14a3fb7435473e796d5d35ed02558ac8427))
+* add JSON stats section to README ([7dc0b27](https://github.com/youming-ai/agent-usage-monitor/commit/7dc0b27a22895d15eb293ce63b9396daff98d611))
+* fix plan - schemars as direct dep (not via rmcp re-export) ([547cec8](https://github.com/youming-ai/agent-usage-monitor/commit/547cec8a79c03745c63f55434c1f12c3c3c4e1de))
+* fix plan bugs (AgentPaths from state, get_info not server_info) ([e928280](https://github.com/youming-ai/agent-usage-monitor/commit/e92828018bf7d0ac78739164dcf7ce9516093f9e))
+* **mcp:** add MCP server section to README ([49a95f0](https://github.com/youming-ai/agent-usage-monitor/commit/49a95f0994f63a5ef7d7ea1f32c87db7471ba745))
+
 ## [0.14.2](https://github.com/youming-ai/agent-usage-monitor/compare/v0.14.1...v0.14.2) (2026-06-12)
 
 
