@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::platforms;
 use crate::state::{AgentPaths, Platform, Tab};
@@ -91,7 +92,7 @@ pub fn start_watchers(
         // 100ms test sleep, so a 50ms warmup is safe.
         let created = Instant::now();
 
-        let mut debouncer = new_debouncer(
+        let debouncer = new_debouncer(
             Duration::from_millis(50),
             None,
             move |res: DebounceEventResult| {
@@ -127,8 +128,17 @@ pub fn start_watchers(
                     }
                 }
             },
-        )
-        .expect("create debouncer");
+        );
+        let mut debouncer = match debouncer {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(
+                    "Failed to create watcher for {:?}: {e}; skipping platform",
+                    platform
+                );
+                continue;
+            }
+        };
 
         for dir in &watch_dirs {
             let candidate = if is_sqlite && dir.is_file() {
@@ -136,14 +146,18 @@ pub fn start_watchers(
             } else {
                 dir.as_path()
             };
-            let watch_path = candidate
+            let Some(watch_path) = candidate
                 .ancestors()
                 .find(|p| p.exists())
                 .map(|p| p.to_path_buf())
-                .expect("at least one ancestor must exist");
-            debouncer
-                .watch(&watch_path, RecursiveMode::Recursive)
-                .expect("watch path");
+            else {
+                warn!("No existing ancestor for {candidate:?}; skipping watch dir");
+                continue;
+            };
+            if let Err(e) = debouncer.watch(&watch_path, RecursiveMode::Recursive) {
+                warn!("Failed to watch {watch_path:?}: {e}; skipping watch dir");
+                continue;
+            }
         }
 
         watchers.push(PlatformWatcher {

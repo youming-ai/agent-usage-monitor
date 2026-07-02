@@ -5,6 +5,7 @@ pub mod mcp;
 pub mod platforms;
 pub mod quota;
 pub mod reader;
+pub mod readers;
 pub mod state;
 pub mod stats;
 pub mod ui;

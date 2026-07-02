@@ -4,6 +4,7 @@ use agent_usage_monitor::event::{AppEvent, EventLoop};
 use agent_usage_monitor::mcp;
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
+use agent_usage_monitor::readers::{self, PlatformReaders};
 use agent_usage_monitor::state::{AppState, Platform, Tab};
 use agent_usage_monitor::stats;
 use agent_usage_monitor::ui;
@@ -86,57 +87,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Reader task: FS-driven via the watcher module, with a 30s fallback
     // poll as a safety net for edge cases the watcher misses (atomic
     // rename, attribute-only writes, FS-event loss across reload).
+    //
+    // Readers are built ONCE and reused for every refresh. Rebuilding per
+    // event would drop each reader's byte-offset/cursor/dedup state and
+    // re-scan from zero, double-counting every record (see `readers` module).
     let reader_handle = task::spawn({
         let agent_paths = agent_paths.clone();
         let app_state = app_state.clone();
         async move {
+            let mut readers = PlatformReaders::build(&agent_paths);
             let (_platform_watchers, mut watcher_rx) = watcher::start_watchers(&agent_paths);
             let mut fallback = tokio::time::interval(Duration::from_secs(30));
             fallback.tick().await; // discard immediate first tick
 
+            // Initial full scan, AWAITED before entering the loop: otherwise a
+            // buffered watcher event or a fallback tick could `poll_delta`
+            // (empty cursor -> reads the full history) before `scan_all` has
+            // advanced the offset, and both merges would land -> double count.
+            {
+                let initial: Vec<(Platform, readers::SharedReader)> = readers
+                    .platforms()
+                    .into_iter()
+                    .filter_map(|p| readers.get(p).map(|r| (p, r)))
+                    .collect();
+                let app_state = app_state.clone();
+                let _ = task::spawn_blocking(move || {
+                    for (platform, reader) in initial {
+                        readers::scan_reader_into(&reader, &app_state, platform);
+                    }
+                })
+                .await;
+            }
+
             loop {
                 tokio::select! {
                     Some(msg) = watcher_rx.recv() => {
-                        let platform_filter: Option<Platform> = match &msg {
-                            WatcherMessage::Event { platform, .. } => Some(*platform),
-                            WatcherMessage::FallbackTick => None,
+                        // Poll only the platform whose files changed; a
+                        // FallbackTick message (unused by the current watcher)
+                        // falls back to polling every platform.
+                        let targets: Vec<Platform> = match &msg {
+                            WatcherMessage::Event { platform, .. } => vec![*platform],
+                            WatcherMessage::FallbackTick => readers.platforms(),
                         };
-                        for entry in platforms::entries() {
-                            if platform_filter.is_some_and(|p| entry.platform != p) {
-                                continue;
+                        for platform in targets {
+                            if let Some(reader) = readers.get(platform) {
+                                let app_state = app_state.clone();
+                                task::spawn_blocking(move || {
+                                    readers::poll_reader_into(&reader, &app_state, platform);
+                                });
                             }
-                            let path = agent_paths.path_for(entry.tab);
-                            if !path.exists() { continue; }
-                            let mut reader = entry.build_reader(path);
-                            let platform = entry.platform;
-                            let app_state = app_state.clone();
-                            task::spawn_blocking(move || {
-                                let records = reader.poll_delta();
-                                if !records.is_empty() {
-                                    info!("{:?}: Found {} new records", platform, records.len());
-                                    if let Ok(mut state) = app_state.write() {
-                                        state.add_records(platform, records);
-                                    }
-                                }
-                            });
                         }
                     }
                     _ = fallback.tick() => {
-                        for entry in platforms::entries() {
-                            let path = agent_paths.path_for(entry.tab);
-                            if !path.exists() { continue; }
-                            let mut reader = entry.build_reader(path);
-                            let platform = entry.platform;
-                            let app_state = app_state.clone();
-                            task::spawn_blocking(move || {
-                                let records = reader.poll_delta();
-                                if !records.is_empty() {
-                                    info!("{:?}: Found {} new records", platform, records.len());
-                                    if let Ok(mut state) = app_state.write() {
-                                        state.add_records(platform, records);
+                        // Pick up platforms whose data dir appeared after
+                        // launch (full scan once), poll the rest for deltas.
+                        let newly: Vec<Platform> = readers.discover_new(&agent_paths);
+                        for platform in readers.platforms() {
+                            if let Some(reader) = readers.get(platform) {
+                                let app_state = app_state.clone();
+                                let is_new = newly.contains(&platform);
+                                task::spawn_blocking(move || {
+                                    if is_new {
+                                        readers::scan_reader_into(&reader, &app_state, platform);
+                                    } else {
+                                        readers::poll_reader_into(&reader, &app_state, platform);
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
                     }
                 }
