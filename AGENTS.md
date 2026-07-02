@@ -1,62 +1,68 @@
-# AGENTS.md — agent-usage-monitor
+# Repository Guidelines
 
-## Project snapshot
+## Project Overview
+`agent-usage-monitor` (`aum`) is a single Rust binary that provides a terminal user interface (TUI) dashboard and a command-line interface (CLI) to track local AI agent usage, costs, and API quotas. It currently monitors 13 developer agent tools: Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI, and MiMo Code.
 
-Single Rust binary (`aum`) — a TUI dashboard that reads local agent logs (JSONL / SQLite) and displays per-model usage, cost, and quota. Supports 13 agents: Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI, MiMo Code.
+## Architecture & Data Flow
+- **Data Ingestion**: A dual-track system uses a file system watcher (`src/watcher.rs` based on the `notify` crate) with 50ms debouncing, alongside a 30-second fallback timer interval. Logs from various platforms are abstracted via the `UsageSource` trait, supporting JSONL log files (`JsonlReader`) and SQLite databases (`SqliteMessageReader`).
+- **State Management**: The global state `AppState` is wrapped in `Arc<RwLock<AppState>>` for safe multi-threaded sharing. It maintains a fixed-size `PlatformState` array indexed by the platform enum's value. To keep memory usage extremely low under massive logs, a thread-safe string interner (`ThreadedRodeo` from the `lasso` crate) converts repetitive model names and session IDs into lightweight `Spur` tokens (Copy types).
+- **Platform Registry**: All platform-specific metadata, CLI parameters, default data paths, and reader initializations are managed centrally in `src/platforms.rs` (`REGISTRY`). Adding a platform follows the Open-Closed Principle—adding a single entry to `REGISTRY` without touching `main.rs`.
+- **TUI & UI Rendering**: The TUI runs on its own thread, utilizing `std::sync::RwLock`'s `try_read()` method to fetch state from `AppState`. If a lock conflict occurs, the frame is skipped to prevent any interface lag.
+- **Data Flow**:
+  1. Log file modified -> `PlatformWatcher` detects change and notifies main loop via `WatcherMessage::Event` over a `tokio::sync::mpsc` channel.
+  2. Main loop schedules reader tasks on `tokio::task::spawn_blocking`.
+  3. The reader locks a `Mutex` on its persistent instance, polls only new log lines since the last byte offset or row ID cursor, and parses `UsageRecord`s.
+  4. Global write lock (`state.write()`) is acquired; new records are merged and old records outside the sliding window are evicted.
+  5. UI redraws every 250ms (Tick).
 
-## Build & test
+## Key Directories
+- `src/`: Core source files of the application.
+  - `src/reader/`: Concrete implementations of log readers for various platforms.
+  - `src/quota/`: API clients for fetching platform quotas (such as Claude or Codex).
+  - `src/ui/`: Ratatui-based TUI components and layout rendering.
+  - `src/state/`: State management, model pricing configurations, and string interning.
+- `tests/`: Integration tests.
+  - `tests/fixtures/`: Raw log files used for testing the readers against real inputs.
+- `.github/workflows/`: Automated CI/CD release configurations.
 
-```bash
-cargo build --release          # binary: target/release/aum
-cargo test                     # unit + integration tests
-cargo test --test reader_fixtures   # fixture tests only
-```
+## Development Commands
+- **Build**: `cargo build --release` (Generates binary at `target/release/aum`)
+- **Test**:
+  - Run all tests: `cargo test`
+  - Run specific integration tests: `cargo test --test stats` or `cargo test --test readers`
+  - Run fixture tests only: `cargo test --test reader_fixtures`
+  - Run pricing unit tests: `cargo test reader::pricing`
+- **Lint**: `cargo clippy`
+- **Format**: `cargo fmt`
+- **Run**: `cargo run -- <args>`
 
-## Architecture (high-signal)
+## Code Conventions & Common Patterns
+- **Blocking I/O Isolation**: Because disk/SQLite reads and API calls are blocking, they must always be run using `tokio::task::spawn_blocking` to avoid stalling the main Tokio reactor.
+- **Persistent Readers**: All readers are stored in a `SharedReader` (`Arc<Mutex<Box<dyn UsageSource>>>`) within `PlatformReaders`. Rebuilding them on every refresh discards cursors/offsets, leading to double-counting and performance degradation.
+- **No-Blocking UI**: UI rendering must never block. Use `AppState::try_read` instead of `read` or `unwrap`.
+- **Formatting**: Always run `cargo fmt` and `cargo clippy` before committing code.
+- **XDG Path Compliance**: Standardize non-App-Support platforms (e.g. `opencode` and `MiMo Code`) under `~/.local/share/` (or `$XDG_DATA_HOME`) using `xdg_data_dir()`.
 
-### Adding a new agent
-The only file you must edit is `src/platforms.rs`. Add one `RegistryEntry` to `REGISTRY` — it wires the path keys, reader factory, and config setter. No changes needed in `main.rs` or CLI handlers.
+## Important Files
+- `src/main.rs`: Entry point containing the asynchronous runner, initializing watchers, TUI, and state update loops.
+- `src/platforms.rs`: The central registry for all platforms (`REGISTRY`).
+- `src/readers.rs`: Handles lifecycle and concurrency control of persistent platform readers.
+- `src/watcher.rs`: Listens for FS changes, filters events, and communicates with the main task.
+- `src/state/app_state.rs`: Holds the global dashboard state and handles string interning.
+- `src/updater/mod.rs`: Handles safe in-place self-upgrades without shell scripting (uses `ureq`, `flate2`, and `tar`).
+- `Cargo.toml`: Declares project dependencies, features, and binary information.
 
-### Core modules
-- `src/platforms.rs` — `RegistryEntry` table; single source of truth for platform wiring.
-- `src/reader/` — One reader per agent. Most JSONL readers implement `JsonlReader` (see `jsonl_reader.rs`); SQLite readers (opencode, hermes, MiMo Code) implement `UsageSource` directly. Opencode and MiMo Code share the same `SqliteMessageReader` implementation (see `sqlite_message_reader.rs`).
-- `src/reader/pricing.rs` — Hard-coded USD-per-1M-token tables. Update when upstream pricing changes. Unknown models show `$0.00`.
-- `src/state/app_state.rs` — Per-platform state stored in a `[PlatformState; Platform::COUNT]` array indexed by `Platform::index()`. A single `add_records(platform, records)` method handles all platforms; eviction reverses per-model aggregates but not lifetime totals. `Tab` and `Platform` share variant order so `tab.index()` maps directly to the same slot.
-- `src/quota/` — Quota fetchers (Claude, Codex). Each implements `QuotaFetcher` and is registered in `quota::fetchers()`. Use local credentials (Keychain / `~/.claude/.credentials.json` / `~/.codex/auth.json`).
-- `src/ui/` — ratatui widgets. Accent colors are defined in `Tab::primary_color()` in `app_state.rs`.
+## Runtime/Tooling Preferences
+- **Runtime**: Native binary built via Rust compiler (Cargo). Uses the `tokio` runtime for asynchronous orchestration.
+- **Release Automation**: Release-please manages versioning and changelogs automatically. Release workflows compile targets for four platforms:
+  - macOS ARM64 (`aum-darwin-arm64.tar.gz`)
+  - macOS AMD64 (`aum-darwin-amd64.tar.gz`)
+  - Linux AMD64 (`aum-linux-amd64.tar.gz`)
+  - Linux ARM64 (`aum-linux-arm64.tar.gz`)
+- **Self-Update**: Uses atomic rename (`std::fs::rename`) on a temporary file `.{BINARY_NAME}.update.tmp` in the same directory to prevent `ETXTBSY` (text file busy) and `EXDEV` (cross-device link) errors.
 
-### Key quirks
-- **Reader tasks run in `task::spawn_blocking`** — `UsageSource` uses `std::sync::Mutex`, not `tokio::sync::Mutex`, because the reader does blocking I/O.
-- **Refresh is clamped to ≥1s** — `tokio::time::interval` panics on zero; `main.rs` enforces `refresh.max(1)`.
-- **opencode and MiMo Code paths are XDG, not macOS App Support** — `config.rs` has `xdg_data_dir()`; on macOS this resolves to `~/.local/share/opencode` and `~/.local/share/mimocode`, not `~/Library/Application Support/`.
-- **Tab availability detection is platform-specific** — Some agents check for subdirectories/files (e.g., Hermes checks `state.db`, Cursor checks `projects` or `chats`, Grok checks `sessions`). See `Tab::is_available_at()`.
-
-### Session labels
-Format: `<basename> <short-id>`. The short-id is the first 8 **characters** (not bytes) to avoid panics on multibyte UTF-8 in free-form log data.
-
-## Configuration
-
-Stored in `~/.config/aum/config.toml` (platform equivalent). CLI `--*-path` args override config values.
-
-```bash
-aum config set refresh 2
-aum config set max_records 200
-aum config set grok_path ~/.grok
-```
-
-## Tests
-
-- **Unit tests** — Inline in `src/` modules (e.g., `reader::claude`, `state::app_state`, `platforms`).
-- **Integration tests** — `tests/reader_fixtures.rs` scans committed samples under `tests/fixtures/` to catch format regressions. Add a new fixture directory when adding a new agent reader.
-- **Pricing tests** — `reader/pricing.rs` has regression tests for specific-vs-base model matching (e.g., `gpt-4.1-mini` must not match `gpt-4.1`).
-
-## Release workflow
-
-- Uses **release-please** (`release-please-config.json`).
-- Release assets are `aum-darwin-arm64.tar.gz` and `aum-linux-amd64.tar.gz` (see `install.sh` and `src/updater/platform.rs`).
-
-## What NOT to put here
-
-- Generic Rust advice (cargo, clippy, rustfmt) — follows standard conventions.
-- Exhaustive file tree — structure is obvious from `src/`.
-- TUI tutorial — ratatui docs cover it.
+## Testing & QA
+- **Unit Tests**: Inline tests in modules like `src/reader/pricing.rs` and `src/state/app_state.rs` testing details like price matching and state eviction.
+- **Integration Tests**: Grouped under the `tests/` directory. Uses `tests/reader_fixtures.rs` to run regressions against actual committed logs in `tests/fixtures/`.
+- **E2E/CLI Tests**: `tests/stats.rs` runs process-level tests against the compiled binary.
+- **MCP Tests**: `tests/mcp.rs` tests JSON-RPC interfaces over stdin/stdout.
