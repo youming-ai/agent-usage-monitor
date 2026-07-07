@@ -181,6 +181,14 @@ mod tests {
     fn renders_opencode_tab_empty_with_no_quota() {
         let mut s = sample_state();
         s.active_tab = crate::state::Tab::OpenCode;
+        s.platform_mut(Tab::OpenCode).quota = Some(QuotaInfo {
+            tool_name: "opencode".into(),
+            email: None,
+            account_id: None,
+            windows: vec![],
+            fetched_at: Instant::now(),
+            error: None,
+        });
         let out = dump(80, 18, s);
         assert!(out.contains("OPENCODE"));
         assert!(out.contains("no quota data"));

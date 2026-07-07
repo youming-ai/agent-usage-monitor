@@ -2,6 +2,7 @@ pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod copilot;
+pub mod cursor;
 pub mod factory;
 pub mod grok;
 pub mod kimi_code;
@@ -32,6 +33,12 @@ pub fn fetchers() -> &'static [Box<dyn QuotaFetcher>] {
         vec![
             Box::new(claude::ClaudeQuotaFetcher),
             Box::new(codex::CodexQuotaFetcher),
+            Box::new(copilot::CopilotQuotaFetcher),
+            Box::new(cursor::CursorQuotaFetcher),
+            Box::new(antigravity::AntigravityQuotaFetcher),
+            Box::new(opencode::OpencodeQuotaFetcher),
+            Box::new(grok::GrokQuotaFetcher),
+            Box::new(factory::FactoryQuotaFetcher),
         ]
     });
     &FETCHERS
