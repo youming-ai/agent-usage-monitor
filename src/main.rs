@@ -201,11 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             for fetcher in quota::fetchers() {
                 let p = fetcher.platform();
-                let tab = match p {
-                    Platform::ClaudeCode => Tab::ClaudeCode,
-                    Platform::Codex => Tab::Codex,
-                    _ => continue,
-                };
+                let tab = Tab::from_platform(p);
                 let stale = quota_state
                     .try_read()
                     .map(|state| {
@@ -224,11 +220,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .await
                         .unwrap_or_default()
                     {
-                        let tab = match fetcher_platform {
-                            Platform::ClaudeCode => Tab::ClaudeCode,
-                            Platform::Codex => Tab::Codex,
-                            _ => continue,
-                        };
+                        let tab = Tab::from_platform(fetcher_platform);
                         if let Ok(mut s) = qs.write() {
                             s.platform_mut(tab).quota = Some(q);
                         }

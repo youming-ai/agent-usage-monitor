@@ -250,7 +250,17 @@ impl Tab {
     }
 
     pub const fn has_quota_api(self) -> bool {
-        matches!(self, Tab::ClaudeCode | Tab::Codex)
+        matches!(
+            self,
+            Tab::ClaudeCode
+                | Tab::Codex
+                | Tab::Copilot
+                | Tab::Cursor
+                | Tab::Antigravity
+                | Tab::OpenCode
+                | Tab::Grok
+                | Tab::Factory
+        )
     }
 
     pub fn all() -> &'static [Tab] {

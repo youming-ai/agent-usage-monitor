@@ -70,10 +70,19 @@ pub fn quota_panel(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'sta
             format!(" ✗ {}", q.error.as_ref().unwrap().display()),
             Style::default().fg(Color::DarkGray),
         ))],
-        Some(q) if q.windows.is_empty() => vec![Line::from(Span::styled(
-            " no quota data",
-            Style::default().fg(Color::DarkGray),
-        ))],
+        Some(q) if q.windows.is_empty() => {
+            if q.email.is_some() {
+                vec![Line::from(Span::styled(
+                    " ✓ Signed in",
+                    Style::default().fg(accent),
+                ))]
+            } else {
+                vec![Line::from(Span::styled(
+                    " no quota data",
+                    Style::default().fg(Color::DarkGray),
+                ))]
+            }
+        }
         Some(q) => q
             .windows
             .iter()
