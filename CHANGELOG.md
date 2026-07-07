@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.15.0...v0.16.0) (2026-07-07)
+
+
+### Features
+
+* support local login and auth status checking for 6 additional platforms ([d0816eb](https://github.com/youming-ai/agent-usage-monitor/commit/d0816eb7442711e6990cb9497e84e40b04e7ebf6))
+* support local login and auth status checking for 6 additional platforms ([c449233](https://github.com/youming-ai/agent-usage-monitor/commit/c449233c392c4aa87402ac58f97eefe04189c927))
+
 ## [0.15.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.14.2...v0.15.0) (2026-06-22)
 
 
