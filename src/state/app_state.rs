@@ -1,6 +1,6 @@
 use crate::quota::QuotaInfo;
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 use lasso::{Spur, ThreadedRodeo};
@@ -338,6 +338,12 @@ pub struct UsageRecord {
     pub platform: Platform,
     pub model: InternedString,
     pub session: InternedString,
+    /// Stable identity used to dedup re-emitted records (e.g. after a file
+    /// truncation/rewrite forces a reader to re-read from byte 0). Readers
+    /// build this from the strongest identifier their source data carries —
+    /// a message/event id, a database primary key, or (when nothing better
+    /// exists) a hash of the record's own content. See `AppState::add_records`.
+    pub id: InternedString,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
@@ -373,6 +379,15 @@ pub struct PlatformState {
     pub total_cost: f64,
     pub quota: Option<QuotaInfo>,
     pub max_records: usize,
+    /// Ids of every record ever ingested for this platform, so a reader
+    /// re-emitting the same record (e.g. after a truncation-triggered
+    /// re-read from byte 0) doesn't double-count it.
+    // ponytail: grows for the process lifetime rather than tracking only the
+    // bounded `records` window — bounding it would let a record evicted from
+    // `records` be double-counted if the same file is re-read later. A Spur
+    // is 4 bytes, so even a long-running session ingesting millions of
+    // records stays well under the ceiling where this would matter.
+    seen_ids: HashSet<InternedString>,
 }
 
 impl PlatformState {
@@ -413,6 +428,7 @@ impl AppState {
             total_cost: 0.0,
             quota: None,
             max_records,
+            seen_ids: HashSet::new(),
         };
         Self {
             platforms: [
@@ -450,6 +466,12 @@ impl AppState {
     pub fn add_records(&mut self, platform: Platform, records: Vec<UsageRecord>) {
         let p = &mut self.platforms[platform.index()];
         for r in records {
+            // A reader re-emitting a record it already delivered (e.g. after a
+            // truncation forced a re-read from byte 0) must not be counted
+            // twice — see `UsageRecord::id` and `PlatformState::seen_ids`.
+            if !p.seen_ids.insert(r.id) {
+                continue;
+            }
             if p.records.len() >= p.max_records
                 && let Some(old) = p.records.pop_front()
             {
@@ -468,6 +490,7 @@ impl AppState {
         p.sessions.clear();
         p.total_calls = 0;
         p.total_cost = 0.0;
+        p.seen_ids.clear();
     }
 
     pub fn detect_available_tabs(&mut self, paths: &AgentPaths) {
@@ -516,7 +539,11 @@ fn reverse_model_aggregate(map: &mut HashMap<InternedString, SessionSummary>, r:
         s.total_cache_creation = s
             .total_cache_creation
             .saturating_sub(r.cache_creation_tokens);
-        s.total_cost -= r.cost_usd;
+        // f64 has no saturating_sub; clamp to 0 like the token fields above
+        // so float drift (or evicting more cost than was ever added, which
+        // shouldn't happen but isn't worth a panic/underflow over) can't push
+        // this negative.
+        s.total_cost = (s.total_cost - r.cost_usd).max(0.0);
         s.request_count = s.request_count.saturating_sub(1);
         if s.request_count == 0 {
             entry.remove();
@@ -535,11 +562,26 @@ mod tests {
     use super::*;
 
     fn rec(platform: Platform, model: &str, input: u64, output: u64, cost: f64) -> UsageRecord {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        rec_with_id(platform, model, input, output, cost, &format!("auto-{id}"))
+    }
+
+    fn rec_with_id(
+        platform: Platform,
+        model: &str,
+        input: u64,
+        output: u64,
+        cost: f64,
+        id: &str,
+    ) -> UsageRecord {
         UsageRecord {
             timestamp: Utc::now(),
             platform,
             model: intern(model),
             session: intern("test"),
+            id: intern(id),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: 0,
@@ -675,6 +717,60 @@ mod tests {
         let mut state = AppState::new();
         state.detect_available_tabs(&paths);
         assert_eq!(state.available_tabs, vec![Tab::ClaudeCode]);
+    }
+
+    #[test]
+    fn add_records_ignores_a_re_emitted_id() {
+        // Simulates a reader re-delivering the same record after a file
+        // truncation forced it to re-read from byte 0 (see jsonl_reader.rs).
+        let mut s = AppState::with_capacity(10);
+        let r = rec_with_id(Platform::ClaudeCode, "opus-4", 100, 50, 1.0, "same-id");
+        s.add_records(Platform::ClaudeCode, vec![r.clone()]);
+        s.add_records(Platform::ClaudeCode, vec![r]);
+        assert_eq!(
+            s.platforms[claude_idx()].total_calls,
+            1,
+            "re-emitted record with the same id must not be double-counted"
+        );
+        assert_eq!(s.platforms[claude_idx()].total_cost, 1.0);
+    }
+
+    #[test]
+    fn add_records_keeps_distinct_records_with_identical_timestamp_and_tokens() {
+        // Two genuinely distinct records (different ids) that happen to share
+        // every other field must both survive — dedup must not collapse them.
+        let mut s = AppState::with_capacity(10);
+        let a = rec_with_id(Platform::ClaudeCode, "opus-4", 100, 50, 1.0, "req-a");
+        let b = rec_with_id(Platform::ClaudeCode, "opus-4", 100, 50, 1.0, "req-b");
+        s.add_records(Platform::ClaudeCode, vec![a, b]);
+        assert_eq!(
+            s.platforms[claude_idx()].total_calls,
+            2,
+            "two distinct records must both be counted even with identical content"
+        );
+        assert_eq!(s.platforms[claude_idx()].total_cost, 2.0);
+    }
+
+    #[test]
+    fn reverse_model_aggregate_clamps_cost_at_zero() {
+        // Float drift (or any accounting edge case) subtracting slightly more
+        // cost than was ever added must clamp at 0, not go negative.
+        let mut map = HashMap::new();
+        map.insert(
+            intern("opus-4"),
+            SessionSummary {
+                model: intern("opus-4"),
+                total_input: 0,
+                total_output: 0,
+                total_cache_read: 0,
+                total_cache_creation: 0,
+                total_cost: 1.0,
+                request_count: 2,
+            },
+        );
+        let r = rec(Platform::ClaudeCode, "opus-4", 0, 0, 1.5);
+        reverse_model_aggregate(&mut map, &r);
+        assert_eq!(map.get(&intern("opus-4")).unwrap().total_cost, 0.0);
     }
 
     #[test]

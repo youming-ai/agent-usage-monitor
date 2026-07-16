@@ -105,6 +105,15 @@ pub fn start_watchers(
                         for path in &event.paths {
                             let should_send = {
                                 let mut map = recent.lock().expect("dedup lock");
+                                // Prune stale entries opportunistically — well
+                                // beyond the 50ms dedup window below, so this
+                                // never affects dedup behavior, but keeps
+                                // `recent` from growing unbounded over a
+                                // long-running session touching many distinct
+                                // paths.
+                                map.retain(|_, last| {
+                                    now.duration_since(*last) < Duration::from_secs(5)
+                                });
                                 match map.get(path) {
                                     Some(last)
                                         if now.duration_since(*last)
@@ -119,7 +128,14 @@ pub fn start_watchers(
                                 }
                             };
                             if should_send {
-                                let _ = tx.blocking_send(WatcherMessage::Event {
+                                // try_send, not blocking_send: this callback
+                                // runs on the OS's FSEvents thread. If the
+                                // receiver stalls and the 64-slot channel
+                                // fills up, blocking here would stall the OS
+                                // callback thread itself — drop/coalesce the
+                                // event instead (a 30s fallback poll exists
+                                // as a safety net for exactly this).
+                                let _ = tx.try_send(WatcherMessage::Event {
                                     platform,
                                     path: path.clone(),
                                 });

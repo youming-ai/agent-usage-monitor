@@ -90,18 +90,31 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
     let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
     let session = crate::reader::session_label(&dir, session_id);
 
-    // Cost: read from JSONL only (comes from Anthropic API response)
+    // Cost: read from JSONL only (comes from Anthropic API response).
+    // `costUSD` is the historical camelCase key some Claude Code versions
+    // logged; keep it as a fallback alongside the newer snake_case keys.
     let cost_usd = v
         .get("cost_usd")
         .and_then(|v| v.as_f64())
+        .or_else(|| v.get("costUSD").and_then(|v| v.as_f64()))
         .or_else(|| v.get("cost").and_then(|v| v.as_f64()))
         .unwrap_or(0.0);
+
+    // message.id is unique per API response; requestId is the next best
+    // identifier. Fall back to the raw line if neither is present so a
+    // truncation-triggered re-read still dedups instead of double-counting.
+    let record_id = message
+        .get("id")
+        .and_then(|v| v.as_str())
+        .or_else(|| v.get("requestId").and_then(|v| v.as_str()))
+        .unwrap_or(line);
 
     Some(UsageRecord {
         timestamp,
         platform: Platform::ClaudeCode,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session),
+        id: crate::state::intern(record_id),
         input_tokens,
         output_tokens,
         cache_read_tokens: cache_read,
@@ -191,5 +204,52 @@ mod tests {
             "only the one appended record should be returned"
         );
         assert_eq!(delta[0].input_tokens, 300);
+    }
+
+    #[test]
+    fn cost_usd_falls_back_to_camelcase_costusd() {
+        // C9 regression: some Claude Code versions historically logged
+        // camelCase `costUSD` instead of `cost_usd`/`cost`.
+        let dir = tempfile::tempdir().unwrap();
+        let line = r#"{"type":"assistant","timestamp":"2026-05-29T10:00:00Z","requestId":"req1","message":{"id":"msg1","model":"claude-opus-4","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"costUSD":0.05}"#;
+        write_file(dir.path(), "a.jsonl", &format!("{line}\n"));
+
+        let mut reader = ClaudeReader::new(dir.path().to_path_buf());
+        let records = reader.scan_all();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].cost_usd, 0.05, "costUSD (camelCase) must be read");
+    }
+
+    #[test]
+    fn invalid_utf8_line_is_skipped_not_stuck() {
+        // C8 regression: a single non-UTF-8 byte anywhere in a line used to
+        // wedge the reader forever — read_line's error left the offset
+        // unadvanced, so every subsequent poll re-read the same bad byte and
+        // stopped there, silently dropping every later record.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        f.write_all(b"{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n")
+            .unwrap();
+        // A line with an invalid UTF-8 byte in the middle.
+        f.write_all(b"{\"type\":\"user\",\"bad\":\"").unwrap();
+        f.write_all(&[0xFF]).unwrap();
+        f.write_all(b"\"}\n").unwrap();
+        // A valid, well-formed record after the bad line.
+        f.write_all(
+            r#"{"type":"assistant","timestamp":"2026-05-29T10:00:00Z","requestId":"req1","message":{"id":"msg1","model":"claude-opus-4","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"cost_usd":0.01}}
+"#
+            .as_bytes(),
+        )
+        .unwrap();
+
+        let mut reader = ClaudeReader::new(dir.path().to_path_buf());
+        let records = reader.scan_all();
+        assert_eq!(
+            records.len(),
+            1,
+            "the valid record after the bad-UTF8 line must still be read"
+        );
+        assert_eq!(records[0].input_tokens, 100);
     }
 }

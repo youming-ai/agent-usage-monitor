@@ -5,7 +5,7 @@ use chrono::{TimeZone, Utc};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Tracks prompt-level context token growth while scanning `updates.jsonl`.
@@ -14,6 +14,10 @@ struct PromptTracker {
     baseline_tokens: u64,
     current_prompt_id: Option<String>,
     current_prompt_max: u64,
+    /// Timestamp of the most recent line observed for `current_prompt_id`,
+    /// used when flushing it (either via a genuine finalize, or the
+    /// end-of-scan flush below) since there may be no "next" line to supply one.
+    current_prompt_ts: Option<i64>,
     finalized_prompts: HashSet<String>,
 }
 
@@ -32,9 +36,11 @@ impl PromptTracker {
                 .and_then(|prev_id| self.finalize_prompt(&prev_id, timestamp, meta));
             self.current_prompt_id = Some(prompt_id.to_string());
             self.current_prompt_max = total_tokens;
+            self.current_prompt_ts = Some(timestamp);
             record
         } else {
             self.current_prompt_max = self.current_prompt_max.max(total_tokens);
+            self.current_prompt_ts = Some(timestamp);
             None
         }
     }
@@ -45,25 +51,51 @@ impl PromptTracker {
         timestamp: i64,
         meta: &SessionMeta,
     ) -> Option<UsageRecord> {
-        if prompt_id.is_empty() || self.finalized_prompts.contains(prompt_id) {
+        if self.finalized_prompts.contains(prompt_id) {
+            return None;
+        }
+        self.finalized_prompts.insert(prompt_id.to_string());
+        self.emit_delta(prompt_id, timestamp, meta)
+    }
+
+    /// Flush whatever growth has accumulated for the still-open prompt at the
+    /// end of a *complete* scan (see call site), without marking it
+    /// permanently finalized: more lines for the same prompt id may still
+    /// arrive on a later poll, and this can run again then for the
+    /// additional growth. Previously a prompt was only ever finalized when a
+    /// *different* prompt id superseded it, so the last prompt of every
+    /// session file stayed uncounted forever.
+    fn flush_pending(&mut self, meta: &SessionMeta) -> Option<UsageRecord> {
+        let prompt_id = self.current_prompt_id.clone()?;
+        let timestamp = self.current_prompt_ts?;
+        self.emit_delta(&prompt_id, timestamp, meta)
+    }
+
+    fn emit_delta(&mut self, prompt_id: &str, timestamp: i64, meta: &SessionMeta) -> Option<UsageRecord> {
+        if prompt_id.is_empty() {
             return None;
         }
         let delta = self.current_prompt_max.saturating_sub(self.baseline_tokens);
         if delta == 0 {
-            self.finalized_prompts.insert(prompt_id.to_string());
             return None;
         }
         self.baseline_tokens = self.current_prompt_max;
-        self.finalized_prompts.insert(prompt_id.to_string());
 
         let ts = Utc.timestamp_opt(timestamp, 0).single()?;
         let cost = pricing::calculate_cost(&meta.model, delta, 0, 0, 0);
+
+        // promptId is unique within a session; pair it with the session id
+        // and the post-flush baseline (which strictly increases with every
+        // flush that actually emits) so repeated flushes of the same
+        // still-growing prompt each get a distinct dedup identity.
+        let record_id = format!("{}:{prompt_id}:{}", meta.session_id, self.baseline_tokens);
 
         Some(UsageRecord {
             timestamp: ts,
             platform: Platform::Grok,
             model: crate::state::intern(&meta.model),
             session: crate::state::intern(&meta.session_label()),
+            id: crate::state::intern(&record_id),
             // Grok exposes cumulative context size per inference step, not an
             // input/output split — store the step delta as input tokens.
             input_tokens: delta,
@@ -163,8 +195,13 @@ impl GrokReader {
             };
             let meta = self.session_meta_for(&file);
             let st = self.file_state.entry(file.clone()).or_default();
+            // Only flush the still-open trailing prompt when this is a full
+            // scan (from_start): a full scan means "this is all the data
+            // there is right now", so a lone/trailing prompt with no later
+            // prompt to confirm it's done deserves to be counted — unlike an
+            // incremental poll, where more lines for it may still be coming.
             let (entries, bytes_read) =
-                read_updates_from_offset(&file, offset, &meta, &mut st.tracker);
+                read_updates_from_offset(&file, offset, &meta, &mut st.tracker, from_start);
             self.file_positions.insert(file, bytes_read);
             records.extend(entries);
         }
@@ -235,6 +272,7 @@ fn read_updates_from_offset(
     skip_bytes: u64,
     meta: &SessionMeta,
     tracker: &mut PromptTracker,
+    finalize_at_eof: bool,
 ) -> (Vec<UsageRecord>, u64) {
     let file = match File::open(path) {
         Ok(f) => f,
@@ -243,34 +281,32 @@ fn read_updates_from_offset(
 
     let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     if skip_bytes > file_len {
-        return read_updates_from_offset(path, 0, meta, tracker);
+        // File was truncated/rewritten. `tracker`'s baseline_tokens and
+        // finalized_prompts are watermarks against the OLD content; keeping
+        // them would either suppress genuinely new deltas in the rewritten
+        // file (if a promptId happens to reappear) or compute wrong deltas
+        // against a stale baseline. Start this file's tracking over.
+        *tracker = PromptTracker::default();
+        return read_updates_from_offset(path, 0, meta, tracker, finalize_at_eof);
     }
 
     let mut reader = BufReader::new(file);
     if skip_bytes > 0 && reader.seek(SeekFrom::Start(skip_bytes)).is_err() {
-        return read_updates_from_offset(path, 0, meta, tracker);
+        return read_updates_from_offset(path, 0, meta, tracker, finalize_at_eof);
     }
 
     let mut records = Vec::new();
     let mut offset = skip_bytes;
-    let mut line = String::new();
 
-    loop {
-        line.clear();
-        let bytes = match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(n) => n as u64,
-            Err(_) => break,
-        };
-
-        if !line.ends_with('\n') {
-            break;
-        }
-
+    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
         if let Some(rec) = parse_updates_line(line.trim_end_matches(['\r', '\n']), meta, tracker) {
             records.push(rec);
         }
         offset += bytes;
+    }
+
+    if finalize_at_eof && let Some(rec) = tracker.flush_pending(meta) {
+        records.push(rec);
     }
 
     (records, offset)
@@ -351,8 +387,16 @@ mod tests {
 
         let mut reader = GrokReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
-        assert_eq!(records.len(), 1, "only the first completed prompt emits");
-        assert_eq!(records[0].input_tokens, 1500);
+        // C11 fix: the trailing prompt (prompt-b) is no longer left
+        // uncounted forever just because no *third* prompt arrived to
+        // trigger its finalization — a full scan flushes it too.
+        assert_eq!(
+            records.len(),
+            2,
+            "both the completed prompt and the trailing pending one must be counted"
+        );
+        assert_eq!(records[0].input_tokens, 1500, "prompt-a: 1500 - 0");
+        assert_eq!(records[1].input_tokens, 1000, "prompt-b: 2500 - 1500");
         assert_eq!(crate::state::resolve(records[0].model), "grok-build");
         assert_eq!(
             crate::state::resolve(records[0].session),
@@ -376,7 +420,11 @@ mod tests {
         );
 
         let mut reader = GrokReader::new(dir.path().to_path_buf());
-        assert!(reader.scan_all().is_empty(), "single in-progress prompt");
+        // A full scan treats "whatever is in the file right now" as settled,
+        // so the lone pending prompt is flushed immediately (C11 fix).
+        let initial = reader.scan_all();
+        assert_eq!(initial.len(), 1, "lone pending prompt flushed on full scan");
+        assert_eq!(initial[0].input_tokens, 1000);
 
         let mut f = fs::OpenOptions::new()
             .append(true)
@@ -388,13 +436,113 @@ mod tests {
         )
         .unwrap();
 
+        // Appending a new (different) promptId finalizes prompt-a for real.
+        // Since prompt-a was already flushed above with no further growth,
+        // there's no additional delta to report for it — prompt-b is now the
+        // pending prompt and (being a live incremental poll) is not flushed.
         let delta = reader.poll_delta();
-        assert_eq!(delta.len(), 1);
-        assert_eq!(delta[0].input_tokens, 1000);
-        assert_eq!(
-            crate::state::resolve(delta[0].model),
-            "grok-composer-2.5-fast"
+        assert!(
+            delta.is_empty(),
+            "prompt-a already fully counted; prompt-b is still open on a live poll"
         );
+    }
+
+    #[test]
+    fn growth_of_a_flushed_prompt_is_captured_when_it_later_finalizes() {
+        // No data is lost across the scan_all-flush -> live-growth ->
+        // real-finalize sequence: the total counted must equal the prompt's
+        // true final total, split correctly across the two emissions.
+        let dir = tempfile::tempdir().unwrap();
+        let updates_path = write_session(
+            dir.path(),
+            "project",
+            "019ea524-5702-7421-a300-ead404f0ee6f",
+            "/Users/me/project",
+            "grok-build",
+            &[
+                r#"{"timestamp":1000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk"},"_meta":{"promptId":"prompt-a","totalTokens":1000,"agentTimestampMs":1000000}}}"#,
+            ],
+        );
+
+        let mut reader = GrokReader::new(dir.path().to_path_buf());
+        let initial = reader.scan_all();
+        assert_eq!(initial.len(), 1);
+        assert_eq!(initial[0].input_tokens, 1000);
+
+        // prompt-a keeps growing on a live poll — must not flush yet.
+        {
+            let mut f = fs::OpenOptions::new()
+                .append(true)
+                .open(&updates_path)
+                .unwrap();
+            writeln!(
+                f,
+                r#"{{"timestamp":1001,"method":"session/update","params":{{"sessionId":"s1","update":{{"sessionUpdate":"tool_call"}},"_meta":{{"promptId":"prompt-a","totalTokens":1500,"agentTimestampMs":1001000}}}}}}"#
+            )
+            .unwrap();
+        }
+        assert!(
+            reader.poll_delta().is_empty(),
+            "still-growing prompt must not flush mid-stream on a live poll"
+        );
+
+        // A genuinely new prompt now finalizes prompt-a for real.
+        {
+            let mut f = fs::OpenOptions::new()
+                .append(true)
+                .open(&updates_path)
+                .unwrap();
+            writeln!(
+                f,
+                r#"{{"timestamp":1002,"method":"session/update","params":{{"sessionId":"s1","update":{{"sessionUpdate":"tool_call"}},"_meta":{{"promptId":"prompt-b","totalTokens":2000,"agentTimestampMs":1002000}}}}}}"#
+            )
+            .unwrap();
+        }
+        let delta = reader.poll_delta();
+        assert_eq!(delta.len(), 1, "the remaining growth must be captured");
+        assert_eq!(delta[0].input_tokens, 500, "1500 - 1000");
+    }
+
+    #[test]
+    fn truncation_resets_tracker_state() {
+        // C11 regression: a truncation-triggered re-read from byte 0 must not
+        // keep the old baseline/finalized-prompt bookkeeping — it's a
+        // watermark against content that may no longer be there.
+        let dir = tempfile::tempdir().unwrap();
+        let updates_path = write_session(
+            dir.path(),
+            "project",
+            "019ea524-5702-7421-a300-ead404f0ee6f",
+            "/Users/me/project",
+            "grok-build",
+            &sample_updates(),
+        );
+
+        let mut reader = GrokReader::new(dir.path().to_path_buf());
+        assert_eq!(reader.scan_all().len(), 2);
+
+        // Truncate and rewrite with two NEW, unrelated prompts (much smaller
+        // totalTokens than before). With the old baseline (1500) surviving a
+        // stale tracker, prompt-c's delta (300 - 1500) would saturate to 0
+        // and be silently swallowed instead of reporting the true 300.
+        fs::write(
+            &updates_path,
+            [
+                r#"{"timestamp":2000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk"},"_meta":{"promptId":"prompt-c","totalTokens":300,"agentTimestampMs":2000000}}}"#,
+                r#"{"timestamp":2001,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call"},"_meta":{"promptId":"prompt-d","totalTokens":500,"agentTimestampMs":2001000}}}"#,
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let delta = reader.poll_delta();
+        assert_eq!(
+            delta.len(),
+            1,
+            "prompt-c must finalize against a reset (zero) baseline, not the stale 1500"
+        );
+        assert_eq!(delta[0].input_tokens, 300, "300 - 0, not 300 - 1500");
     }
 
     #[test]
@@ -410,7 +558,7 @@ mod tests {
         );
 
         let mut reader = GrokReader::new(dir.path().to_path_buf());
-        assert_eq!(reader.scan_all().len(), 1);
+        assert_eq!(reader.scan_all().len(), 2);
         assert!(reader.poll_delta().is_empty());
     }
 

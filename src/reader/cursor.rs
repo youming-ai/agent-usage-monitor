@@ -6,7 +6,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 const CHARS_PER_TOKEN: f64 = 4.0;
@@ -20,6 +20,15 @@ struct TranscriptTurnState {
     finalized_turns: u64,
     current_user_chars: usize,
     current_assistant_chars: usize,
+    /// How much of `current_assistant_chars` has already been emitted as a
+    /// record. A turn's assistant reply can arrive as several separate JSONL
+    /// lines (streamed chunks) across multiple poll cycles; flushing only the
+    /// *growth* since the last flush (instead of finalizing the whole turn on
+    /// the first chunk) means later chunks are never silently dropped.
+    counted_assistant_chars: usize,
+    /// Whether this turn's (non-growing) input/user tokens have already been
+    /// billed in an earlier flush.
+    input_counted: bool,
     has_user: bool,
     has_assistant: bool,
     /// Captured from a "timestamp" field on a user/assistant line if present in the JSONL.
@@ -167,13 +176,13 @@ impl CursorReader {
                                         .signed_duration_since(r.timestamp)
                                         .num_seconds()
                                         .abs();
-                                    let rec_year = r.timestamp.format("%Y").to_string();
-                                    let scan_year = scan_now.format("%Y").to_string();
-                                    if age_secs < 300 || rec_year == scan_year {
-                                        // was produced by now() (recent or same-year synthetic) for a
+                                    if age_secs < 300 {
+                                        // was produced by now() (recent synthetic timestamp) for a
                                         // historical full read (offset==0); use file mtime instead.
-                                        // Precise embedded "timestamp" from line (different year or old)
-                                        // is kept because age/year check fails.
+                                        // A precise embedded "timestamp" from the line — however old
+                                        // or however recent its *year* happens to be — is kept as-is;
+                                        // only a genuinely-recent (age-based) synthetic now() stamp is
+                                        // replaced.
                                         r.timestamp = file_ts;
                                     }
                                 }
@@ -383,6 +392,13 @@ fn read_transcript_from_offset(
 
     let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     if skip_bytes > file_len {
+        // File was truncated/rewritten. The in-progress turn's counters
+        // (counted_assistant_chars, input_counted, ...) are stale baselines
+        // from content that may no longer exist at those char offsets in the
+        // rewritten file — keep them around and deltas would come out wrong
+        // or get suppressed entirely. Reset the turn-in-progress bookkeeping
+        // (but keep the file-level metadata: project/conversation_id/model).
+        st.reset_current_turn();
         return read_transcript_from_offset(path, 0, st);
     }
 
@@ -393,27 +409,15 @@ fn read_transcript_from_offset(
 
     let mut records = Vec::new();
     let mut offset = skip_bytes;
-    let mut line = String::new();
 
-    loop {
-        line.clear();
-        let bytes = match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(n) => n as u64,
-            Err(_) => break,
-        };
-
-        if !line.ends_with('\n') {
-            break;
-        }
-
+    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
         if let Some(rec) = parse_transcript_line(line.trim_end_matches(['\r', '\n']), st) {
             records.push(rec);
         }
         offset += bytes;
     }
 
-    if let Some(rec) = finalize_transcript_turn(st) {
+    if let Some(rec) = flush_transcript_progress(st) {
         records.push(rec);
     }
 
@@ -436,12 +440,14 @@ fn parse_transcript_line(line: &str, st: &mut TranscriptTurnState) -> Option<Usa
 
     match role {
         "user" => {
-            let record = finalize_transcript_turn(st);
+            // A new user line unambiguously ends the previous turn — flush
+            // whatever assistant growth is still pending for it, then start
+            // fresh for this one.
+            let record = flush_transcript_progress(st);
             let chars = content_char_count(v.get("message"));
+            st.reset_current_turn();
             st.current_user_chars = chars;
-            st.current_assistant_chars = 0;
             st.has_user = chars > 0;
-            st.has_assistant = false;
             record
         }
         "assistant" => {
@@ -453,30 +459,49 @@ fn parse_transcript_line(line: &str, st: &mut TranscriptTurnState) -> Option<Usa
     }
 }
 
-fn finalize_transcript_turn(st: &mut TranscriptTurnState) -> Option<UsageRecord> {
+/// Emit a record for assistant growth since the last flush of this turn, if
+/// any. Unlike a one-shot "finalize", this does **not** end the turn: a reply
+/// can arrive as several JSONL lines across multiple poll cycles (streamed
+/// chunks), and this is called at the end of every incremental read. Flushing
+/// only the delta — rather than finalizing (and resetting `has_user`) on the
+/// very first chunk — means later chunks of the same still-open turn are
+/// never silently dropped. The turn is only fully reset when a genuine new
+/// "user" line starts the next one (see `parse_transcript_line`).
+fn flush_transcript_progress(st: &mut TranscriptTurnState) -> Option<UsageRecord> {
     if !st.has_user || !st.has_assistant {
         return None;
     }
 
-    let input = estimate_tokens(st.current_user_chars);
-    let output = estimate_tokens(st.current_assistant_chars);
+    let input_chars = if st.input_counted {
+        0
+    } else {
+        st.current_user_chars
+    };
+    let assistant_delta_chars = st
+        .current_assistant_chars
+        .saturating_sub(st.counted_assistant_chars);
+
+    let input = estimate_tokens(input_chars);
+    let output = estimate_tokens(assistant_delta_chars);
     if input == 0 && output == 0 {
-        st.reset_current_turn();
         return None;
     }
 
     let ts = st.current_turn_timestamp.unwrap_or_else(Utc::now);
     st.finalized_turns += 1;
-    st.reset_current_turn();
+    st.input_counted = true;
+    st.counted_assistant_chars = st.current_assistant_chars;
 
     let model = normalize_cursor_model(&st.model);
     let cost = pricing::calculate_cost(&model, input, output, 0, 0);
+    let record_id = format!("{}:{}", st.conversation_id, st.finalized_turns);
 
     Some(UsageRecord {
         timestamp: ts,
         platform: Platform::Cursor,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session_label(&st.project, &st.conversation_id)),
+        id: crate::state::intern(&record_id),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: 0,
@@ -496,6 +521,8 @@ impl TranscriptTurnState {
     fn reset_current_turn(&mut self) {
         self.current_user_chars = 0;
         self.current_assistant_chars = 0;
+        self.counted_assistant_chars = 0;
+        self.input_counted = false;
         self.has_user = false;
         self.has_assistant = false;
         self.current_turn_timestamp = None;
@@ -511,18 +538,20 @@ fn parse_store_blob(
 ) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(value).ok()?;
 
-    // Cursor bubble / agentKv format from state.vscdb and store.db.
+    // Cursor bubble / agentKv format from state.vscdb and store.db. The blob's
+    // `key` (the blobs table's own primary key) is a stable identity for this
+    // row; it does NOT change when the row is updated in place, unlike the
+    // token counts the dedup key used to be built from — those mutate as a
+    // bubble streams in, so keying on them made an in-place update look like
+    // a brand-new (and thus double-counted) row, and made two distinct
+    // bubbles that happened to share a createdAt+token-count collapse into one.
     if let Some(rec) = parse_bubble_usage(&v, session) {
-        let dedup = format!(
-            "bubble:{}:{}:{}:{}",
-            session_id,
-            v.get("createdAt").and_then(|t| t.as_i64()).unwrap_or(0),
-            rec.input_tokens,
-            rec.output_tokens
-        );
-        if !seen.insert(dedup) {
+        let dedup = format!("bubble:{session_id}:{key}");
+        if !seen.insert(dedup.clone()) {
             return None;
         }
+        let mut rec = rec;
+        rec.id = crate::state::intern(&dedup);
         return Some(rec);
     }
 
@@ -533,7 +562,7 @@ fn parse_store_blob(
         }
         let id = v.get("id").and_then(|i| i.as_str()).unwrap_or(key);
         let dedup = format!("msg:{session_id}:{id}");
-        if !seen.insert(dedup) {
+        if !seen.insert(dedup.clone()) {
             return None;
         }
         let output = estimate_tokens(content_char_count(Some(&v)));
@@ -546,11 +575,26 @@ fn parse_store_blob(
             .map(normalize_cursor_model)
             .unwrap_or_else(|| "cursor-auto".to_string());
         let cost = pricing::calculate_cost(&model, 0, output, 0, 0);
+        // Historical CLI message blobs carry no reliable per-record clock in
+        // every Cursor version; prefer an embedded timestamp when present so
+        // old messages don't land on "today" (see also parse_bubble_usage's
+        // createdAt handling), falling back to observation time only when
+        // truly nothing is available.
+        let timestamp = v
+            .get("timestamp")
+            .and_then(|t| t.as_i64())
+            .or_else(|| v.get("createdAt").and_then(|t| t.as_i64()))
+            .and_then(|ms| {
+                let secs = if ms > 1_000_000_000_000 { ms / 1000 } else { ms };
+                Utc.timestamp_opt(secs, 0).single()
+            })
+            .unwrap_or_else(Utc::now);
         return Some(UsageRecord {
-            timestamp: Utc::now(),
+            timestamp,
             platform: Platform::Cursor,
             model: crate::state::intern(&model),
             session: crate::state::intern(session),
+            id: crate::state::intern(&dedup),
             input_tokens: 0,
             output_tokens: output,
             cache_read_tokens: 0,
@@ -624,6 +668,10 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
         platform: Platform::Cursor,
         model: crate::state::intern(&model),
         session: crate::state::intern(session),
+        // Overwritten by the caller (`parse_store_blob`) with the blob's
+        // stable `key`-based dedup id; placeholder here so this function can
+        // still be tested/used standalone.
+        id: crate::state::intern(""),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: 0,
@@ -883,5 +931,162 @@ mod tests {
         // supplies historical proxy instead of pure observation-time now().
         let got = records[0].timestamp.to_rfc3339();
         assert!(got.starts_with("2025-03-10T08:30:00"), "got ts {}", got);
+    }
+
+    #[test]
+    fn embedded_timestamp_in_the_same_year_as_now_is_not_overwritten() {
+        // C5 regression: a precise embedded timestamp must be kept even when
+        // its *year* happens to match the scan year — only a genuinely
+        // recent (age-based) synthetic now() stamp should ever be replaced
+        // by the file mtime proxy.
+        let this_year = Utc::now().format("%Y").to_string();
+        let past = format!("{this_year}-01-02T03:04:05Z");
+        let user_line = format!(
+            r#"{{"role":"user","timestamp":"{past}","message":{{"content":[{{"type":"text","text":"question"}}]}}}}"#
+        );
+        let assistant_line = format!(
+            r#"{{"role":"assistant","timestamp":"{past}","message":{{"content":[{{"type":"text","text":"answer"}}]}}}}"#
+        );
+        let dir = tempfile::tempdir().unwrap();
+        write_transcript(
+            dir.path(),
+            "Users-me-sameyear",
+            "e4f2c1d8-10e5-4b2a-9c1d-ef0123456789",
+            &[user_line.as_str(), assistant_line.as_str()],
+        );
+
+        let mut reader = CursorReader::new(dir.path().to_path_buf());
+        let records = reader.scan_all();
+        assert_eq!(records.len(), 1);
+        assert!(
+            records[0].timestamp.to_rfc3339().starts_with(&past[..10]),
+            "same-year embedded timestamp was overwritten with file mtime, got {}",
+            records[0].timestamp.to_rfc3339()
+        );
+    }
+
+    #[test]
+    fn multi_chunk_assistant_reply_across_polls_is_not_dropped() {
+        // C3 regression: an assistant reply streamed as several JSONL lines
+        // across multiple poll_delta calls must have every chunk counted —
+        // not just the first one that happened to land before a poll fired.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_transcript(
+            dir.path(),
+            "Users-me-stream",
+            "f4f2c1d8-10e5-4b2a-9c1d-ef0123456789",
+            &[r#"{"role":"user","message":{"content":[{"type":"text","text":"question needing a long reply"}]}}"#],
+        );
+
+        let mut reader = CursorReader::new(dir.path().to_path_buf());
+        assert!(
+            reader.scan_all().is_empty(),
+            "no assistant content yet, nothing to bill"
+        );
+
+        // First assistant chunk arrives; a poll fires before the reply is done.
+        {
+            let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            writeln!(
+                f,
+                r#"{{"role":"assistant","message":{{"content":[{{"type":"text","text":"first part of a long answer "}}]}}}}"#
+            )
+            .unwrap();
+        }
+        let first = reader.poll_delta();
+        assert_eq!(first.len(), 1, "first chunk should be billed immediately");
+        let first_output = first[0].output_tokens;
+        assert!(first_output > 0);
+
+        // A second chunk of the SAME reply arrives on a later poll. With the
+        // bug, this chunk's content would be silently dropped because the
+        // turn was already (prematurely) finalized above.
+        {
+            let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            writeln!(
+                f,
+                r#"{{"role":"assistant","message":{{"content":[{{"type":"text","text":"and here is the second part of the long answer"}}]}}}}"#
+            )
+            .unwrap();
+        }
+        let second = reader.poll_delta();
+        assert_eq!(
+            second.len(),
+            1,
+            "second chunk of the same still-open turn must still be billed"
+        );
+        assert!(second[0].output_tokens > 0);
+    }
+
+    #[test]
+    fn store_db_in_place_bubble_update_is_not_double_counted() {
+        // C4 regression: dedup must key on the blob's stable identity (its
+        // `key` in the blobs table), not on the mutable token counts — an
+        // in-place update of the SAME bubble (same key, growing tokens) must
+        // not re-emit as a second record on the next poll.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = write_store_db(
+            dir.path(),
+            "abc123",
+            "sess-uuid-1",
+            &[(
+                "bubble1",
+                r#"{"type":0,"createdAt":1780625874436,"tokenCount":{"inputTokens":10,"outputTokens":5},"modelInfo":{"modelName":"claude-sonnet-4-5"},"text":"partial"}"#,
+            )],
+        );
+
+        let mut reader = CursorReader::new(dir.path().to_path_buf());
+        assert_eq!(reader.scan_all().len(), 1);
+        assert!(reader.poll_delta().is_empty());
+
+        // Update the SAME row (same `key`) in place with grown token counts —
+        // this is what Cursor does as a bubble streams in.
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE blobs SET value = ?1 WHERE key = 'bubble1'",
+            [r#"{"type":0,"createdAt":1780625874436,"tokenCount":{"inputTokens":10,"outputTokens":45},"modelInfo":{"modelName":"claude-sonnet-4-5"},"text":"done"}"#],
+        )
+        .unwrap();
+
+        // The reader re-scans store.db from rowid 0 on every poll by design
+        // (see read_store_delta); the local `seen` key must still recognize
+        // this as the same row and suppress it.
+        let delta = reader.poll_delta();
+        assert!(
+            delta.is_empty(),
+            "in-place update of the same bubble key must not double-count, got {delta:?}"
+        );
+    }
+
+    #[test]
+    fn store_db_distinct_bubbles_with_identical_createdat_and_tokens_both_counted() {
+        // C4 regression: two genuinely distinct bubbles that happen to share
+        // the same createdAt + token counts must both be counted — the old
+        // dedup key (createdAt + tokens, no row identity) would have
+        // collapsed them into one.
+        let dir = tempfile::tempdir().unwrap();
+        write_store_db(
+            dir.path(),
+            "abc123",
+            "sess-uuid-2",
+            &[
+                (
+                    "bubbleA",
+                    r#"{"type":0,"createdAt":1780625874436,"tokenCount":{"inputTokens":10,"outputTokens":5},"modelInfo":{"modelName":"claude-sonnet-4-5"},"text":"a"}"#,
+                ),
+                (
+                    "bubbleB",
+                    r#"{"type":0,"createdAt":1780625874436,"tokenCount":{"inputTokens":10,"outputTokens":5},"modelInfo":{"modelName":"claude-sonnet-4-5"},"text":"b"}"#,
+                ),
+            ],
+        );
+
+        let mut reader = CursorReader::new(dir.path().to_path_buf());
+        let records = reader.scan_all();
+        assert_eq!(
+            records.len(),
+            2,
+            "two distinct bubbles with identical createdAt+tokens must both survive dedup"
+        );
     }
 }

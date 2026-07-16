@@ -135,6 +135,123 @@ mod tests {
         assert!(reader.poll_delta().is_empty());
     }
 
+    fn init_disk_db(path: &std::path::Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL);
+             CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+             INSERT INTO session VALUES ('ses_abc', '/Users/me/myproject');",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn db_created_after_reader_start_is_picked_up() {
+        // C6 regression: if opencode.db doesn't exist yet when the reader is
+        // constructed, the connection is None forever unless the reader
+        // self-heals once the file appears.
+        let dir = tempfile::tempdir().unwrap();
+        let mut reader = OpencodeReader::new(dir.path().to_path_buf());
+        assert!(reader.scan_all().is_empty(), "db not created yet");
+
+        let db_path = dir.path().join("opencode.db");
+        init_disk_db(&db_path);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO message VALUES ('m1', 'ses_abc', 1000, ?1)",
+                rusqlite::params![ASSISTANT_1],
+            )
+            .unwrap();
+        }
+
+        let records = reader.poll_delta();
+        assert_eq!(
+            records.len(),
+            1,
+            "reader must self-heal once the db appears, not stay permanently empty"
+        );
+    }
+
+    #[test]
+    fn db_deleted_and_recreated_is_picked_up() {
+        // C6 regression: a migration that deletes and recreates opencode.db
+        // at the same path must not leave the reader holding a stale handle
+        // to the deleted file forever.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        init_disk_db(&db_path);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO message VALUES ('m1', 'ses_abc', 1000, ?1)",
+                rusqlite::params![ASSISTANT_1],
+            )
+            .unwrap();
+        }
+
+        let mut reader = OpencodeReader::new(dir.path().to_path_buf());
+        assert_eq!(reader.scan_all().len(), 1);
+
+        // Simulate a migration: delete then recreate the db file at the same path.
+        std::fs::remove_file(&db_path).unwrap();
+        init_disk_db(&db_path);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO message VALUES ('m2', 'ses_abc', 2000, ?1)",
+                rusqlite::params![ASSISTANT_2],
+            )
+            .unwrap();
+        }
+
+        let records = reader.poll_delta();
+        assert_eq!(
+            records.len(),
+            1,
+            "reader must reconnect after the db is deleted and recreated"
+        );
+        assert_eq!(
+            crate::state::resolve(records[0].model),
+            "opencode-go/minimax-m3"
+        );
+    }
+
+    #[test]
+    fn zero_token_row_is_reread_once_updated_in_place() {
+        // C7 regression: opencode inserts an assistant row, then UPDATEs it
+        // with real token counts once the response completes. A time_created
+        // cursor advances past the row on first sight (zero tokens => no
+        // record), so the later UPDATE would never be re-read. The rowid
+        // cursor plus zero-token retry set must catch it.
+        let conn = setup();
+        insert(&conn, "m1", 1000, ASSISTANT_NO_TOKENS);
+        let mut reader = OpencodeReader {
+            inner: SqliteMessageReader::from_connection(conn, Platform::OpenCode, "opencode"),
+            db_path: PathBuf::new(),
+        };
+        assert!(
+            reader.scan_all().is_empty(),
+            "zero-token row should not emit yet"
+        );
+
+        let inner_conn = reader.inner.conn.as_ref().unwrap();
+        inner_conn
+            .execute(
+                "UPDATE message SET data = ?1 WHERE id = 'm1'",
+                rusqlite::params![ASSISTANT_1],
+            )
+            .unwrap();
+
+        let delta = reader.poll_delta();
+        assert_eq!(
+            delta.len(),
+            1,
+            "row updated in place with real tokens must be re-read"
+        );
+        assert_eq!(delta[0].input_tokens, 100);
+    }
+
     #[test]
     fn counts_messages_with_missing_session() {
         let conn = setup();

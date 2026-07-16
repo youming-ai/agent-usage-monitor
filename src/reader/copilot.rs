@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Per-file state tracking the current model and cwd across events in a single
@@ -135,20 +135,8 @@ fn read_events_from_offset(
 
     let mut records = Vec::new();
     let mut offset = skip_bytes;
-    let mut line = String::new();
 
-    loop {
-        line.clear();
-        let bytes = match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(n) => n as u64,
-            Err(_) => break,
-        };
-
-        if !line.ends_with('\n') {
-            break;
-        }
-
+    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
         if let Some(rec) = parse_event_line(line.trim_end_matches(['\r', '\n']), st) {
             records.push(rec);
         }
@@ -192,11 +180,13 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
             }
             let timestamp = parse_timestamp(&v)?;
             let cost = pricing::calculate_cost(&model, 0, 0, 0, 0);
+            let record_id = event_record_id(&v, st);
             Some(UsageRecord {
                 timestamp,
                 platform: Platform::Copilot,
                 model: crate::state::intern(&model),
                 session: crate::state::intern(&st.session_label()),
+                id: crate::state::intern(&record_id),
                 // Tool executions don't expose token counts directly;
                 // the record serves as a request counter.
                 input_tokens: 0,
@@ -235,11 +225,13 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
                 .unwrap_or(0);
             let total_input = input_tokens + compaction_input;
             let cost = pricing::calculate_cost(&model, total_input, 0, 0, 0);
+            let record_id = event_record_id(&v, st);
             Some(UsageRecord {
                 timestamp,
                 platform: Platform::Copilot,
                 model: crate::state::intern(&model),
                 session: crate::state::intern(&st.session_label()),
+                id: crate::state::intern(&record_id),
                 input_tokens: total_input,
                 output_tokens: 0,
                 cache_read_tokens: 0,
@@ -255,6 +247,15 @@ fn parse_event_line(line: &str, st: &mut CopilotFileState) -> Option<UsageRecord
             })
         }
         _ => None,
+    }
+}
+
+/// Copilot events carry a top-level `id` unique within the session; fall back
+/// to the session id plus a content hash if it's ever absent.
+fn event_record_id(v: &Value, st: &CopilotFileState) -> String {
+    match v.get("id").and_then(|i| i.as_str()) {
+        Some(id) => format!("{}:{id}", st.session_id),
+        None => format!("{}:{v}", st.session_id),
     }
 }
 

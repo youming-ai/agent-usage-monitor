@@ -140,6 +140,7 @@ mod tests {
             platform: Platform::ClaudeCode,
             model: crate::state::intern(model),
             session: crate::state::intern(session),
+            id: crate::state::intern(&format!("{session}:{model}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: 0,

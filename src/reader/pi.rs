@@ -131,11 +131,14 @@ fn parse_pi_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
 
+    let record_id = v.get("id").and_then(|i| i.as_str()).unwrap_or(line);
+
     Some(UsageRecord {
         timestamp,
         platform: Platform::Pi,
         model: crate::state::intern(&model),
         session: crate::state::intern(&st.session_label()),
+        id: crate::state::intern(record_id),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,

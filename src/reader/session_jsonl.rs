@@ -1,7 +1,7 @@
 use crate::state::UsageRecord;
 use serde_json::Value;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::Path;
 
 /// Per-file session metadata carried across lines and incremental polls.
@@ -64,21 +64,8 @@ pub(crate) fn read_jsonl_from_offset(
 
     let mut records = Vec::new();
     let mut offset = skip_bytes;
-    let mut line = String::new();
 
-    loop {
-        line.clear();
-        let bytes = match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(n) => n as u64,
-            Err(_) => break,
-        };
-
-        if !line.ends_with('\n') {
-            // Incomplete trailing line — leave offset unchanged so we retry it.
-            break;
-        }
-
+    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
             apply_session_line(&v, st);
@@ -113,6 +100,7 @@ mod tests {
             platform: Platform::Pi,
             model: crate::state::intern("test"),
             session: crate::state::intern(&st.session_label()),
+            id: crate::state::intern(line),
             input_tokens: 1,
             output_tokens: 0,
             cache_read_tokens: 0,

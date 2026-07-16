@@ -215,11 +215,16 @@ fn parse_usage_record(line: &str, session_id: &str, session: &str) -> Option<Usa
         session.to_string()
     };
 
+    // No per-record id is present in kimi-code's usage.record events; the raw
+    // line (namespaced by session) is the best available stable identity.
+    let record_id = format!("{session_id}:{line}");
+
     Some(UsageRecord {
         timestamp,
         platform: Platform::KimiCode,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session_str),
+        id: crate::state::intern(&record_id),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,
