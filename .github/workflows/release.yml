@@ -83,8 +83,34 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+
+      # ponytail: sign each tarball with the release private key so
+      # src/updater/mod.rs and install.sh can verify integrity before
+      # installing. `MINISIGN_SECRET_KEY` holds the key file contents exactly
+      # as printed by `minisign -G` (including the "untrusted comment" /
+      # "trusted comment" lines); `MINISIGN_PASSWORD` is only needed if that
+      # key was generated with a passphrase (minisign reads it from this env
+      # var non-interactively). See the maintainer setup steps in the PR
+      # description / commit message for the exact commands.
+      - name: Sign release artifacts
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key_file"
+          for tarball in *.tar.gz; do
+            minisign -S -s "$key_file" -m "$tarball"
+          done
+
       - name: Attach binaries to the release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: '*.tar.gz'
+          files: |
+            *.tar.gz
+            *.minisig
