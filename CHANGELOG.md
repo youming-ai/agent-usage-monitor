@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.1](https://github.com/youming-ai/agent-usage-monitor/compare/v0.16.0...v0.16.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* correct usage and cost accuracy bugs across readers ([705a6c7](https://github.com/youming-ai/agent-usage-monitor/commit/705a6c7a4609780b03e8aa78aace5206acbc3209))
+* correct usage and cost accuracy bugs across readers ([68b212f](https://github.com/youming-ai/agent-usage-monitor/commit/68b212f7e27b4fb8f72d8a90a5ad4c5d2b461cef))
+
 ## [0.16.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.15.0...v0.16.0) (2026-07-07)
 
 
