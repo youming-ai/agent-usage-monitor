@@ -3,8 +3,21 @@ use crate::state::{Platform, UsageRecord};
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::warn;
+
+/// Unix-only: mirrors `sqlite_message_reader::file_ino` (see there for the
+/// full rationale). Every default data path this app watches is a unix home
+/// directory, so this covers the real targets.
+#[cfg(unix)]
+fn file_ino(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| m.ino())
+}
+#[cfg(not(unix))]
+fn file_ino(_path: &Path) -> Option<u64> {
+    None
+}
 
 /// Last-known cumulative totals for a session row. Hermes updates rows in
 /// place as a session progresses, so we emit token/cost deltas on each poll.
@@ -21,6 +34,10 @@ struct SessionRow {
     id: String,
     model: String,
     started_at: f64,
+    /// Last-updated time, if the DB tracks it. Used (instead of `started_at`)
+    /// for delta records so a multi-day session's later usage doesn't all
+    /// bucket onto the day it started.
+    ended_at: Option<f64>,
     totals: SessionTotals,
     cwd: String,
 }
@@ -31,16 +48,21 @@ pub struct HermesReader {
     conn: Option<Connection>,
     last_seen: HashMap<String, SessionTotals>,
     pub(crate) db_path: PathBuf,
+    /// Inode of `db_path` the last time we (re)connected; see
+    /// `ensure_connection`. Mirrors `SqliteMessageReader`'s `last_ino`.
+    last_ino: Option<u64>,
 }
 
 impl HermesReader {
     pub fn new(data_dir: PathBuf) -> Self {
         let db_path = data_dir.join("state.db");
         let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
+        let last_ino = file_ino(&db_path);
         Self {
             conn,
             last_seen: HashMap::new(),
             db_path,
+            last_ino,
         }
     }
 
@@ -50,7 +72,32 @@ impl HermesReader {
             conn: Some(conn),
             last_seen: HashMap::new(),
             db_path: PathBuf::new(),
+            last_ino: None,
         }
+    }
+
+    /// Open (or reopen) the connection if it's missing, or if `db_path` now
+    /// points at a different file than the one we last connected to (a
+    /// delete+recreate, e.g. on migration). Without this, a DB created after
+    /// `aum` started — or replaced while running — stays permanently
+    /// unreadable until restart. Mirrors
+    /// `SqliteMessageReader::ensure_connection`.
+    fn ensure_connection(&mut self) {
+        let current_ino = file_ino(&self.db_path);
+        let changed = current_ino != self.last_ino;
+        // "First appearance" (last_ino never set) has nothing to reset; a
+        // genuine recreate (we previously had a real inode, now a different
+        // one) means `last_seen`'s cumulative totals are watermarks against
+        // rows that may no longer exist.
+        let recreated = changed && current_ino.is_some() && self.last_ino.is_some();
+        if self.conn.is_none() || (changed && current_ino.is_some()) {
+            self.conn =
+                Connection::open_with_flags(&self.db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
+            if recreated {
+                self.last_seen.clear();
+            }
+        }
+        self.last_ino = current_ino;
     }
 
     fn fetch_all_sessions(&self) -> Vec<SessionRow> {
@@ -58,7 +105,7 @@ impl HermesReader {
             return Vec::new();
         };
         let mut stmt = match conn.prepare(
-            "SELECT id, model, started_at, input_tokens, output_tokens, \
+            "SELECT id, model, started_at, ended_at, input_tokens, output_tokens, \
              cache_read_tokens, cache_write_tokens, estimated_cost_usd, cwd \
              FROM sessions ORDER BY started_at",
         ) {
@@ -73,23 +120,35 @@ impl HermesReader {
                 row.get::<_, String>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, f64>(2)?,
-                row.get::<_, i64>(3)?,
+                row.get::<_, Option<f64>>(3)?,
                 row.get::<_, i64>(4)?,
                 row.get::<_, i64>(5)?,
                 row.get::<_, i64>(6)?,
-                row.get::<_, Option<f64>>(7)?,
-                row.get::<_, Option<String>>(8)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, Option<f64>>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         });
         let mut sessions = Vec::new();
         if let Ok(rows) = rows {
             for row in rows.flatten() {
-                let (id, model, started_at, input, output, cache_read, cache_write, cost, cwd) =
-                    row;
+                let (
+                    id,
+                    model,
+                    started_at,
+                    ended_at,
+                    input,
+                    output,
+                    cache_read,
+                    cache_write,
+                    cost,
+                    cwd,
+                ) = row;
                 sessions.push(SessionRow {
                     id,
                     model: model.unwrap_or_else(|| "unknown".to_string()),
                     started_at,
+                    ended_at,
                     totals: SessionTotals {
                         input: input.max(0) as u64,
                         output: output.max(0) as u64,
@@ -105,6 +164,7 @@ impl HermesReader {
     }
 
     fn sync_records(&mut self) -> Vec<UsageRecord> {
+        self.ensure_connection();
         let sessions = self.fetch_all_sessions();
         let mut records = Vec::new();
         let mut current_ids = Vec::with_capacity(sessions.len());
@@ -121,6 +181,7 @@ impl HermesReader {
                 continue;
             }
 
+            let is_delta = self.last_seen.contains_key(&session.id);
             let (input, output, cache_read, cache_write, cost) =
                 if let Some(prev) = self.last_seen.get(&session.id) {
                     (
@@ -140,15 +201,30 @@ impl HermesReader {
                     )
                 };
 
+            // No per-delta id exists in the sessions table; the cumulative
+            // totals at the time of this delta change monotonically as a
+            // session progresses, so pairing them with the session id gives a
+            // stable fallback identity.
+            let record_id = format!(
+                "{}:{}:{}:{}:{}",
+                session.id, current.input, current.output, current.cache_read, current.cache_write
+            );
             self.last_seen.insert(session.id.clone(), current);
 
             if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 && cost == 0.0 {
                 continue;
             }
 
-            let timestamp = match Utc
-                .timestamp_millis_opt((session.started_at * 1000.0) as i64)
-                .single()
+            // The first record for a session uses started_at, but a later
+            // delta (an in-place row update) must use its own time — not the
+            // session's start — or a multi-day session's later usage all
+            // buckets onto the day it started.
+            let effective_secs = if is_delta {
+                session.ended_at.filter(|e| *e > 0.0).unwrap_or(session.started_at)
+            } else {
+                session.started_at
+            };
+            let timestamp = match Utc.timestamp_millis_opt((effective_secs * 1000.0) as i64).single()
             {
                 Some(ts) => ts,
                 None => continue,
@@ -159,6 +235,7 @@ impl HermesReader {
                 platform: Platform::Hermes,
                 model: crate::state::intern(&session.model),
                 session: crate::state::intern(&session_label),
+                id: crate::state::intern(&record_id),
                 input_tokens: input,
                 output_tokens: output,
                 cache_read_tokens: cache_read,
@@ -382,10 +459,155 @@ mod tests {
     }
 
     #[test]
+    fn in_place_update_uses_its_own_timestamp_not_started_at() {
+        // C12 regression: a multi-day session's later usage must bucket on
+        // the day the update actually happened (ended_at), not on the day
+        // the session started.
+        let conn = setup();
+        let day1 = 1_700_000_000.0; // 2023-11-14
+        let day2 = 1_700_200_000.0; // ~2 days later
+        insert(&conn, "s1", "claude-3.5-sonnet", day1, 100, 40, 0, 0, 0.5, "/Users/me/project");
+        let mut reader = HermesReader::from_connection(conn);
+        let initial = reader.scan_all();
+        assert_eq!(initial.len(), 1);
+        assert_eq!(
+            initial[0].timestamp,
+            Utc.timestamp_millis_opt((day1 * 1000.0) as i64).single().unwrap(),
+            "the first record for a session uses started_at"
+        );
+
+        let conn2 = reader.conn.as_ref().unwrap();
+        conn2
+            .execute(
+                "UPDATE sessions SET input_tokens = 250, output_tokens = 90, \
+                 estimated_cost_usd = 1.0, ended_at = ?1 WHERE id = 's1'",
+                rusqlite::params![day2],
+            )
+            .unwrap();
+
+        let delta = reader.poll_delta();
+        assert_eq!(delta.len(), 1);
+        assert_eq!(
+            delta[0].timestamp,
+            Utc.timestamp_millis_opt((day2 * 1000.0) as i64).single().unwrap(),
+            "a later in-place update must use its own (ended_at) time, not started_at"
+        );
+    }
+
+    #[test]
     fn missing_db_yields_empty() {
         let mut reader = HermesReader::new(PathBuf::from("/nonexistent/path"));
         assert!(reader.scan_all().is_empty());
         assert!(reader.poll_delta().is_empty());
+    }
+
+    fn init_disk_db(path: &std::path::Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                model TEXT,
+                started_at REAL NOT NULL,
+                ended_at REAL,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                cache_read_tokens INTEGER DEFAULT 0,
+                cache_write_tokens INTEGER DEFAULT 0,
+                estimated_cost_usd REAL,
+                cwd TEXT
+            );",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn db_created_after_reader_start_is_picked_up() {
+        // C6 regression: if state.db doesn't exist yet when the reader is
+        // constructed, the connection is None forever unless the reader
+        // self-heals once the file appears.
+        let dir = tempfile::tempdir().unwrap();
+        let mut reader = HermesReader::new(dir.path().to_path_buf());
+        assert!(reader.scan_all().is_empty(), "db not created yet");
+
+        let db_path = dir.path().join("state.db");
+        init_disk_db(&db_path);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            insert(
+                &conn,
+                "s1",
+                "claude-3.5-sonnet",
+                1000.0,
+                100,
+                40,
+                0,
+                0,
+                0.5,
+                "/Users/me/project",
+            );
+        }
+
+        let records = reader.poll_delta();
+        assert_eq!(
+            records.len(),
+            1,
+            "reader must self-heal once the db appears, not stay permanently empty"
+        );
+    }
+
+    #[test]
+    fn db_deleted_and_recreated_is_picked_up() {
+        // C6 regression: a migration that deletes and recreates state.db at
+        // the same path must not leave the reader holding a stale handle to
+        // the deleted file forever.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("state.db");
+        init_disk_db(&db_path);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            insert(
+                &conn,
+                "s1",
+                "claude-3.5-sonnet",
+                1000.0,
+                100,
+                40,
+                0,
+                0,
+                0.5,
+                "/Users/me/project",
+            );
+        }
+
+        let mut reader = HermesReader::new(dir.path().to_path_buf());
+        assert_eq!(reader.scan_all().len(), 1);
+
+        // Simulate a migration: delete then recreate the db file at the same path.
+        std::fs::remove_file(&db_path).unwrap();
+        init_disk_db(&db_path);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            insert(
+                &conn,
+                "s2",
+                "gpt-4o",
+                2000.0,
+                200,
+                80,
+                0,
+                0,
+                1.5,
+                "/Users/me/other",
+            );
+        }
+
+        let records = reader.poll_delta();
+        assert_eq!(
+            records.len(),
+            1,
+            "reader must reconnect after the db is deleted and recreated"
+        );
+        assert_eq!(crate::state::resolve(records[0].model), "gpt-4o");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::state::UsageRecord;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Trait for reading JSONL files with incremental updates
@@ -36,20 +36,8 @@ pub trait JsonlReader {
 
         let mut records = Vec::new();
         let mut offset = skip_bytes;
-        let mut line = String::new();
 
-        loop {
-            line.clear();
-            let bytes = match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(n) => n as u64,
-                Err(_) => break,
-            };
-
-            if !line.ends_with('\n') {
-                break;
-            }
-
+        while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
             if let Some(rec) = self.parse_line(line.trim_end_matches(['\r', '\n'])) {
                 records.push(rec);
             }

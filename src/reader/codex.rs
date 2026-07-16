@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::find_recursive;
@@ -146,20 +146,8 @@ fn read_codex_from_offset(
 
     let mut records = Vec::new();
     let mut offset = skip_bytes;
-    let mut line = String::new();
 
-    loop {
-        line.clear();
-        let bytes = match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(n) => n as u64,
-            Err(_) => break,
-        };
-
-        if !line.ends_with('\n') {
-            break;
-        }
-
+    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
         if let Some(rec) = parse_codex_line(line.trim_end_matches(['\r', '\n']), st) {
             records.push(rec);
         }
@@ -242,19 +230,26 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    let last = info.get("last_token_usage");
+    // `last_token_usage` carries the per-turn delta; `total_token_usage` is the
+    // session's running cumulative total. When `last_token_usage` is missing
+    // OR explicitly `null` (both collapse to `None` via `Option::get`+`and_then`),
+    // falling back to the cumulative total would record it as a delta and wildly
+    // over-count (e.g. cumulative 10k -> 20k -> 30k would sum to 60k instead of
+    // 30k). Treat "no usable delta" as "nothing new happened this event" (0, 0,
+    // 0) instead, matching the case where the rollout simply omits the field.
+    let last = info.get("last_token_usage").filter(|l| !l.is_null());
     let delta_input = last
         .and_then(|l| l.get("input_tokens"))
         .and_then(|v| v.as_u64())
-        .unwrap_or(input_tokens);
+        .unwrap_or(0);
     let delta_output = last
         .and_then(|l| l.get("output_tokens"))
         .and_then(|v| v.as_u64())
-        .unwrap_or(output_tokens);
+        .unwrap_or(0);
     let delta_cached = last
         .and_then(|l| l.get("cached_input_tokens"))
         .and_then(|v| v.as_u64())
-        .unwrap_or(cached);
+        .unwrap_or(0);
 
     if delta_input == 0 && delta_output == 0 {
         return None;
@@ -265,11 +260,22 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
 
     let cost_usd = pricing::calculate_cost(&st.model, delta_input, delta_output, delta_cached, 0);
 
+    // Codex token_count events carry no per-event id. The cumulative totals
+    // change monotonically, so pairing them with the timestamp gives a stable
+    // fallback identity: a truncation-triggered re-read of an unchanged line
+    // reproduces the same key, while a genuinely new event has a different
+    // cumulative total.
+    let record_id = format!(
+        "{}:{timestamp_str}:{input_tokens}:{output_tokens}:{cached}",
+        st.session()
+    );
+
     Some(UsageRecord {
         timestamp,
         platform: Platform::Codex,
         model: crate::state::intern(&st.model),
         session: crate::state::intern(&st.session()),
+        id: crate::state::intern(&record_id),
         input_tokens: delta_input,
         output_tokens: delta_output,
         cache_read_tokens: delta_cached,
@@ -322,6 +328,43 @@ mod tests {
     fn reader_for(sessions: &Path) -> CodexReader {
         // CodexReader::new joins "sessions"; point it at the parent.
         CodexReader::new(sessions.parent().unwrap().to_path_buf())
+    }
+
+    fn token_count_with_last(ts: &str, input: u64, output: u64, last: &str) -> String {
+        format!(
+            r#"{{"type":"event_msg","timestamp":"{ts}","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"output_tokens":{output},"cached_input_tokens":0}},"last_token_usage":{last}}}}}}}"#
+        )
+    }
+
+    /// A rollout whose `last_token_usage` is `null` (as opposed to absent)
+    /// must not fall back to the cumulative total as if it were a delta —
+    /// that would record 10k, then 20k, then 30k as deltas summing to 60k
+    /// instead of the true cumulative 30k.
+    #[test]
+    fn null_last_token_usage_does_not_inflate_cumulative_into_a_delta() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        write_rollout(
+            &sessions,
+            "rollout-1.jsonl",
+            &[
+                turn_context("gpt-5.4"),
+                token_count_with_last("2026-05-29T10:01:00Z", 10_000, 0, "null"),
+                token_count_with_last("2026-05-29T10:02:00Z", 20_000, 0, "null"),
+                token_count_with_last("2026-05-29T10:03:00Z", 30_000, 0, "null"),
+            ],
+        );
+
+        let mut reader = reader_for(&sessions);
+        let records = reader.scan_all();
+        // With a null last_token_usage there is no usable per-event delta, so
+        // no records should be emitted (not 60k worth of phantom deltas).
+        let total_input: u64 = records.iter().map(|r| r.input_tokens).sum();
+        assert_eq!(
+            total_input, 0,
+            "null last_token_usage must not be treated as a delta, got total {total_input}"
+        );
     }
 
     #[test]

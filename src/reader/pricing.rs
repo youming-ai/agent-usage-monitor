@@ -50,6 +50,39 @@ const ANTHROPIC_PRICING: &[PricingEntry] = &[
         cache_read: 0.03,
         cache_creation: 0.25,
     },
+    // Old-style ids (version-before-family, e.g. "claude-3-5-sonnet-20241022")
+    // match none of the patterns above (which use family-then-version, e.g.
+    // "claude-sonnet-3"). Some agents (notably Cursor) still pass these
+    // through verbatim, which otherwise silently prices at $0. Alias them to
+    // the equivalent family/version pricing above.
+    PricingEntry {
+        pattern: "claude-3-5-sonnet",
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.30,
+        cache_creation: 3.00,
+    },
+    PricingEntry {
+        pattern: "claude-3-7-sonnet",
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.30,
+        cache_creation: 3.00,
+    },
+    PricingEntry {
+        pattern: "claude-3-5-haiku",
+        input: 1.0,
+        output: 5.0,
+        cache_read: 0.10,
+        cache_creation: 1.00,
+    },
+    PricingEntry {
+        pattern: "claude-3-opus",
+        input: 15.0,
+        output: 75.0,
+        cache_read: 1.50,
+        cache_creation: 15.00,
+    },
 ];
 
 const KIMI_PRICING: &[PricingEntry] = &[
@@ -364,6 +397,18 @@ mod tests {
         assert_eq!(
             calculate_cost("totally-unknown", 1_000_000, 1_000_000, 0, 0),
             0.0
+        );
+    }
+
+    #[test]
+    fn old_style_claude_ids_are_not_priced_at_zero() {
+        // "claude-3-5-sonnet-20241022" (version-before-family) matches none
+        // of the family-then-version patterns (e.g. "claude-sonnet-3")
+        // without an explicit alias, and used to silently price at $0.
+        let cost = calculate_cost("claude-3-5-sonnet-20241022", 1_000_000, 1_000_000, 0, 0);
+        assert!(
+            (cost - 18.00).abs() < 1e-9,
+            "claude-3-5-sonnet-20241022 priced as {cost}, expected 18.00"
         );
     }
 

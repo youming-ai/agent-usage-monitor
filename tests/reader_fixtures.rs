@@ -58,10 +58,13 @@ fn factory_fixture_parses_uuid_session() {
 fn grok_fixture_parses_prompt_deltas() {
     let mut reader = GrokReader::new(fixtures_root().join("grok"));
     let records = reader.scan_all();
-    assert_eq!(records.len(), 1, "first completed prompt only");
+    // A full scan flushes the trailing prompt too (C11 fix) — it's no longer
+    // left uncounted forever just because no third prompt arrived.
+    assert_eq!(records.len(), 2, "completed prompt plus the trailing one");
     assert_eq!(records[0].platform, Platform::Grok);
     assert_eq!(resolve(records[0].model), "grok-build");
     assert_eq!(records[0].input_tokens, 1500);
+    assert_eq!(records[1].input_tokens, 1000);
     assert_eq!(resolve(records[0].session), "project 019ea524");
 }
 

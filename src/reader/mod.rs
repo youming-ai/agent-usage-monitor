@@ -19,7 +19,31 @@ pub(crate) mod sqlite_message_reader;
 use crate::state::{Platform, UsageRecord};
 use jsonl_reader::JsonlReader;
 use std::fs;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
+
+/// Read one newline-terminated line as raw bytes and decode it lossily.
+///
+/// `BufRead::read_line` requires valid UTF-8 and, per its docs, leaves the
+/// reader's position in an indeterminate state on error — every reader here
+/// used to just `break` on that error without advancing its tracked byte
+/// offset, so a single invalid-UTF-8 byte anywhere in a file would wedge it
+/// forever: every subsequent poll re-reads up to that same byte and stops,
+/// silently dropping every later record. `read_until` operates on raw bytes
+/// and cannot fail on invalid UTF-8, so decoding lossily afterwards (bad
+/// bytes become `U+FFFD`, which fails JSON parsing and is simply skipped by
+/// each reader's `parse_line`) keeps the offset always advancing.
+///
+/// Returns `None` at true EOF or on an incomplete trailing line (left as-is
+/// for the next poll to retry once it's been fully written).
+pub(crate) fn read_next_line(reader: &mut impl BufRead) -> Option<(String, u64)> {
+    let mut buf = Vec::new();
+    let n = reader.read_until(b'\n', &mut buf).ok()?;
+    if n == 0 || !buf.ends_with(b"\n") {
+        return None;
+    }
+    Some((String::from_utf8_lossy(&buf).into_owned(), n as u64))
+}
 
 /// Last non-empty path component, e.g. `/Users/me/repo` -> `repo`.
 pub(crate) fn basename(path: &str) -> String {

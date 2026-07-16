@@ -140,17 +140,21 @@ fn parse_factory_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> 
         .unwrap_or(st.sid.as_str());
     let session = crate::reader::session_label(&dir, session_id);
 
-    let cost_usd = usage
+    // `cost` is a sibling of `usage` inside `message`, not nested inside it.
+    let cost_usd = message
         .get("cost")
         .and_then(|c| c.get("total"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
+
+    let record_id = v.get("id").and_then(|i| i.as_str()).unwrap_or(line);
 
     Some(UsageRecord {
         timestamp,
         platform: Platform::Factory,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session),
+        id: crate::state::intern(record_id),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,
@@ -207,6 +211,10 @@ mod tests {
         assert_eq!(records[0].cache_creation_tokens, 150);
         assert_eq!(records[0].platform, Platform::Factory);
         assert_eq!(crate::state::resolve(records[0].session), "project abc123");
+        assert_eq!(
+            records[0].cost_usd, 0.02,
+            "cost is a sibling of usage inside message, not nested in it"
+        );
     }
 
     #[test]

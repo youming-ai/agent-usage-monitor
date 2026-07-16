@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Per-file state tracking session metadata across lines.
@@ -163,20 +163,8 @@ fn read_transcript_from_offset(
 
     let mut records = Vec::new();
     let mut offset = skip_bytes;
-    let mut line = String::new();
 
-    loop {
-        line.clear();
-        let bytes = match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(n) => n as u64,
-            Err(_) => break,
-        };
-
-        if !line.ends_with('\n') {
-            break;
-        }
-
+    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
         if let Some(rec) = parse_transcript_line(line.trim_end_matches(['\r', '\n']), st) {
             records.push(rec);
         }
@@ -232,11 +220,19 @@ fn parse_transcript_line(line: &str, st: &AgFileState) -> Option<UsageRecord> {
     // Model responses are output; we have no input token data from the transcript.
     let cost = pricing::calculate_cost(&model, 0, estimated_tokens, 0, 0);
 
+    // `step` is a monotonic per-conversation counter; pair it with the
+    // conversation id for a stable identity, falling back to the raw line.
+    let record_id = match v.get("step").and_then(|s| s.as_i64()) {
+        Some(step) => format!("{}:{step}", st.conversation_id),
+        None => format!("{}:{line}", st.conversation_id),
+    };
+
     Some(UsageRecord {
         timestamp,
         platform: Platform::Antigravity,
         model: crate::state::intern(&model),
         session: crate::state::intern(&st.session_label()),
+        id: crate::state::intern(&record_id),
         input_tokens: 0,
         output_tokens: estimated_tokens,
         cache_read_tokens: 0,
