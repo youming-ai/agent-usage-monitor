@@ -4,7 +4,71 @@
 //! `format_duration_short`; the JWT helpers were only in `codex.rs` but live
 //! here too so future OAuth work has a single place to extend.
 
+use super::{QuotaError, QuotaInfo};
 use serde_json::Value;
+use std::time::Instant;
+
+/// Build the `QuotaInfo` shape shared by every platform whose "quota" is just
+/// a local-credentials presence check (no real usage API): signed in with an
+/// email (or the generic "Signed in" placeholder), or `NoCredentials` when
+/// none were found.
+pub(crate) fn signed_in(tool_name: &str, email: Option<String>) -> Option<QuotaInfo> {
+    Some(QuotaInfo {
+        tool_name: tool_name.to_string(),
+        account_id: None,
+        windows: vec![],
+        fetched_at: Instant::now(),
+        error: if email.is_none() {
+            Some(QuotaError::NoCredentials)
+        } else {
+            None
+        },
+        email,
+    })
+}
+
+/// Extract `email` from a JWT payload, falling back to an email already read
+/// from the credentials file. Shared by the four platforms (Copilot, Grok,
+/// Factory, Antigravity) whose token is a JWT and whose local credentials
+/// file may also carry an email/user field directly.
+pub(crate) fn read_email(token: &str, file_email: Option<String>) -> Option<String> {
+    decode_jwt_payload(token)
+        .and_then(|payload| {
+            payload
+                .get("email")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .or(file_email)
+}
+
+/// Classify a quota API's `error` field into a `QuotaError`, but only when
+/// the caller has no windows to show — a stray `error` key alongside valid
+/// windows must NOT hide real quota (the UI renders the error arm before the
+/// windows arm). `data.get("error")` is `Some` for an explicit `"error":
+/// null` (a common success sentinel) too — filtered out here so it isn't
+/// surfaced as a bogus parse error that would also force a re-fetch every
+/// tick. Authentication errors are classified separately so the UI can
+/// prompt a re-login. Shared by the Claude and Codex quota APIs, whose
+/// response shapes agree on this `error` convention.
+pub(crate) fn classify_api_error(data: &Value, windows_are_empty: bool) -> Option<QuotaError> {
+    if !windows_are_empty {
+        return None;
+    }
+    data.get("error").filter(|e| !e.is_null()).map(|e| {
+        let error_type = e.get("type").and_then(|v| v.as_str());
+        let message = e
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        if error_type == Some("authentication_error") {
+            QuotaError::Auth(message)
+        } else {
+            QuotaError::Parse(format!("{}: {message}", error_type.unwrap_or("error")))
+        }
+    })
+}
 
 /// Render a duration in seconds as a compact human string:
 /// `0` → `None`, `90` → `1m`, `3725` → `1h2m`, `90000` → `1d1h`.

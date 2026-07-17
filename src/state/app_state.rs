@@ -209,25 +209,6 @@ impl Tab {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn secondary_color(self) -> ratatui::style::Color {
-        match self {
-            Tab::ClaudeCode => ratatui::style::Color::Rgb(254, 205, 170),
-            Tab::Codex => ratatui::style::Color::Rgb(240, 176, 240),
-            Tab::OpenClaw => ratatui::style::Color::Rgb(255, 184, 158),
-            Tab::Hermes => ratatui::style::Color::Rgb(255, 235, 128),
-            Tab::OpenCode => ratatui::style::Color::Rgb(255, 212, 184),
-            Tab::KimiCode => ratatui::style::Color::Rgb(165, 243, 252),
-            Tab::Pi => ratatui::style::Color::Rgb(197, 228, 224),
-            Tab::Factory => ratatui::style::Color::Rgb(255, 201, 160),
-            Tab::Grok => ratatui::style::Color::Rgb(221, 208, 252),
-            Tab::Cursor => ratatui::style::Color::Rgb(184, 224, 235),
-            Tab::Copilot => ratatui::style::Color::Rgb(155, 215, 165),
-            Tab::Antigravity => ratatui::style::Color::Rgb(154, 194, 249),
-            Tab::MimoCode => ratatui::style::Color::Rgb(255, 178, 102),
-        }
-    }
-
     /// Whether this platform has a quota API endpoint (Claude + Codex only).
     /// Map from the corresponding `Platform` variant. The two enums share
     /// variant order, so this is a constant-time match.
@@ -322,12 +303,6 @@ impl Tab {
         let path = paths.path_for(self);
         Self::is_available_at_path(&path, self)
     }
-
-    #[allow(dead_code)]
-    pub fn is_available(self) -> bool {
-        let path = self.default_path();
-        Self::is_available_at_path(&path, self)
-    }
 }
 
 /// Single API call record
@@ -349,13 +324,6 @@ pub struct UsageRecord {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cost_usd: f64,
-    pub files_read: u64,
-    pub files_edited: u64,
-    pub files_added: u64,
-    pub files_deleted: u64,
-    pub terminal_commands: u64,
-    pub lines_read: u64,
-    pub lines_edited: u64,
 }
 
 /// Aggregated per-model totals.
@@ -587,13 +555,6 @@ mod tests {
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             cost_usd: cost,
-            files_read: 0,
-            files_edited: 0,
-            files_added: 0,
-            files_deleted: 0,
-            terminal_commands: 0,
-            lines_read: 0,
-            lines_edited: 0,
         }
     }
 
@@ -722,7 +683,7 @@ mod tests {
     #[test]
     fn add_records_ignores_a_re_emitted_id() {
         // Simulates a reader re-delivering the same record after a file
-        // truncation forced it to re-read from byte 0 (see jsonl_reader.rs).
+        // truncation forced it to re-read from byte 0 (see FileScanner).
         let mut s = AppState::with_capacity(10);
         let r = rec_with_id(Platform::ClaudeCode, "opus-4", 100, 50, 1.0, "same-id");
         s.add_records(Platform::ClaudeCode, vec![r.clone()]);

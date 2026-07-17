@@ -1,8 +1,6 @@
-use super::util::decode_jwt_payload;
-use super::{QuotaError, QuotaInfo};
-use crate::state::Platform;
+use super::QuotaInfo;
+use super::util::{read_email, signed_in};
 use std::path::PathBuf;
-use std::time::Instant;
 
 fn get_vscdb_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -66,44 +64,8 @@ fn read_cursor_token() -> Option<String> {
     None
 }
 
-fn read_email(token: &str) -> Option<String> {
-    let payload = decode_jwt_payload(token)?;
-    payload
-        .get("email")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-}
-
 pub fn fetch_quota() -> Option<QuotaInfo> {
-    if let Some(token) = read_cursor_token() {
-        let email = read_email(&token).unwrap_or_else(|| "Signed in".to_string());
-        Some(QuotaInfo {
-            tool_name: "Cursor CLI".to_string(),
-            email: Some(email),
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: None,
-        })
-    } else {
-        Some(QuotaInfo {
-            tool_name: "Cursor CLI".to_string(),
-            email: None,
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: Some(QuotaError::NoCredentials),
-        })
-    }
-}
-
-pub struct CursorQuotaFetcher;
-
-impl super::QuotaFetcher for CursorQuotaFetcher {
-    fn platform(&self) -> Platform {
-        Platform::Cursor
-    }
-    fn fetch(&self) -> Option<QuotaInfo> {
-        fetch_quota()
-    }
+    let email = read_cursor_token()
+        .map(|token| read_email(&token, None).unwrap_or_else(|| "Signed in".to_string()));
+    signed_in("Cursor CLI", email)
 }

@@ -1,11 +1,8 @@
 use crate::reader::pricing;
-use crate::reader::{UsageSource, basename, find_recursive, session_label};
+use crate::reader::{FileScanner, UsageSource, basename, find_recursive, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Per-file state tracking session metadata across lines.
@@ -38,24 +35,15 @@ impl AgFileState {
 
 pub struct AntigravityReader {
     data_dir: PathBuf,
-    file_positions: HashMap<PathBuf, u64>,
-    file_state: HashMap<PathBuf, AgFileState>,
+    scanner: FileScanner<AgFileState>,
 }
 
 impl AntigravityReader {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
-            file_positions: HashMap::new(),
-            file_state: HashMap::new(),
+            scanner: FileScanner::new(),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".gemini/antigravity-cli")
     }
 
     fn find_files(&self) -> Vec<PathBuf> {
@@ -94,31 +82,17 @@ impl AntigravityReader {
         // falls back to just the conversation_id.
     }
 
-    fn scan_files(&mut self, from_start: bool) -> Vec<UsageRecord> {
+    fn scan(&mut self) -> Vec<UsageRecord> {
         let files = self.find_files();
-        let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
-        self.file_positions
-            .retain(|path, _| current_files.contains(path));
-        self.file_state
-            .retain(|path, _| current_files.contains(path));
-
-        let mut records = Vec::new();
-        for file in files {
-            let offset = if from_start {
-                0
-            } else {
-                self.file_positions.get(&file).copied().unwrap_or(0)
-            };
-            let st = self.file_state.entry(file.clone()).or_default();
-            if st.conversation_id.is_empty() {
-                Self::derive_session_info(&file, st);
-            }
-            let (entries, bytes_read) = read_transcript_from_offset(&file, offset, st);
-            self.file_positions.insert(file, bytes_read);
-            records.extend(entries);
-        }
-        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        records
+        self.scanner.scan(
+            files,
+            |file| {
+                let mut st = AgFileState::default();
+                Self::derive_session_info(file, &mut st);
+                st
+            },
+            read_transcript_from_offset,
+        )
     }
 }
 
@@ -128,16 +102,12 @@ impl UsageSource for AntigravityReader {
     }
 
     fn scan_all(&mut self) -> Vec<UsageRecord> {
-        self.file_positions.clear();
-        self.file_state.clear();
-        self.scan_files(true)
+        self.scanner.reset();
+        self.scan()
     }
 
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        self.scan_files(false)
-    }
-    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
-        vec![self.data_dir.clone()]
+        self.scan()
     }
 }
 
@@ -146,32 +116,9 @@ fn read_transcript_from_offset(
     skip_bytes: u64,
     st: &mut AgFileState,
 ) -> (Vec<UsageRecord>, u64) {
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return (Vec::new(), skip_bytes),
-    };
-
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    if skip_bytes > file_len {
-        return read_transcript_from_offset(path, 0, st);
-    }
-
-    let mut reader = BufReader::new(file);
-    if skip_bytes > 0 && reader.seek(SeekFrom::Start(skip_bytes)).is_err() {
-        return read_transcript_from_offset(path, 0, st);
-    }
-
-    let mut records = Vec::new();
-    let mut offset = skip_bytes;
-
-    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
-        if let Some(rec) = parse_transcript_line(line.trim_end_matches(['\r', '\n']), st) {
-            records.push(rec);
-        }
-        offset += bytes;
-    }
-
-    (records, offset)
+    crate::reader::read_lines_from_offset(path, skip_bytes, |line| {
+        parse_transcript_line(line, st)
+    })
 }
 
 /// Count characters in a `content` field that may be either a plain string or
@@ -238,13 +185,6 @@ fn parse_transcript_line(line: &str, st: &AgFileState) -> Option<UsageRecord> {
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         cost_usd: cost,
-        files_read: 0,
-        files_edited: 0,
-        files_added: 0,
-        files_deleted: 0,
-        terminal_commands: 0,
-        lines_read: 0,
-        lines_edited: 0,
     })
 }
 

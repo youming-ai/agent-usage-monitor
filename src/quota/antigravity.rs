@@ -1,8 +1,6 @@
-use super::util::decode_jwt_payload;
-use super::{QuotaError, QuotaInfo};
-use crate::state::Platform;
+use super::QuotaInfo;
+use super::util::{read_email, signed_in};
 use serde_json::Value;
-use std::time::Instant;
 
 #[cfg(target_os = "macos")]
 fn read_keychain_credentials() -> Option<String> {
@@ -96,47 +94,9 @@ fn read_antigravity_token() -> Option<(String, Option<String>)> {
     None
 }
 
-fn read_email(token: &str, file_email: Option<String>) -> Option<String> {
-    decode_jwt_payload(token)
-        .and_then(|payload| {
-            payload
-                .get("email")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-        })
-        .or(file_email)
-}
-
 pub fn fetch_quota() -> Option<QuotaInfo> {
-    if let Some((token, file_email)) = read_antigravity_token() {
-        let email = read_email(&token, file_email).unwrap_or_else(|| "Signed in".to_string());
-        Some(QuotaInfo {
-            tool_name: "Antigravity CLI".to_string(),
-            email: Some(email),
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: None,
-        })
-    } else {
-        Some(QuotaInfo {
-            tool_name: "Antigravity CLI".to_string(),
-            email: None,
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: Some(QuotaError::NoCredentials),
-        })
-    }
-}
-
-pub struct AntigravityQuotaFetcher;
-
-impl super::QuotaFetcher for AntigravityQuotaFetcher {
-    fn platform(&self) -> Platform {
-        Platform::Antigravity
-    }
-    fn fetch(&self) -> Option<QuotaInfo> {
-        fetch_quota()
-    }
+    let email = read_antigravity_token().map(|(token, file_email)| {
+        read_email(&token, file_email).unwrap_or_else(|| "Signed in".to_string())
+    });
+    signed_in("Antigravity CLI", email)
 }

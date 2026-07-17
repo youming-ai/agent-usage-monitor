@@ -1,7 +1,5 @@
 use crate::state::UsageRecord;
 use serde_json::Value;
-use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
 use std::path::Path;
 
 /// Per-file session metadata carried across lines and incremental polls.
@@ -46,37 +44,12 @@ pub(crate) fn read_jsonl_from_offset(
     st: &mut SessionFileState,
     mut parse_line: impl FnMut(&str, &SessionFileState) -> Option<UsageRecord>,
 ) -> (Vec<UsageRecord>, u64) {
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return (Vec::new(), skip_bytes),
-    };
-
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    if skip_bytes > file_len {
-        // File was truncated or rotated — re-read from the start.
-        return read_jsonl_from_offset(path, 0, st, parse_line);
-    }
-
-    let mut reader = BufReader::new(file);
-    if skip_bytes > 0 && reader.seek(SeekFrom::Start(skip_bytes)).is_err() {
-        return read_jsonl_from_offset(path, 0, st, parse_line);
-    }
-
-    let mut records = Vec::new();
-    let mut offset = skip_bytes;
-
-    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+    crate::reader::read_lines_from_offset(path, skip_bytes, |line| {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
             apply_session_line(&v, st);
         }
-        if let Some(rec) = parse_line(trimmed, st) {
-            records.push(rec);
-        }
-        offset += bytes;
-    }
-
-    (records, offset)
+        parse_line(line, st)
+    })
 }
 
 #[cfg(test)]
@@ -106,13 +79,6 @@ mod tests {
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             cost_usd: 0.0,
-            files_read: 0,
-            files_edited: 0,
-            files_added: 0,
-            files_deleted: 0,
-            terminal_commands: 0,
-            lines_read: 0,
-            lines_edited: 0,
         })
     }
 

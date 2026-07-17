@@ -6,20 +6,17 @@ pub mod cursor;
 pub mod factory;
 pub mod grok;
 pub mod hermes;
-pub mod jsonl_reader;
 pub mod kimi_code;
-pub mod mimo_code;
 pub mod openclaw;
-pub mod opencode;
 pub mod pi;
 pub mod pricing;
 pub(crate) mod session_jsonl;
 pub(crate) mod sqlite_message_reader;
 
 use crate::state::{Platform, UsageRecord};
-use jsonl_reader::JsonlReader;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::BufRead;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Read one newline-terminated line as raw bytes and decode it lossily.
@@ -45,6 +42,112 @@ pub(crate) fn read_next_line(reader: &mut impl BufRead) -> Option<(String, u64)>
     Some((String::from_utf8_lossy(&buf).into_owned(), n as u64))
 }
 
+/// Read newline-terminated lines from `path` starting at `skip_bytes`,
+/// invoking `on_line` for each complete line (trailing `\r`/`\n` stripped).
+/// Returns the records `on_line` produced and the byte offset just past the
+/// last complete line consumed — an incomplete trailing line is left as-is
+/// for the next poll to retry once it's been fully written.
+///
+/// If `skip_bytes` is past the current file length (the file was truncated
+/// or rewritten since the offset was recorded), re-reads from byte 0 instead
+/// — callers that need to reset per-file parse state when that happens
+/// (e.g. a truncation-triggered rescan invalidating a running token-count
+/// baseline) must detect it themselves before calling this (see cursor.rs,
+/// grok.rs) since this function has no hook for that.
+///
+/// Every reader that tails a single JSONL/log file used to carry its own
+/// copy of this open -> check-truncation -> seek -> read-loop block,
+/// differing only in what each line's parse callback did with the line (and
+/// what state it captured) — now the closure's job.
+pub(crate) fn read_lines_from_offset(
+    path: &Path,
+    skip_bytes: u64,
+    mut on_line: impl FnMut(&str) -> Option<UsageRecord>,
+) -> (Vec<UsageRecord>, u64) {
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return (Vec::new(), skip_bytes),
+    };
+
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if skip_bytes > file_len {
+        return read_lines_from_offset(path, 0, on_line);
+    }
+
+    let mut reader = BufReader::new(file);
+    if skip_bytes > 0 && reader.seek(SeekFrom::Start(skip_bytes)).is_err() {
+        return read_lines_from_offset(path, 0, on_line);
+    }
+
+    let mut records = Vec::new();
+    let mut offset = skip_bytes;
+
+    while let Some((line, bytes)) = read_next_line(&mut reader) {
+        if let Some(rec) = on_line(line.trim_end_matches(['\r', '\n'])) {
+            records.push(rec);
+        }
+        offset += bytes;
+    }
+
+    (records, offset)
+}
+
+/// Shared incremental-scan driver: owns the per-file byte-offset map plus an
+/// arbitrary per-file state map `S` (session id, tracked model, running
+/// totals, ...), and drives exactly the pattern every JSONL-tailing reader
+/// used to duplicate by hand — drop offsets/state for files that vanished
+/// since the last scan, look up (or lazily build via `init`) each remaining
+/// file's offset and state, read new records via a caller-supplied
+/// `read_file`, collect, and sort by timestamp.
+pub(crate) struct FileScanner<S> {
+    positions: HashMap<PathBuf, u64>,
+    state: HashMap<PathBuf, S>,
+}
+
+impl<S> FileScanner<S> {
+    pub(crate) fn new() -> Self {
+        Self {
+            positions: HashMap::new(),
+            state: HashMap::new(),
+        }
+    }
+
+    /// Drop every tracked offset and per-file state — call before a full
+    /// re-read so every file starts again from byte 0 with fresh state.
+    pub(crate) fn reset(&mut self) {
+        self.positions.clear();
+        self.state.clear();
+    }
+
+    /// (Re)scan `files`: for each, look up its last byte offset (0 if never
+    /// seen) and its per-file state (built via `init` the first time a file
+    /// is seen), read new records via `read_file`, and store back the
+    /// updated offset/state. Offsets/state for files no longer present in
+    /// `files` are dropped first. Returned records are sorted by timestamp.
+    pub(crate) fn scan(
+        &mut self,
+        files: Vec<PathBuf>,
+        mut init: impl FnMut(&Path) -> S,
+        mut read_file: impl FnMut(&Path, u64, &mut S) -> (Vec<UsageRecord>, u64),
+    ) -> Vec<UsageRecord> {
+        let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
+        self.positions.retain(|path, _| current_files.contains(path));
+        self.state.retain(|path, _| current_files.contains(path));
+
+        let mut records = Vec::new();
+        for file in files {
+            let offset = self.positions.get(&file).copied().unwrap_or(0);
+            let mut st = self.state.remove(&file).unwrap_or_else(|| init(&file));
+            let (entries, bytes_read) = read_file(&file, offset, &mut st);
+            self.positions.insert(file.clone(), bytes_read);
+            self.state.insert(file, st);
+            records.extend(entries);
+        }
+        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        records
+    }
+}
+
 /// Last non-empty path component, e.g. `/Users/me/repo` -> `repo`.
 pub(crate) fn basename(path: &str) -> String {
     std::path::Path::new(path)
@@ -61,12 +164,8 @@ pub(crate) fn is_under_dir_named(path: &Path, name: &str) -> bool {
         .any(|a| a.file_name().is_some_and(|n| n == name))
 }
 
-/// True when the file stem matches `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
-pub(crate) fn is_uuid_jsonl(path: &Path) -> bool {
-    let stem = match path.file_stem().and_then(|s| s.to_str()) {
-        Some(s) => s,
-        None => return false,
-    };
+/// True when `stem` matches `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
+pub(crate) fn is_uuid(stem: &str) -> bool {
     if stem.len() != 36 {
         return false;
     }
@@ -79,6 +178,13 @@ pub(crate) fn is_uuid_jsonl(path: &Path) -> bool {
             b.is_ascii_hexdigit()
         }
     })
+}
+
+/// True when the file stem matches `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
+pub(crate) fn is_uuid_jsonl(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(is_uuid)
 }
 
 /// Label for a single conversation: working-dir basename plus a short id
@@ -114,48 +220,13 @@ pub(crate) fn find_recursive(dir: &Path, files: &mut Vec<PathBuf>, keep: &dyn Fn
 
 /// A source of usage records, abstracting over the backing store (JSONL files
 /// for Claude/Codex, SQLite for opencode). `main.rs` drives every source the
-/// same way: an initial `scan_all`, then a `poll_delta` loop.
+/// same way: an initial `scan_all`, then a `poll_delta` loop. The file watcher
+/// watches each platform's own resolved path directly (see `watcher.rs`) —
+/// it does not go through this trait.
 pub trait UsageSource: Send {
     fn platform(&self) -> Platform;
     fn scan_all(&mut self) -> Vec<UsageRecord>;
     fn poll_delta(&mut self) -> Vec<UsageRecord>;
-    /// Directories the file watcher should monitor for this platform.
-    /// Default: empty (no watching). JSONL readers return `[data_dir]`
-    /// (recursive). SQLite readers return `[db_path]` (watched as a file
-    /// via its parent dir by the watcher).
-    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
-        vec![]
-    }
-}
-
-impl UsageSource for claude::ClaudeReader {
-    fn platform(&self) -> Platform {
-        Platform::ClaudeCode
-    }
-    fn scan_all(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::scan_all(self)
-    }
-    fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::poll_delta(self)
-    }
-    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
-        vec![self.data_dir.clone()]
-    }
-}
-
-impl UsageSource for codex::CodexReader {
-    fn platform(&self) -> Platform {
-        Platform::Codex
-    }
-    fn scan_all(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::scan_all(self)
-    }
-    fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        JsonlReader::poll_delta(self)
-    }
-    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
-        vec![self.sessions_dir.clone()]
-    }
 }
 
 #[cfg(test)]

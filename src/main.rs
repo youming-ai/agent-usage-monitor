@@ -122,12 +122,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             loop {
                 tokio::select! {
                     Some(msg) = watcher_rx.recv() => {
-                        // Poll only the platform whose files changed; a
-                        // FallbackTick message (unused by the current watcher)
-                        // falls back to polling every platform.
+                        // Poll only the platform whose files changed.
                         let targets: Vec<Platform> = match &msg {
                             WatcherMessage::Event { platform, .. } => vec![*platform],
-                            WatcherMessage::FallbackTick => readers.platforms(),
                         };
                         for platform in targets {
                             if let Some(reader) = readers.get(platform) {
@@ -163,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Quota fetcher: each fetch runs in spawn_blocking so the API call (HTTP
     // via ureq) does not block the tokio runtime. Fetchers are registered in
-    // `quota::fetchers()` — adding a new quota source no longer requires
+    // `quota::FETCHERS` — adding a new quota source no longer requires
     // changing main.rs.
     let quota_state = app_state.clone();
     let quota_handle = task::spawn(async move {
@@ -171,15 +168,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // token-spawns at startup.
         {
             let qs = quota_state.clone();
-            let results: Vec<(Platform, Option<quota::QuotaInfo>)> =
-                task::spawn_blocking(move || {
-                    quota::fetchers()
-                        .iter()
-                        .map(|f| (f.platform(), f.fetch()))
-                        .collect()
-                })
-                .await
-                .unwrap_or_default();
+            let results: Vec<(Platform, Option<quota::QuotaInfo>)> = task::spawn_blocking(|| {
+                quota::FETCHERS
+                    .iter()
+                    .map(|&(platform, fetch)| (platform, fetch()))
+                    .collect()
+            })
+            .await
+            .unwrap_or_default();
 
             for (platform, q) in results {
                 let tab = Tab::from_platform(platform);
@@ -199,8 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
             interval.tick().await;
 
-            for fetcher in quota::fetchers() {
-                let p = fetcher.platform();
+            for &(p, fetch) in quota::FETCHERS {
                 let tab = Tab::from_platform(p);
                 let stale = quota_state
                     .try_read()
@@ -215,12 +210,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 if stale {
                     let qs = quota_state.clone();
-                    let fetcher_platform = p;
-                    if let Some(q) = task::spawn_blocking(move || fetcher.fetch())
-                        .await
-                        .unwrap_or_default()
-                    {
-                        let tab = Tab::from_platform(fetcher_platform);
+                    if let Some(q) = task::spawn_blocking(fetch).await.unwrap_or_default() {
+                        let tab = Tab::from_platform(p);
                         if let Ok(mut s) = qs.write() {
                             s.platform_mut(tab).quota = Some(q);
                         }

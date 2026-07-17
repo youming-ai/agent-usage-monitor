@@ -1,5 +1,5 @@
-use super::util::{decode_jwt_payload, format_duration_short};
-use super::{QuotaError, QuotaInfo, QuotaWindow};
+use super::util::{classify_api_error, decode_jwt_payload, format_duration_short};
+use super::{QuotaInfo, QuotaWindow};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -11,8 +11,11 @@ fn codex_auth_path() -> PathBuf {
         .join("auth.json")
 }
 
-/// Read Codex auth info from ~/.codex/auth.json
-fn read_auth_info() -> Option<(String, String)> {
+/// Read Codex auth info from ~/.codex/auth.json: access token, account id,
+/// and email — all derived from the same parsed file (and, for account id /
+/// email, the same decoded access-token JWT), so this reads+parses it once
+/// instead of once per field.
+fn read_auth_info() -> Option<(String, String, Option<String>)> {
     let auth_path = codex_auth_path();
     let raw = std::fs::read_to_string(&auth_path).ok()?;
     let data: Value = serde_json::from_str(&raw).ok()?;
@@ -24,6 +27,8 @@ fn read_auth_info() -> Option<(String, String)> {
         .or_else(|| data.get("access_token").and_then(|v| v.as_str()))?
         .to_string();
 
+    let jwt_payload = decode_jwt_payload(&access_token);
+
     let account_id = data
         .get("tokens")
         .and_then(|t| t.get("account_id"))
@@ -31,7 +36,7 @@ fn read_auth_info() -> Option<(String, String)> {
         .or_else(|| data.get("account_id").and_then(|v| v.as_str()))
         .map(String::from)
         .or_else(|| {
-            decode_jwt_payload(&access_token).and_then(|payload| {
+            jwt_payload.as_ref().and_then(|payload| {
                 payload
                     .get("chatgpt_account_id")
                     .and_then(|v| v.as_str())
@@ -39,29 +44,16 @@ fn read_auth_info() -> Option<(String, String)> {
             })
         })?;
 
-    Some((access_token, account_id))
-}
-
-/// Extract email from auth info
-fn read_email() -> Option<String> {
-    let auth_path = codex_auth_path();
-    let raw = std::fs::read_to_string(&auth_path).ok()?;
-    let data: Value = serde_json::from_str(&raw).ok()?;
-
-    let access_token = data
-        .get("tokens")
-        .and_then(|t| t.get("access_token"))
-        .and_then(|v| v.as_str())
-        .or_else(|| data.get("access_token").and_then(|v| v.as_str()))?;
-
-    decode_jwt_payload(access_token).and_then(|payload| {
+    let email = jwt_payload.as_ref().and_then(|payload| {
         payload
             .get("https://api.openai.com/auth")
             .and_then(|v| v.get("email"))
             .or_else(|| payload.get("email"))
             .and_then(|v| v.as_str())
             .map(String::from)
-    })
+    });
+
+    Some((access_token, account_id, email))
 }
 
 /// Format reset time from epoch seconds
@@ -141,32 +133,7 @@ fn parse_usage_response(
         }
     }
 
-    // Surface an API error only when the backend actually returned one and we
-    // have no windows to show. An empty windows list with no error is benign
-    // (a fresh / limit-free account) and renders as "no quota data" — not a
-    // failure that `is_stale()` would otherwise force a re-fetch of every
-    // tick. Classify authentication errors as `Auth` so the UI can prompt a
-    // re-login, mirroring the Claude path.
-    let error = if windows.is_empty() {
-        // `data.get("error")` is `Some` for an explicit `"error": null` (a
-        // common success sentinel) — filter that out so it isn't surfaced as a
-        // bogus parse error that would also force a re-fetch every tick.
-        data.get("error").filter(|e| !e.is_null()).map(|e| {
-            let error_type = e.get("type").and_then(|v| v.as_str());
-            let message = e
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            if error_type == Some("authentication_error") {
-                QuotaError::Auth(message)
-            } else {
-                QuotaError::Parse(format!("{}: {message}", error_type.unwrap_or("error")))
-            }
-        })
-    } else {
-        None
-    };
+    let error = classify_api_error(data, windows.is_empty());
 
     Some(QuotaInfo {
         tool_name: "Codex".to_string(),
@@ -197,27 +164,15 @@ fn format_window_label(window: &Value) -> Option<String> {
 
 /// Main function to fetch Codex quota info
 pub fn fetch_quota() -> Option<QuotaInfo> {
-    let (access_token, account_id) = read_auth_info()?;
-    let email = read_email();
+    let (access_token, account_id, email) = read_auth_info()?;
     let data = fetch_usage_json(&access_token, &account_id)?;
     parse_usage_response(&data, email, account_id)
-}
-
-/// `QuotaFetcher` implementation for the registry in `quota::fetchers()`.
-pub struct CodexQuotaFetcher;
-
-impl super::QuotaFetcher for CodexQuotaFetcher {
-    fn platform(&self) -> crate::state::Platform {
-        crate::state::Platform::Codex
-    }
-    fn fetch(&self) -> Option<QuotaInfo> {
-        fetch_quota()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quota::QuotaError;
     use serde_json::json;
 
     fn parse(data: serde_json::Value) -> QuotaInfo {
