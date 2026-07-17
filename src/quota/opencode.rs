@@ -1,9 +1,7 @@
-use super::util::decode_jwt_payload;
-use super::{QuotaError, QuotaInfo};
-use crate::state::Platform;
+use super::QuotaInfo;
+use super::util::{decode_jwt_payload, signed_in};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::time::Instant;
 
 fn get_auth_json_path() -> PathBuf {
     if let Ok(val) = std::env::var("OPENCODE_AUTH_JSON") {
@@ -58,34 +56,6 @@ fn read_opencode_token() -> Option<(String, Option<String>)> {
 }
 
 pub fn fetch_quota() -> Option<QuotaInfo> {
-    if let Some((_token, email)) = read_opencode_token() {
-        Some(QuotaInfo {
-            tool_name: "opencode".to_string(),
-            email,
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: None,
-        })
-    } else {
-        Some(QuotaInfo {
-            tool_name: "opencode".to_string(),
-            email: None,
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: Some(QuotaError::NoCredentials),
-        })
-    }
-}
-
-pub struct OpencodeQuotaFetcher;
-
-impl super::QuotaFetcher for OpencodeQuotaFetcher {
-    fn platform(&self) -> Platform {
-        Platform::OpenCode
-    }
-    fn fetch(&self) -> Option<QuotaInfo> {
-        fetch_quota()
-    }
+    let email = read_opencode_token().and_then(|(_token, email)| email);
+    signed_in("opencode", email)
 }

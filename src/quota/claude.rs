@@ -1,5 +1,5 @@
-use super::util::format_duration_short;
-use super::{QuotaError, QuotaInfo, QuotaWindow};
+use super::util::{classify_api_error, format_duration_short};
+use super::{QuotaInfo, QuotaWindow};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -143,30 +143,7 @@ fn parse_usage_response(data: &Value, email: Option<String>) -> Option<QuotaInfo
         });
     }
 
-    // Surface an API error only when we have no windows to show. A stray
-    // `error` key alongside valid windows must NOT hide real quota (the UI
-    // renders the error arm before the windows arm), and `.map` would set
-    // `Some` for any `error` key — so gate it on the windows being empty.
-    let error = if windows.is_empty() {
-        // `data.get("error")` is `Some` for an explicit `"error": null` (a
-        // common success sentinel) — filter that out so it isn't surfaced as a
-        // bogus parse error that would also force a re-fetch every tick.
-        data.get("error").filter(|e| !e.is_null()).map(|e| {
-            let error_type = e.get("type").and_then(|v| v.as_str());
-            let message = e
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            if error_type == Some("authentication_error") {
-                QuotaError::Auth(message)
-            } else {
-                QuotaError::Parse(format!("{}: {message}", error_type.unwrap_or("error")))
-            }
-        })
-    } else {
-        None
-    };
+    let error = classify_api_error(data, windows.is_empty());
 
     Some(QuotaInfo {
         tool_name: "Claude Code".to_string(),
@@ -186,21 +163,10 @@ pub fn fetch_quota() -> Option<QuotaInfo> {
     parse_usage_response(&data, email)
 }
 
-/// `QuotaFetcher` implementation for the registry in `quota::fetchers()`.
-pub struct ClaudeQuotaFetcher;
-
-impl super::QuotaFetcher for ClaudeQuotaFetcher {
-    fn platform(&self) -> crate::state::Platform {
-        crate::state::Platform::ClaudeCode
-    }
-    fn fetch(&self) -> Option<QuotaInfo> {
-        fetch_quota()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quota::QuotaError;
     use serde_json::json;
 
     #[test]

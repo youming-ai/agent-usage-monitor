@@ -87,20 +87,24 @@ impl Default for Config {
     }
 }
 
+// Every `default_*_path` below is a thin `fn() -> PathBuf` shim around
+// `Tab::default_path` — required because `#[serde(default = "...")]` needs a
+// zero-arg free function, but `Tab::default_path` takes `self`. `Tab` is the
+// single source of truth for these paths; keeping them here too (rather than
+// inlining the join logic per-platform, as before) means there is exactly one
+// place that knows where each agent's data lives.
+use crate::state::Tab;
+
 fn default_claude_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude/projects")
+    Tab::ClaudeCode.default_path()
 }
 
 fn default_codex_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".codex")
+    Tab::Codex.default_path()
 }
 
 fn default_opencode_path() -> PathBuf {
-    xdg_data_dir().join("opencode")
+    Tab::OpenCode.default_path()
 }
 
 /// Resolves the XDG data directory for agents that follow XDG on every
@@ -120,61 +124,43 @@ pub(crate) fn xdg_data_dir() -> PathBuf {
 }
 
 fn default_kimi_code_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".kimi-code")
+    Tab::KimiCode.default_path()
 }
 
 fn default_pi_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".pi/agent/sessions")
+    Tab::Pi.default_path()
 }
 
 fn default_openclaw_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".openclaw/agents")
+    Tab::OpenClaw.default_path()
 }
 
 fn default_hermes_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".hermes")
+    Tab::Hermes.default_path()
 }
 
 fn default_factory_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".factory/projects")
+    Tab::Factory.default_path()
 }
 
 fn default_grok_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
+    Tab::Grok.default_path()
 }
 
 fn default_cursor_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".cursor")
+    Tab::Cursor.default_path()
 }
 
 fn default_copilot_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".copilot")
+    Tab::Copilot.default_path()
 }
 
 fn default_antigravity_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".gemini/antigravity-cli")
+    Tab::Antigravity.default_path()
 }
 
 fn default_mimo_code_path() -> PathBuf {
-    xdg_data_dir().join("mimocode")
+    Tab::MimoCode.default_path()
 }
 
 fn default_refresh() -> u64 {

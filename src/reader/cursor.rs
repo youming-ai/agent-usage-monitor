@@ -1,5 +1,5 @@
 use crate::reader::pricing;
-use crate::reader::{UsageSource, find_recursive, is_under_dir_named, session_label};
+use crate::reader::{UsageSource, find_recursive, is_under_dir_named, is_uuid, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
@@ -41,7 +41,6 @@ pub struct CursorReader {
     extra_chats_dir: PathBuf,
     transcript_positions: HashMap<PathBuf, u64>,
     transcript_state: HashMap<PathBuf, TranscriptTurnState>,
-    store_max_rowid: HashMap<PathBuf, i64>,
     store_seen_keys: HashMap<PathBuf, HashSet<String>>,
     conversation_models: HashMap<String, String>,
 }
@@ -59,17 +58,9 @@ impl CursorReader {
             extra_chats_dir,
             transcript_positions: HashMap::new(),
             transcript_state: HashMap::new(),
-            store_max_rowid: HashMap::new(),
             store_seen_keys: HashMap::new(),
             conversation_models: HashMap::new(),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".cursor")
     }
 
     fn reload_conversation_models(&mut self) {
@@ -123,7 +114,6 @@ impl CursorReader {
         if from_start {
             self.transcript_positions.clear();
             self.transcript_state.clear();
-            self.store_max_rowid.clear();
             self.store_seen_keys.clear();
         }
 
@@ -136,8 +126,6 @@ impl CursorReader {
             .retain(|p, _| current_transcripts.contains(p));
         self.transcript_state
             .retain(|p, _| current_transcripts.contains(p));
-        self.store_max_rowid
-            .retain(|p, _| current_stores.contains(p));
         self.store_seen_keys
             .retain(|p, _| current_stores.contains(p));
 
@@ -198,14 +186,14 @@ impl CursorReader {
         }
 
         for file in store_files {
-            records.extend(self.read_store_delta(&file, from_start));
+            records.extend(self.read_store_delta(&file));
         }
 
         records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
         records
     }
 
-    fn read_store_delta(&mut self, path: &Path, _from_start: bool) -> Vec<UsageRecord> {
+    fn read_store_delta(&mut self, path: &Path) -> Vec<UsageRecord> {
         let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
             Ok(c) => c,
             Err(_) => return Vec::new(),
@@ -221,23 +209,23 @@ impl CursorReader {
             return Vec::new();
         }
 
-        // Always scan from rowid 0 — dedup is handled by `store_seen_keys` (HashSet),
-        // which survives store.db replacement/rotation. `store_max_rowid` is just a
-        // bookkeeping field tracking the highest rowid ever seen; it is NOT used as
-        // a query resume cursor (that was the root cause of silent data loss after
-        // store.db recreation).
-        let query_start_rowid = 0i64;
+        // Always scan from rowid 0 — dedup is handled by `store_seen_keys`
+        // (HashSet), which survives store.db replacement/rotation (unlike a
+        // rowid resume cursor, which was the root cause of silent data loss
+        // after store.db recreation: a fresh db's rowids restart at 1, so a
+        // "resume from last rowid" cursor left over from the old file would
+        // skip every row in the new one).
         let session_id = extract_store_session_id(path);
         let project = extract_store_project(path);
         let session = session_label(&project, &session_id);
 
         let mut stmt = match conn
-            .prepare("SELECT rowid, key, value FROM blobs WHERE rowid > ?1 ORDER BY rowid")
+            .prepare("SELECT rowid, key, value FROM blobs WHERE rowid > 0 ORDER BY rowid")
         {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let rows = stmt.query_map([query_start_rowid], |row| {
+        let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -250,17 +238,14 @@ impl CursorReader {
 
         let seen = self.store_seen_keys.entry(path.to_path_buf()).or_default();
         let mut records = Vec::new();
-        let mut max_rowid = query_start_rowid;
 
         for row in rows.flatten() {
-            let (rowid, key, value) = row;
-            max_rowid = max_rowid.max(rowid);
+            let (_rowid, key, value) = row;
             if let Some(rec) = parse_store_blob(&value, &key, &session, &session_id, seen) {
                 records.push(rec);
             }
         }
 
-        self.store_max_rowid.insert(path.to_path_buf(), max_rowid);
         records
     }
 }
@@ -276,9 +261,6 @@ impl UsageSource for CursorReader {
 
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
         self.scan_all_inner(false)
-    }
-    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
-        vec![self.data_dir.clone()]
     }
 }
 
@@ -312,7 +294,7 @@ fn extract_transcript_paths(path: &Path) -> (String, String) {
                 }
                 break;
             }
-            if conversation_id.is_empty() && is_uuid_stem(name) {
+            if conversation_id.is_empty() && is_uuid(name) {
                 conversation_id = name.to_string();
             }
         }
@@ -363,21 +345,6 @@ fn prettify_project_id(raw: &str) -> String {
         .next_back()
         .unwrap_or(stripped)
         .to_string()
-}
-
-fn is_uuid_stem(stem: &str) -> bool {
-    if stem.len() != 36 {
-        return false;
-    }
-    let bytes = stem.as_bytes();
-    const DASHES: [usize; 4] = [8, 13, 18, 23];
-    bytes.iter().enumerate().all(|(i, &b)| {
-        if DASHES.contains(&i) {
-            b == b'-'
-        } else {
-            b.is_ascii_hexdigit()
-        }
-    })
 }
 
 fn read_transcript_from_offset(
@@ -507,13 +474,6 @@ fn flush_transcript_progress(st: &mut TranscriptTurnState) -> Option<UsageRecord
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         cost_usd: cost,
-        files_read: 0,
-        files_edited: 0,
-        files_added: 0,
-        files_deleted: 0,
-        terminal_commands: 0,
-        lines_read: 0,
-        lines_edited: 0,
     })
 }
 
@@ -600,13 +560,6 @@ fn parse_store_blob(
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             cost_usd: cost,
-            files_read: 0,
-            files_edited: 0,
-            files_added: 0,
-            files_deleted: 0,
-            terminal_commands: 0,
-            lines_read: 0,
-            lines_edited: 0,
         });
     }
 
@@ -677,13 +630,6 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         cost_usd: cost,
-        files_read: 0,
-        files_edited: 0,
-        files_added: 0,
-        files_deleted: 0,
-        terminal_commands: 0,
-        lines_read: 0,
-        lines_edited: 0,
     })
 }
 

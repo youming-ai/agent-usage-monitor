@@ -1,9 +1,7 @@
-use super::util::decode_jwt_payload;
-use super::{QuotaError, QuotaInfo};
-use crate::state::Platform;
+use super::QuotaInfo;
+use super::util::{decode_jwt_payload, read_email, signed_in};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::time::Instant;
 
 fn get_hosts_json_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -94,47 +92,9 @@ fn read_copilot_creds() -> Option<(String, Option<String>)> {
     None
 }
 
-fn read_email(token: &str, file_user: Option<String>) -> Option<String> {
-    decode_jwt_payload(token)
-        .and_then(|payload| {
-            payload
-                .get("email")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-        })
-        .or(file_user)
-}
-
 pub fn fetch_quota() -> Option<QuotaInfo> {
-    if let Some((token, file_user)) = read_copilot_creds() {
-        let email = read_email(&token, file_user).unwrap_or_else(|| "Signed in".to_string());
-        Some(QuotaInfo {
-            tool_name: "Copilot CLI".to_string(),
-            email: Some(email),
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: None,
-        })
-    } else {
-        Some(QuotaInfo {
-            tool_name: "Copilot CLI".to_string(),
-            email: None,
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: Some(QuotaError::NoCredentials),
-        })
-    }
-}
-
-pub struct CopilotQuotaFetcher;
-
-impl super::QuotaFetcher for CopilotQuotaFetcher {
-    fn platform(&self) -> Platform {
-        Platform::Copilot
-    }
-    fn fetch(&self) -> Option<QuotaInfo> {
-        fetch_quota()
-    }
+    let email = read_copilot_creds().map(|(token, file_user)| {
+        read_email(&token, file_user).unwrap_or_else(|| "Signed in".to_string())
+    });
+    signed_in("Copilot CLI", email)
 }

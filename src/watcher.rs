@@ -20,7 +20,6 @@ use crate::state::{AgentPaths, Platform, Tab};
 #[derive(Debug, Clone)]
 pub enum WatcherMessage {
     Event { platform: Platform, path: PathBuf },
-    FallbackTick,
 }
 
 /// One watcher per registered platform.
@@ -77,11 +76,12 @@ pub fn start_watchers(
         if !path.exists() {
             continue;
         }
-        let reader = entry.build_reader(path.clone());
-        let watch_dirs = reader.get_watch_directories();
-        if watch_dirs.is_empty() {
-            continue;
-        }
+        // Every platform watches exactly its own resolved path (a directory
+        // for JSONL readers, the db file itself for SQLite ones) — no need to
+        // build a full reader (opening SQLite connections and all) just to
+        // ask it; `watch_dirs` used to come from `UsageSource::get_watch_directories`,
+        // which every impl just echoed back from this same `path`.
+        let watch_dirs = [path.clone()];
 
         let is_sqlite = matches!(entry.tab, Tab::OpenCode | Tab::Hermes | Tab::MimoCode);
         let tx = tx.clone();
@@ -237,7 +237,6 @@ mod tests {
             WatcherMessage::Event { path, .. } => {
                 assert!(path.ends_with("test.jsonl") || path.to_string_lossy().contains("test"));
             }
-            WatcherMessage::FallbackTick => panic!("expected Event, got FallbackTick"),
         }
     }
 
@@ -263,7 +262,6 @@ mod tests {
             }
             match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
                 Ok(Some(WatcherMessage::Event { .. })) => count += 1,
-                Ok(Some(WatcherMessage::FallbackTick)) => {}
                 Ok(None) => break,
                 Err(_) => continue,
             }
@@ -287,7 +285,7 @@ mod tests {
 
         let r = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await;
         assert!(
-            r.is_err() || matches!(r, Ok(Some(WatcherMessage::FallbackTick))),
+            r.is_err(),
             "after dropping watchers, no file events should arrive"
         );
     }
