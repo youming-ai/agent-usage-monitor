@@ -1,36 +1,23 @@
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::FileScanner;
+use super::UsageSource;
 use super::find_recursive;
-use super::jsonl_reader::JsonlReader;
 
 pub struct ClaudeReader {
     pub(crate) data_dir: PathBuf,
-    file_positions: HashMap<PathBuf, u64>,
+    scanner: FileScanner<()>,
 }
 
 impl ClaudeReader {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
-            file_positions: HashMap::new(),
+            scanner: FileScanner::new(),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".claude/projects")
-    }
-}
-
-impl JsonlReader for ClaudeReader {
-    fn file_positions(&mut self) -> &mut HashMap<PathBuf, u64> {
-        &mut self.file_positions
     }
 
     fn find_files(&self) -> Vec<PathBuf> {
@@ -43,8 +30,26 @@ impl JsonlReader for ClaudeReader {
         files
     }
 
-    fn parse_line(&self, line: &str) -> Option<UsageRecord> {
-        parse_claude_line(line)
+    fn scan(&mut self) -> Vec<UsageRecord> {
+        let files = self.find_files();
+        self.scanner.scan(files, |_| (), |file, offset, _| {
+            crate::reader::read_lines_from_offset(file, offset, parse_claude_line)
+        })
+    }
+}
+
+impl UsageSource for ClaudeReader {
+    fn platform(&self) -> Platform {
+        Platform::ClaudeCode
+    }
+
+    fn scan_all(&mut self) -> Vec<UsageRecord> {
+        self.scanner.reset();
+        self.scan()
+    }
+
+    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+        self.scan()
     }
 }
 
@@ -120,13 +125,6 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_creation,
         cost_usd,
-        files_read: 0,
-        files_edited: 0,
-        files_added: 0,
-        files_deleted: 0,
-        terminal_commands: 0,
-        lines_read: 0,
-        lines_edited: 0,
     })
 }
 

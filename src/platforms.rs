@@ -10,10 +10,9 @@ use crate::reader::factory::FactoryReader;
 use crate::reader::grok::GrokReader;
 use crate::reader::hermes::HermesReader;
 use crate::reader::kimi_code::KimiCodeReader;
-use crate::reader::mimo_code::MimoCodeReader;
 use crate::reader::openclaw::OpenClawReader;
-use crate::reader::opencode::OpencodeReader;
 use crate::reader::pi::PiReader;
+use crate::reader::sqlite_message_reader::SqliteMessageReader;
 use crate::state::{AgentPaths, Platform, Tab};
 use std::path::PathBuf;
 
@@ -79,7 +78,14 @@ static REGISTRY: &[RegistryEntry] = &[
         config_path: |c| c.opencode_path.clone(),
         cli_path: |cli| cli.opencode_path.clone(),
         set_config_path: |c, p| c.opencode_path = p,
-        create_reader: |p| Box::new(OpencodeReader::new(p)),
+        create_reader: |p| {
+            Box::new(SqliteMessageReader::new(
+                p,
+                "opencode.db",
+                Platform::OpenCode,
+                "opencode",
+            ))
+        },
     },
     RegistryEntry {
         tab: Tab::KimiCode,
@@ -159,7 +165,14 @@ static REGISTRY: &[RegistryEntry] = &[
         config_path: |c| c.mimo_code_path.clone(),
         cli_path: |cli| cli.mimo_code_path.clone(),
         set_config_path: |c, p| c.mimo_code_path = p,
-        create_reader: |p| Box::new(MimoCodeReader::new(p)),
+        create_reader: |p| {
+            Box::new(SqliteMessageReader::new(
+                p,
+                "mimocode.db",
+                Platform::MimoCode,
+                "mimocode",
+            ))
+        },
     },
 ];
 

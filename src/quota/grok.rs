@@ -1,9 +1,7 @@
-use super::util::decode_jwt_payload;
-use super::{QuotaError, QuotaInfo};
-use crate::state::Platform;
+use super::QuotaInfo;
+use super::util::{read_email, signed_in};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::time::Instant;
 
 fn get_grok_auth_path() -> PathBuf {
     if let Ok(val) = std::env::var("GROK_HOME") {
@@ -52,47 +50,9 @@ fn read_grok_creds() -> Option<(String, Option<String>)> {
     None
 }
 
-fn read_email(token: &str, file_email: Option<String>) -> Option<String> {
-    decode_jwt_payload(token)
-        .and_then(|payload| {
-            payload
-                .get("email")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-        })
-        .or(file_email)
-}
-
 pub fn fetch_quota() -> Option<QuotaInfo> {
-    if let Some((token, file_email)) = read_grok_creds() {
-        let email = read_email(&token, file_email).unwrap_or_else(|| "Signed in".to_string());
-        Some(QuotaInfo {
-            tool_name: "Grok".to_string(),
-            email: Some(email),
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: None,
-        })
-    } else {
-        Some(QuotaInfo {
-            tool_name: "Grok".to_string(),
-            email: None,
-            account_id: None,
-            windows: vec![],
-            fetched_at: Instant::now(),
-            error: Some(QuotaError::NoCredentials),
-        })
-    }
-}
-
-pub struct GrokQuotaFetcher;
-
-impl super::QuotaFetcher for GrokQuotaFetcher {
-    fn platform(&self) -> Platform {
-        Platform::Grok
-    }
-    fn fetch(&self) -> Option<QuotaInfo> {
-        fetch_quota()
-    }
+    let email = read_grok_creds().map(|(token, file_email)| {
+        read_email(&token, file_email).unwrap_or_else(|| "Signed in".to_string())
+    });
+    signed_in("Grok", email)
 }

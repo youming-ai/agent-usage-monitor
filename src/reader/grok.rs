@@ -1,11 +1,9 @@
 use crate::reader::pricing;
-use crate::reader::{UsageSource, basename, find_recursive, session_label};
+use crate::reader::{FileScanner, UsageSource, basename, find_recursive, session_label};
 use crate::state::{Platform, UsageRecord};
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Tracks prompt-level context token growth while scanning `updates.jsonl`.
@@ -103,13 +101,6 @@ impl PromptTracker {
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             cost_usd: cost,
-            files_read: 0,
-            files_edited: 0,
-            files_added: 0,
-            files_deleted: 0,
-            terminal_commands: 0,
-            lines_read: 0,
-            lines_edited: 0,
         })
     }
 }
@@ -127,33 +118,24 @@ impl SessionMeta {
     }
 }
 
-#[derive(Default)]
+/// Per-file state: the session metadata (derived once from `summary.json`
+/// and never rewritten) plus the prompt tracker's running bookkeeping.
 struct FileState {
     tracker: PromptTracker,
+    meta: SessionMeta,
 }
 
 pub struct GrokReader {
     sessions_dir: PathBuf,
-    file_positions: HashMap<PathBuf, u64>,
-    file_state: HashMap<PathBuf, FileState>,
-    session_meta: HashMap<PathBuf, SessionMeta>,
+    scanner: FileScanner<FileState>,
 }
 
 impl GrokReader {
     pub fn new(grok_dir: PathBuf) -> Self {
         Self {
             sessions_dir: grok_dir.join("sessions"),
-            file_positions: HashMap::new(),
-            file_state: HashMap::new(),
-            session_meta: HashMap::new(),
+            scanner: FileScanner::new(),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".grok")
     }
 
     fn find_files(&self) -> Vec<PathBuf> {
@@ -166,47 +148,23 @@ impl GrokReader {
         files
     }
 
-    fn session_meta_for(&mut self, updates_path: &Path) -> SessionMeta {
-        if let Some(meta) = self.session_meta.get(updates_path) {
-            return meta.clone();
-        }
-        let meta = read_summary_meta(updates_path);
-        self.session_meta
-            .insert(updates_path.to_path_buf(), meta.clone());
-        meta
-    }
-
-    fn scan_files(&mut self, from_start: bool) -> Vec<UsageRecord> {
+    /// Only flush the still-open trailing prompt when this is a full scan
+    /// (`finalize_at_eof`): a full scan means "this is all the data there is
+    /// right now", so a lone/trailing prompt with no later prompt to confirm
+    /// it's done deserves to be counted — unlike an incremental poll, where
+    /// more lines for it may still be coming.
+    fn scan(&mut self, finalize_at_eof: bool) -> Vec<UsageRecord> {
         let files = self.find_files();
-        let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
-        self.file_positions
-            .retain(|path, _| current_files.contains(path));
-        self.file_state
-            .retain(|path, _| current_files.contains(path));
-        self.session_meta
-            .retain(|path, _| current_files.contains(path));
-
-        let mut records = Vec::new();
-        for file in files {
-            let offset = if from_start {
-                0
-            } else {
-                self.file_positions.get(&file).copied().unwrap_or(0)
-            };
-            let meta = self.session_meta_for(&file);
-            let st = self.file_state.entry(file.clone()).or_default();
-            // Only flush the still-open trailing prompt when this is a full
-            // scan (from_start): a full scan means "this is all the data
-            // there is right now", so a lone/trailing prompt with no later
-            // prompt to confirm it's done deserves to be counted — unlike an
-            // incremental poll, where more lines for it may still be coming.
-            let (entries, bytes_read) =
-                read_updates_from_offset(&file, offset, &meta, &mut st.tracker, from_start);
-            self.file_positions.insert(file, bytes_read);
-            records.extend(entries);
-        }
-        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        records
+        self.scanner.scan(
+            files,
+            |file| FileState {
+                tracker: PromptTracker::default(),
+                meta: read_summary_meta(file),
+            },
+            |file, offset, st| {
+                read_updates_from_offset(file, offset, &st.meta, &mut st.tracker, finalize_at_eof)
+            },
+        )
     }
 }
 
@@ -216,17 +174,12 @@ impl UsageSource for GrokReader {
     }
 
     fn scan_all(&mut self) -> Vec<UsageRecord> {
-        self.file_positions.clear();
-        self.file_state.clear();
-        self.session_meta.clear();
-        self.scan_files(true)
+        self.scanner.reset();
+        self.scan(true)
     }
 
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        self.scan_files(false)
-    }
-    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
-        vec![self.sessions_dir.clone()]
+        self.scan(false)
     }
 }
 
@@ -274,36 +227,21 @@ fn read_updates_from_offset(
     tracker: &mut PromptTracker,
     finalize_at_eof: bool,
 ) -> (Vec<UsageRecord>, u64) {
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return (Vec::new(), skip_bytes),
-    };
-
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    if skip_bytes > file_len {
-        // File was truncated/rewritten. `tracker`'s baseline_tokens and
-        // finalized_prompts are watermarks against the OLD content; keeping
-        // them would either suppress genuinely new deltas in the rewritten
-        // file (if a promptId happens to reappear) or compute wrong deltas
-        // against a stale baseline. Start this file's tracking over.
+    // `tracker`'s baseline_tokens and finalized_prompts are watermarks
+    // against this file's OLD content; if it was truncated/rewritten since
+    // `skip_bytes` was recorded, keeping them would either suppress
+    // genuinely new deltas (if a promptId happens to reappear) or compute
+    // wrong deltas against a stale baseline. This reset has no equivalent
+    // hook in the shared `read_lines_from_offset`, so it's detected here
+    // before delegating the seek+read-loop to it.
+    let truncated = std::fs::metadata(path).is_ok_and(|m| skip_bytes > m.len());
+    if truncated {
         *tracker = PromptTracker::default();
-        return read_updates_from_offset(path, 0, meta, tracker, finalize_at_eof);
     }
 
-    let mut reader = BufReader::new(file);
-    if skip_bytes > 0 && reader.seek(SeekFrom::Start(skip_bytes)).is_err() {
-        return read_updates_from_offset(path, 0, meta, tracker, finalize_at_eof);
-    }
-
-    let mut records = Vec::new();
-    let mut offset = skip_bytes;
-
-    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
-        if let Some(rec) = parse_updates_line(line.trim_end_matches(['\r', '\n']), meta, tracker) {
-            records.push(rec);
-        }
-        offset += bytes;
-    }
+    let (mut records, offset) = crate::reader::read_lines_from_offset(path, skip_bytes, |line| {
+        parse_updates_line(line, meta, tracker)
+    });
 
     if finalize_at_eof && let Some(rec) = tracker.flush_pending(meta) {
         records.push(rec);

@@ -1,33 +1,24 @@
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::UsageSource;
 use super::find_recursive;
 use super::session_jsonl::{SessionFileState, read_jsonl_from_offset};
+use super::FileScanner;
 
 pub struct PiReader {
     data_dir: PathBuf,
-    file_positions: HashMap<PathBuf, u64>,
-    file_state: HashMap<PathBuf, SessionFileState>,
+    scanner: FileScanner<SessionFileState>,
 }
 
 impl PiReader {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
-            file_positions: HashMap::new(),
-            file_state: HashMap::new(),
+            scanner: FileScanner::new(),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".pi/agent/sessions")
     }
 
     fn find_files(&self) -> Vec<PathBuf> {
@@ -40,34 +31,13 @@ impl PiReader {
         files
     }
 
-    fn scan_files(&mut self, from_start: bool) -> Vec<UsageRecord> {
+    fn scan(&mut self) -> Vec<UsageRecord> {
         let files = self.find_files();
-        let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
-        self.file_positions
-            .retain(|path, _| current_files.contains(path));
-        self.file_state
-            .retain(|path, _| current_files.contains(path));
-
-        let mut records = Vec::new();
-        for file in files {
-            let offset = if from_start {
-                0
-            } else {
-                self.file_positions.get(&file).copied().unwrap_or(0)
-            };
-            let mut st = self
-                .file_state
-                .get(&file)
-                .cloned()
-                .unwrap_or_else(|| SessionFileState::with_dir("unknown", ""));
-            let (entries, bytes_read) =
-                read_jsonl_from_offset(&file, offset, &mut st, parse_pi_line);
-            self.file_positions.insert(file.clone(), bytes_read);
-            self.file_state.insert(file, st);
-            records.extend(entries);
-        }
-        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        records
+        self.scanner.scan(
+            files,
+            |_| SessionFileState::with_dir("unknown", ""),
+            |file, offset, st| read_jsonl_from_offset(file, offset, st, parse_pi_line),
+        )
     }
 }
 
@@ -77,16 +47,12 @@ impl UsageSource for PiReader {
     }
 
     fn scan_all(&mut self) -> Vec<UsageRecord> {
-        self.file_positions.clear();
-        self.file_state.clear();
-        self.scan_files(true)
+        self.scanner.reset();
+        self.scan()
     }
 
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        self.scan_files(false)
-    }
-    fn get_watch_directories(&self) -> Vec<std::path::PathBuf> {
-        vec![self.data_dir.clone()]
+        self.scan()
     }
 }
 
@@ -144,13 +110,6 @@ fn parse_pi_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_write,
         cost_usd,
-        files_read: 0,
-        files_edited: 0,
-        files_added: 0,
-        files_deleted: 0,
-        terminal_commands: 0,
-        lines_read: 0,
-        lines_edited: 0,
     })
 }
 

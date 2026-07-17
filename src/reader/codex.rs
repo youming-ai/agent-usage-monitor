@@ -2,13 +2,11 @@ use crate::reader::pricing;
 use crate::state::{Platform, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use super::FileScanner;
+use super::UsageSource;
 use super::find_recursive;
-use super::jsonl_reader::JsonlReader;
 
 /// Per-file running state. A rollout file declares its model and working
 /// directory in events at the top, which are skipped on later polls — so this
@@ -29,8 +27,7 @@ impl FileState {
 
 pub struct CodexReader {
     pub(crate) sessions_dir: PathBuf,
-    file_positions: HashMap<PathBuf, u64>,
-    file_state: HashMap<PathBuf, FileState>,
+    scanner: FileScanner<FileState>,
 }
 
 impl CodexReader {
@@ -38,22 +35,8 @@ impl CodexReader {
         let sessions_dir = codex_dir.join("sessions");
         Self {
             sessions_dir,
-            file_positions: HashMap::new(),
-            file_state: HashMap::new(),
+            scanner: FileScanner::new(),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".codex")
-    }
-}
-
-impl JsonlReader for CodexReader {
-    fn file_positions(&mut self) -> &mut HashMap<PathBuf, u64> {
-        &mut self.file_positions
     }
 
     fn find_files(&self) -> Vec<PathBuf> {
@@ -69,58 +52,32 @@ impl JsonlReader for CodexReader {
         files
     }
 
-    fn parse_line(&self, _line: &str) -> Option<UsageRecord> {
-        // Codex needs special handling for file state, so we override scan_all and poll_delta
-        None
+    fn scan(&mut self) -> Vec<UsageRecord> {
+        let files = self.find_files();
+        self.scanner.scan(
+            files,
+            |file| FileState {
+                model: "unknown".to_string(),
+                dir: "codex".to_string(),
+                sid: extract_codex_project(file),
+            },
+            read_codex_from_offset,
+        )
+    }
+}
+
+impl UsageSource for CodexReader {
+    fn platform(&self) -> Platform {
+        Platform::Codex
     }
 
     fn scan_all(&mut self) -> Vec<UsageRecord> {
-        let files = self.find_files();
-        let mut records = Vec::new();
-        for file in files {
-            let mut st = FileState {
-                model: "unknown".to_string(),
-                dir: "codex".to_string(),
-                sid: extract_codex_project(&file),
-            };
-            let (file_records, bytes_read) = read_codex_from_offset(&file, 0, &mut st);
-            self.file_positions.insert(file.clone(), bytes_read);
-            self.file_state.insert(file, st);
-            records.extend(file_records);
-        }
-        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        records
+        self.scanner.reset();
+        self.scan()
     }
 
     fn poll_delta(&mut self) -> Vec<UsageRecord> {
-        let files = self.find_files();
-
-        let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
-        self.file_positions
-            .retain(|path, _| current_files.contains(path));
-        self.file_state
-            .retain(|path, _| current_files.contains(path));
-
-        let mut new_records = Vec::new();
-        for file in files {
-            let offset = self.file_positions.get(&file).copied().unwrap_or(0);
-            let mut st = self
-                .file_state
-                .get(&file)
-                .cloned()
-                .unwrap_or_else(|| FileState {
-                    model: "unknown".to_string(),
-                    dir: "codex".to_string(),
-                    sid: extract_codex_project(&file),
-                });
-
-            let (records, bytes_read) = read_codex_from_offset(&file, offset, &mut st);
-            self.file_positions.insert(file.clone(), bytes_read);
-            self.file_state.insert(file, st);
-            new_records.extend(records);
-        }
-        new_records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        new_records
+        self.scan()
     }
 }
 
@@ -129,32 +86,7 @@ fn read_codex_from_offset(
     skip_bytes: u64,
     st: &mut FileState,
 ) -> (Vec<UsageRecord>, u64) {
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return (Vec::new(), skip_bytes),
-    };
-
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    if skip_bytes > file_len {
-        return read_codex_from_offset(path, 0, st);
-    }
-
-    let mut reader = BufReader::new(file);
-    if skip_bytes > 0 && reader.seek(SeekFrom::Start(skip_bytes)).is_err() {
-        return read_codex_from_offset(path, 0, st);
-    }
-
-    let mut records = Vec::new();
-    let mut offset = skip_bytes;
-
-    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
-        if let Some(rec) = parse_codex_line(line.trim_end_matches(['\r', '\n']), st) {
-            records.push(rec);
-        }
-        offset += bytes;
-    }
-
-    (records, offset)
+    crate::reader::read_lines_from_offset(path, skip_bytes, |line| parse_codex_line(line, st))
 }
 
 /// Parse one rollout line. `st` carries the session's running model and working
@@ -281,13 +213,6 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         cache_read_tokens: delta_cached,
         cache_creation_tokens: 0,
         cost_usd,
-        files_read: 0,
-        files_edited: 0,
-        files_added: 0,
-        files_deleted: 0,
-        terminal_commands: 0,
-        lines_read: 0,
-        lines_edited: 0,
     })
 }
 
