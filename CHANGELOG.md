@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.2](https://github.com/youming-ai/agent-usage-monitor/compare/v0.16.1...v0.16.2) (2026-07-17)
+
+
+### Refactors
+
+* dedup reader scan/read loops and quota, drop dead code ([b6f4123](https://github.com/youming-ai/agent-usage-monitor/commit/b6f4123f74feece6f173978b139017badd8c9b72))
+* dedup reader scan/read loops and quota, drop dead code ([19f514a](https://github.com/youming-ai/agent-usage-monitor/commit/19f514a40a116315f3596ae1bd40da530bbe9ded))
+
 ## [0.16.1](https://github.com/youming-ai/agent-usage-monitor/compare/v0.16.0...v0.16.1) (2026-07-16)
 
 
