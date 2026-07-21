@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.1](https://github.com/youming-ai/agent-usage-monitor/compare/v0.18.0...v0.18.1) (2026-07-21)
+
+
+### Bug Fixes
+
+* **updater:** provision the release minisign public key ([46ad3a2](https://github.com/youming-ai/agent-usage-monitor/commit/46ad3a20906dd7339feba617a7b33ff0b1d13044))
+* **updater:** provision the release minisign public key ([d2d6a10](https://github.com/youming-ai/agent-usage-monitor/commit/d2d6a103bb2483425dc972e21d219320dce6e517))
+
 ## [0.18.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.17.0...v0.18.0) (2026-07-21)
 
 
