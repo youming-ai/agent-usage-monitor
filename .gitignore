@@ -2,3 +2,9 @@
 
 # Planning artifacts (brainstorming specs and implementation plans)
 /docs/superpowers/
+
+# Release signing — the minisign SECRET key must NEVER be committed; only the
+# public key (embedded in src/updater/mod.rs and install.sh) belongs in the
+# repo. Ignore both local `minisign -G` artifacts as a leak safety-net.
+minisign.key
+minisign.pub
