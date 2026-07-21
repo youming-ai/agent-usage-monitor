@@ -116,9 +116,7 @@ fn read_transcript_from_offset(
     skip_bytes: u64,
     st: &mut AgFileState,
 ) -> (Vec<UsageRecord>, u64) {
-    crate::reader::read_lines_from_offset(path, skip_bytes, |line| {
-        parse_transcript_line(line, st)
-    })
+    crate::reader::read_lines_from_offset(path, skip_bytes, |line| parse_transcript_line(line, st))
 }
 
 /// Count characters in a `content` field that may be either a plain string or

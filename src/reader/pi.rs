@@ -3,10 +3,10 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::PathBuf;
 
+use super::FileScanner;
 use super::UsageSource;
 use super::find_recursive;
 use super::session_jsonl::{SessionFileState, read_jsonl_from_offset};
-use super::FileScanner;
 
 pub struct PiReader {
     data_dir: PathBuf,

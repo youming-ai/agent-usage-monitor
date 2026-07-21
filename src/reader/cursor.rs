@@ -545,7 +545,11 @@ fn parse_store_blob(
             .and_then(|t| t.as_i64())
             .or_else(|| v.get("createdAt").and_then(|t| t.as_i64()))
             .and_then(|ms| {
-                let secs = if ms > 1_000_000_000_000 { ms / 1000 } else { ms };
+                let secs = if ms > 1_000_000_000_000 {
+                    ms / 1000
+                } else {
+                    ms
+                };
                 Utc.timestamp_opt(secs, 0).single()
             })
             .unwrap_or_else(Utc::now);
@@ -921,7 +925,9 @@ mod tests {
             dir.path(),
             "Users-me-stream",
             "f4f2c1d8-10e5-4b2a-9c1d-ef0123456789",
-            &[r#"{"role":"user","message":{"content":[{"type":"text","text":"question needing a long reply"}]}}"#],
+            &[
+                r#"{"role":"user","message":{"content":[{"type":"text","text":"question needing a long reply"}]}}"#,
+            ],
         );
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());

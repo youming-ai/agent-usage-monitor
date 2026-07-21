@@ -131,7 +131,8 @@ impl<S> FileScanner<S> {
         mut read_file: impl FnMut(&Path, u64, &mut S) -> (Vec<UsageRecord>, u64),
     ) -> Vec<UsageRecord> {
         let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
-        self.positions.retain(|path, _| current_files.contains(path));
+        self.positions
+            .retain(|path, _| current_files.contains(path));
         self.state.retain(|path, _| current_files.contains(path));
 
         let mut records = Vec::new();
