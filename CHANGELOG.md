@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.17.0...v0.18.0) (2026-07-21)
+
+
+### Features
+
+* **platform:** add omp (Oh My Pi) support & order tabs by usage ([e4aa040](https://github.com/youming-ai/agent-usage-monitor/commit/e4aa040e1c1ff7bcdbb429b8bc1d187362f0dc29))
+
 ## [0.17.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.16.2...v0.17.0) (2026-07-21)
 
 
