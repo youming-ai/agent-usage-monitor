@@ -36,8 +36,7 @@ const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 // real public key printed by `minisign -G` before cutting a signed release —
 // see install.sh and the release workflow for the matching steps. Until then
 // every update will correctly fail signature verification.
-const MINISIGN_PUBLIC_KEY: &str =
-    "RWQ...PLACEHOLDER_REPLACE_ME_WITH_REAL_MINISIGN_PUBLIC_KEY...";
+const MINISIGN_PUBLIC_KEY: &str = "RWQ...PLACEHOLDER_REPLACE_ME_WITH_REAL_MINISIGN_PUBLIC_KEY...";
 
 #[derive(Debug, Deserialize)]
 struct Release {
@@ -233,11 +232,12 @@ fn download_and_install(url: &str, sig_url: &str, target: &Path) -> Result<(), S
     download_to_path(url, &archive_path).map_err(|e| format!("Download failed: {e}"))?;
 
     println!("Downloading signature...");
-    let signature_text = download_text(sig_url).map_err(|e| format!("Signature download failed: {e}"))?;
+    let signature_text =
+        download_text(sig_url).map_err(|e| format!("Signature download failed: {e}"))?;
 
     println!("Verifying signature...");
-    let archive_bytes =
-        std::fs::read(&archive_path).map_err(|e| format!("Failed to read downloaded archive: {e}"))?;
+    let archive_bytes = std::fs::read(&archive_path)
+        .map_err(|e| format!("Failed to read downloaded archive: {e}"))?;
     verify_signature(&archive_bytes, &signature_text)?;
     drop(archive_bytes);
 
@@ -402,8 +402,8 @@ trusted comment: timestamp:1784194586\tfile:msg.txt\thashed\n\
     fn verify_with_key(public_key: &str, data: &[u8], signature_text: &str) -> Result<(), String> {
         let public_key = PublicKey::from_base64(public_key)
             .map_err(|e| format!("Invalid embedded minisign public key: {e}"))?;
-        let signature =
-            Signature::decode(signature_text).map_err(|e| format!("Malformed .minisig signature: {e}"))?;
+        let signature = Signature::decode(signature_text)
+            .map_err(|e| format!("Malformed .minisig signature: {e}"))?;
         public_key
             .verify(data, &signature, false)
             .map_err(|e| format!("verification failed: {e}"))
