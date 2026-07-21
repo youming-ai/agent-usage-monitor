@@ -352,8 +352,12 @@ mod tests {
 
     #[test]
     fn missing_db_yields_empty() {
-        let mut reader =
-            SqliteMessageReader::new(PathBuf::from("/nonexistent/path"), "opencode.db", Platform::OpenCode, "opencode");
+        let mut reader = SqliteMessageReader::new(
+            PathBuf::from("/nonexistent/path"),
+            "opencode.db",
+            Platform::OpenCode,
+            "opencode",
+        );
         assert!(reader.scan_all().is_empty());
         assert!(reader.poll_delta().is_empty());
     }
@@ -374,8 +378,12 @@ mod tests {
         // constructed, the connection is None forever unless the reader
         // self-heals once the file appears.
         let dir = tempfile::tempdir().unwrap();
-        let mut reader =
-            SqliteMessageReader::new(dir.path().to_path_buf(), "opencode.db", Platform::OpenCode, "opencode");
+        let mut reader = SqliteMessageReader::new(
+            dir.path().to_path_buf(),
+            "opencode.db",
+            Platform::OpenCode,
+            "opencode",
+        );
         assert!(reader.scan_all().is_empty(), "db not created yet");
 
         let db_path = dir.path().join("opencode.db");
@@ -414,8 +422,12 @@ mod tests {
             .unwrap();
         }
 
-        let mut reader =
-            SqliteMessageReader::new(dir.path().to_path_buf(), "opencode.db", Platform::OpenCode, "opencode");
+        let mut reader = SqliteMessageReader::new(
+            dir.path().to_path_buf(),
+            "opencode.db",
+            Platform::OpenCode,
+            "opencode",
+        );
         assert_eq!(reader.scan_all().len(), 1);
 
         // Simulate a migration: delete then recreate the db file at the same path.
@@ -505,7 +517,10 @@ mod tests {
 
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(crate::state::resolve(records[0].model), "xiaomi/mimo-v2.5-pro");
+        assert_eq!(
+            crate::state::resolve(records[0].model),
+            "xiaomi/mimo-v2.5-pro"
+        );
         assert_eq!(records[0].platform, Platform::MimoCode);
     }
 }

@@ -32,9 +32,13 @@ impl ClaudeReader {
 
     fn scan(&mut self) -> Vec<UsageRecord> {
         let files = self.find_files();
-        self.scanner.scan(files, |_| (), |file, offset, _| {
-            crate::reader::read_lines_from_offset(file, offset, parse_claude_line)
-        })
+        self.scanner.scan(
+            files,
+            |_| (),
+            |file, offset, _| {
+                crate::reader::read_lines_from_offset(file, offset, parse_claude_line)
+            },
+        )
     }
 }
 
@@ -215,7 +219,10 @@ mod tests {
         let mut reader = ClaudeReader::new(dir.path().to_path_buf());
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].cost_usd, 0.05, "costUSD (camelCase) must be read");
+        assert_eq!(
+            records[0].cost_usd, 0.05,
+            "costUSD (camelCase) must be read"
+        );
     }
 
     #[test]

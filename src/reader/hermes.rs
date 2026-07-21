@@ -220,11 +220,16 @@ impl HermesReader {
             // session's start — or a multi-day session's later usage all
             // buckets onto the day it started.
             let effective_secs = if is_delta {
-                session.ended_at.filter(|e| *e > 0.0).unwrap_or(session.started_at)
+                session
+                    .ended_at
+                    .filter(|e| *e > 0.0)
+                    .unwrap_or(session.started_at)
             } else {
                 session.started_at
             };
-            let timestamp = match Utc.timestamp_millis_opt((effective_secs * 1000.0) as i64).single()
+            let timestamp = match Utc
+                .timestamp_millis_opt((effective_secs * 1000.0) as i64)
+                .single()
             {
                 Some(ts) => ts,
                 None => continue,
@@ -456,13 +461,26 @@ mod tests {
         let conn = setup();
         let day1 = 1_700_000_000.0; // 2023-11-14
         let day2 = 1_700_200_000.0; // ~2 days later
-        insert(&conn, "s1", "claude-3.5-sonnet", day1, 100, 40, 0, 0, 0.5, "/Users/me/project");
+        insert(
+            &conn,
+            "s1",
+            "claude-3.5-sonnet",
+            day1,
+            100,
+            40,
+            0,
+            0,
+            0.5,
+            "/Users/me/project",
+        );
         let mut reader = HermesReader::from_connection(conn);
         let initial = reader.scan_all();
         assert_eq!(initial.len(), 1);
         assert_eq!(
             initial[0].timestamp,
-            Utc.timestamp_millis_opt((day1 * 1000.0) as i64).single().unwrap(),
+            Utc.timestamp_millis_opt((day1 * 1000.0) as i64)
+                .single()
+                .unwrap(),
             "the first record for a session uses started_at"
         );
 
@@ -479,7 +497,9 @@ mod tests {
         assert_eq!(delta.len(), 1);
         assert_eq!(
             delta[0].timestamp,
-            Utc.timestamp_millis_opt((day2 * 1000.0) as i64).single().unwrap(),
+            Utc.timestamp_millis_opt((day2 * 1000.0) as i64)
+                .single()
+                .unwrap(),
             "a later in-place update must use its own (ended_at) time, not started_at"
         );
     }

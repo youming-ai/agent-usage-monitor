@@ -69,7 +69,12 @@ impl PromptTracker {
         self.emit_delta(&prompt_id, timestamp, meta)
     }
 
-    fn emit_delta(&mut self, prompt_id: &str, timestamp: i64, meta: &SessionMeta) -> Option<UsageRecord> {
+    fn emit_delta(
+        &mut self,
+        prompt_id: &str,
+        timestamp: i64,
+        meta: &SessionMeta,
+    ) -> Option<UsageRecord> {
         if prompt_id.is_empty() {
             return None;
         }
