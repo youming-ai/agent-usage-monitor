@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.16.2...v0.17.0) (2026-07-21)
+
+
+### Features
+
+* **security:** sign and verify release artifacts ([2ae876e](https://github.com/youming-ai/agent-usage-monitor/commit/2ae876e6548e6e935ab9c8e82f53e03016d989b7))
+
 ## [0.16.2](https://github.com/youming-ai/agent-usage-monitor/compare/v0.16.1...v0.16.2) (2026-07-17)
 
 
