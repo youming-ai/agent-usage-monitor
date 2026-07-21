@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Overview
-`agent-usage-monitor` (`aum`) is a single Rust binary that provides a terminal user interface (TUI) dashboard and a command-line interface (CLI) to track local AI agent usage, costs, and API quotas. It currently monitors 13 developer agent tools: Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI, and MiMo Code.
+`agent-usage-monitor` (`aum`) is a single Rust binary that provides a terminal user interface (TUI) dashboard and a command-line interface (CLI) to track local AI agent usage, costs, and API quotas. It currently monitors 14 developer agent tools: Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI, MiMo Code, and omp (Oh My Pi).
 
 ## Architecture & Data Flow
 - **Data Ingestion**: A dual-track system uses a file system watcher (`src/watcher.rs` based on the `notify` crate) with 50ms debouncing, alongside a 30-second fallback timer interval. Logs from various platforms are abstracted via the `UsageSource` trait, supporting JSONL log files (`JsonlReader`) and SQLite databases (`SqliteMessageReader`).

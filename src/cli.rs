@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(name = "aum")]
 #[command(version)]
 #[command(
-    about = "Real-time usage monitor for Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI & MiMo Code"
+    about = "Real-time usage monitor for Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI, MiMo Code & omp"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -62,6 +62,10 @@ pub struct Cli {
     /// Path to MiMo Code data directory
     #[arg(long)]
     pub mimo_code_path: Option<PathBuf>,
+
+    /// Path to omp (Oh My Pi) data directory
+    #[arg(long)]
+    pub omp_path: Option<PathBuf>,
 
     /// Polling interval in seconds
     #[arg(short, long)]

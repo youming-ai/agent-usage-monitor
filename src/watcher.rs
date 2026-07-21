@@ -69,7 +69,7 @@ pub fn start_watchers(
     // collapse duplicate events for the same path within the debounce
     // window so downstream consumers see one event per logical change.
     let recent: Arc<Mutex<HashMap<PathBuf, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
-    let mut watchers = Vec::with_capacity(13);
+    let mut watchers = Vec::with_capacity(14);
 
     for entry in platforms::entries() {
         let path = paths.path_for(entry.tab);
@@ -216,7 +216,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = synthetic_paths(tmp.path());
         let (watchers, _rx) = start_watchers(&paths);
-        assert_eq!(watchers.len(), 13);
+        assert_eq!(watchers.len(), 14);
     }
 
     #[tokio::test]

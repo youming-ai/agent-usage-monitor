@@ -24,7 +24,7 @@ fn stats_default_produces_valid_json_with_all_platforms() {
     assert!(json.get("generated_at").is_some());
     assert!(json.get("totals").is_some());
     let platforms = json.get("platforms").unwrap().as_object().unwrap();
-    assert_eq!(platforms.len(), 13, "all 13 platforms should be present");
+    assert_eq!(platforms.len(), 14, "all 14 platforms should be present");
 }
 
 #[test]

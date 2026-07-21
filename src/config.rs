@@ -56,6 +56,10 @@ pub struct Config {
     #[serde(default = "default_mimo_code_path")]
     pub mimo_code_path: PathBuf,
 
+    /// Path to omp (Oh My Pi) data directory (~/.omp/agent/sessions)
+    #[serde(default = "default_omp_path")]
+    pub omp_path: PathBuf,
+
     /// Polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -81,6 +85,7 @@ impl Default for Config {
             copilot_path: default_copilot_path(),
             antigravity_path: default_antigravity_path(),
             mimo_code_path: default_mimo_code_path(),
+            omp_path: default_omp_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -129,6 +134,10 @@ fn default_kimi_code_path() -> PathBuf {
 
 fn default_pi_path() -> PathBuf {
     Tab::Pi.default_path()
+}
+
+fn default_omp_path() -> PathBuf {
+    Tab::Omp.default_path()
 }
 
 fn default_openclaw_path() -> PathBuf {
