@@ -32,11 +32,11 @@ const EXPECTED_URL_PREFIX: &str =
 /// hostile response (e.g. a decompression bomb) instead of filling the disk.
 const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 
-// ponytail: the release signing key. Maintainer must replace this with the
-// real public key printed by `minisign -G` before cutting a signed release —
-// see install.sh and the release workflow for the matching steps. Until then
-// every update will correctly fail signature verification.
-const MINISIGN_PUBLIC_KEY: &str = "RWQ...PLACEHOLDER_REPLACE_ME_WITH_REAL_MINISIGN_PUBLIC_KEY...";
+// Release signing public key. The matching secret key is held by the
+// maintainer (never committed) and used by .github/workflows/release.yml via
+// the MINISIGN_SECRET_KEY / MINISIGN_PASSWORD secrets to sign each tarball;
+// this key verifies those signatures in `aum update`. Mirrored in install.sh.
+const MINISIGN_PUBLIC_KEY: &str = "RWSJYQ0u3cwMksoh3aAd0tTZF1GbxroMEF6FqPY+KjtCU2OWp7bmcaa8";
 
 #[derive(Debug, Deserialize)]
 struct Release {
