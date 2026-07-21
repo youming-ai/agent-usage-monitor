@@ -254,19 +254,19 @@ impl Tab {
     pub fn all() -> &'static [Tab] {
         &[
             Tab::ClaudeCode,
-            Tab::Omp,
             Tab::Codex,
-            Tab::Pi,
-            Tab::Grok,
             Tab::Cursor,
             Tab::OpenClaw,
             Tab::Hermes,
+            Tab::Omp,
             Tab::Copilot,
             Tab::Antigravity,
             Tab::OpenCode,
             Tab::Factory,
+            Tab::Grok,
             Tab::KimiCode,
             Tab::MimoCode,
+            Tab::Pi,
         ]
     }
 
