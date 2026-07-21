@@ -5,10 +5,10 @@ REPO="youming-ai/agent-usage-monitor"
 BINARY_NAME="aum"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
-# ponytail: same public key as MINISIGN_PUBLIC_KEY in src/updater/mod.rs.
-# Maintainer must replace BOTH placeholders with the real public key printed
-# by `minisign -G` before cutting a signed release.
-MINISIGN_PUBLIC_KEY="RWQ...PLACEHOLDER_REPLACE_ME_WITH_REAL_MINISIGN_PUBLIC_KEY..."
+# Release signing public key — must match MINISIGN_PUBLIC_KEY in
+# src/updater/mod.rs and the MINISIGN_SECRET_KEY secret used in
+# .github/workflows/release.yml.
+MINISIGN_PUBLIC_KEY="RWSJYQ0u3cwMksoh3aAd0tTZF1GbxroMEF6FqPY+KjtCU2OWp7bmcaa8"
 
 # Detect OS
 OS="$(uname -s)"
