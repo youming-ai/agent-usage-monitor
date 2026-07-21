@@ -86,18 +86,18 @@ jobs:
       - name: Install minisign
         run: sudo apt-get update && sudo apt-get install -y minisign
 
-      # ponytail: sign each tarball with the release private key so
-      # src/updater/mod.rs and install.sh can verify integrity before
-      # installing. `MINISIGN_SECRET_KEY` holds the key file contents exactly
-      # as printed by `minisign -G` (including the "untrusted comment" /
-      # "trusted comment" lines); `MINISIGN_PASSWORD` is only needed if that
-      # key was generated with a passphrase (minisign reads it from this env
-      # var non-interactively). See the maintainer setup steps in the PR
-      # description / commit message for the exact commands.
+      # Sign each tarball with the release secret key. The key MUST be a
+      # passwordless (`minisign -G -W`) keypair: minisign's CLI has no
+      # non-interactive password input (it prompts on the TTY and does NOT read
+      # MINISIGN_PASSWORD), so a passphrase-encrypted key cannot sign in CI.
+      # `MINISIGN_SECRET_KEY` holds the full (unencrypted) secret-key file
+      # exactly as written by `minisign -G -W`; the matching public key is
+      # embedded in src/updater/mod.rs and install.sh and verifies these
+      # signatures in `aum update`. Keep the secret key only here + a password
+      # manager — never commit it.
       - name: Sign release artifacts
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
           set -euo pipefail
           key_file="$(mktemp)"
