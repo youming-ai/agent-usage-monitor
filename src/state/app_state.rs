@@ -91,11 +91,12 @@ pub enum Platform {
     Copilot,
     Antigravity,
     MimoCode,
+    Omp,
 }
 
 impl Platform {
     /// Number of platform variants — used to size the fixed array in `AppState`.
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 14;
 
     /// Zero-based index for array access. Must stay in sync with variant order.
     pub const fn index(self) -> usize {
@@ -113,6 +114,7 @@ impl Platform {
             Platform::Copilot => 10,
             Platform::Antigravity => 11,
             Platform::MimoCode => 12,
+            Platform::Omp => 13,
         }
     }
 }
@@ -132,6 +134,7 @@ pub enum Tab {
     Copilot,
     Antigravity,
     MimoCode,
+    Omp,
 }
 
 impl Tab {
@@ -152,6 +155,7 @@ impl Tab {
             Tab::Copilot => 10,
             Tab::Antigravity => 11,
             Tab::MimoCode => 12,
+            Tab::Omp => 13,
         }
     }
 
@@ -186,6 +190,7 @@ impl Tab {
             Tab::Copilot => "COPILOT",
             Tab::Antigravity => "ANTIGRAVITY",
             Tab::MimoCode => "MIMO-CODE",
+            Tab::Omp => "OMP",
         }
     }
 
@@ -206,6 +211,7 @@ impl Tab {
             Tab::Copilot => ratatui::style::Color::Rgb(35, 134, 54),
             Tab::Antigravity => ratatui::style::Color::Rgb(66, 133, 244),
             Tab::MimoCode => ratatui::style::Color::Rgb(255, 103, 0),
+            Tab::Omp => ratatui::style::Color::Rgb(129, 140, 248),
         }
     }
 
@@ -227,6 +233,7 @@ impl Tab {
             Platform::Copilot => Tab::Copilot,
             Platform::Antigravity => Tab::Antigravity,
             Platform::MimoCode => Tab::MimoCode,
+            Platform::Omp => Tab::Omp,
         }
     }
 
@@ -247,17 +254,18 @@ impl Tab {
     pub fn all() -> &'static [Tab] {
         &[
             Tab::ClaudeCode,
+            Tab::Omp,
             Tab::Codex,
-            Tab::OpenClaw,
-            Tab::Hermes,
-            Tab::OpenCode,
-            Tab::KimiCode,
             Tab::Pi,
-            Tab::Factory,
             Tab::Grok,
             Tab::Cursor,
+            Tab::OpenClaw,
+            Tab::Hermes,
             Tab::Copilot,
             Tab::Antigravity,
+            Tab::OpenCode,
+            Tab::Factory,
+            Tab::KimiCode,
             Tab::MimoCode,
         ]
     }
@@ -278,6 +286,7 @@ impl Tab {
             Tab::Copilot => home.join(".copilot"),
             Tab::Antigravity => home.join(".gemini/antigravity-cli"),
             Tab::MimoCode => crate::config::xdg_data_dir().join("mimocode"),
+            Tab::Omp => home.join(".omp/agent/sessions"),
         }
     }
 
@@ -400,6 +409,7 @@ impl AppState {
         };
         Self {
             platforms: [
+                make(),
                 make(),
                 make(),
                 make(),
@@ -583,6 +593,7 @@ mod tests {
                 Tab::Copilot => Platform::Copilot,
                 Tab::Antigravity => Platform::Antigravity,
                 Tab::MimoCode => Platform::MimoCode,
+                Tab::Omp => Platform::Omp,
             };
             assert_eq!(tab.index(), p.index(), "mismatch for {tab:?} / {p:?}");
         }
@@ -673,6 +684,7 @@ mod tests {
             (Tab::Copilot, missing.join("copilot")),
             (Tab::Antigravity, missing.join("antigravity")),
             (Tab::MimoCode, missing.join("mimocode")),
+            (Tab::Omp, missing.join("omp")),
         ]));
 
         let mut state = AppState::new();

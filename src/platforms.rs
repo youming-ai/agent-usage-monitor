@@ -105,7 +105,7 @@ static REGISTRY: &[RegistryEntry] = &[
         config_path: |c| c.pi_path.clone(),
         cli_path: |cli| cli.pi_path.clone(),
         set_config_path: |c, p| c.pi_path = p,
-        create_reader: |p| Box::new(PiReader::new(p)),
+        create_reader: |p| Box::new(PiReader::new(p, Platform::Pi)),
     },
     RegistryEntry {
         tab: Tab::Factory,
@@ -173,6 +173,16 @@ static REGISTRY: &[RegistryEntry] = &[
                 "mimocode",
             ))
         },
+    },
+    RegistryEntry {
+        tab: Tab::Omp,
+        platform: Platform::Omp,
+        config_key: "omp_path",
+        log_name: "omp",
+        config_path: |c| c.omp_path.clone(),
+        cli_path: |cli| cli.omp_path.clone(),
+        set_config_path: |c, p| c.omp_path = p,
+        create_reader: |p| Box::new(PiReader::new(p, Platform::Omp)),
     },
 ];
 
@@ -301,6 +311,7 @@ mod tests {
             copilot_path: None,
             antigravity_path: None,
             mimo_code_path: None,
+            omp_path: None,
             refresh: None,
         };
         let paths = resolve_paths(&cli, &config);

@@ -10,13 +10,15 @@ use super::session_jsonl::{SessionFileState, read_jsonl_from_offset};
 
 pub struct PiReader {
     data_dir: PathBuf,
+    platform: Platform,
     scanner: FileScanner<SessionFileState>,
 }
 
 impl PiReader {
-    pub fn new(data_dir: PathBuf) -> Self {
+    pub fn new(data_dir: PathBuf, platform: Platform) -> Self {
         Self {
             data_dir,
+            platform,
             scanner: FileScanner::new(),
         }
     }
@@ -33,17 +35,22 @@ impl PiReader {
 
     fn scan(&mut self) -> Vec<UsageRecord> {
         let files = self.find_files();
+        let platform = self.platform;
         self.scanner.scan(
             files,
             |_| SessionFileState::with_dir("unknown", ""),
-            |file, offset, st| read_jsonl_from_offset(file, offset, st, parse_pi_line),
+            |file, offset, st| {
+                read_jsonl_from_offset(file, offset, st, |line, st| {
+                    parse_pi_line(line, st, platform)
+                })
+            },
         )
     }
 }
 
 impl UsageSource for PiReader {
     fn platform(&self) -> Platform {
-        Platform::Pi
+        self.platform
     }
 
     fn scan_all(&mut self) -> Vec<UsageRecord> {
@@ -56,7 +63,7 @@ impl UsageSource for PiReader {
     }
 }
 
-fn parse_pi_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
+fn parse_pi_line(line: &str, st: &SessionFileState, platform: Platform) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
 
     if v.get("type")?.as_str()? != "message" {
@@ -101,7 +108,7 @@ fn parse_pi_line(line: &str, st: &SessionFileState) -> Option<UsageRecord> {
 
     Some(UsageRecord {
         timestamp,
-        platform: Platform::Pi,
+        platform,
         model: crate::state::intern(&model),
         session: crate::state::intern(&st.session_label()),
         id: crate::state::intern(record_id),
@@ -141,7 +148,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "session.jsonl", &sample_jsonl());
 
-        let mut reader = PiReader::new(dir.path().to_path_buf());
+        let mut reader = PiReader::new(dir.path().to_path_buf(), Platform::Pi);
         let records = reader.scan_all();
         assert_eq!(records.len(), 1);
         assert_eq!(crate::state::resolve(records[0].model), "claude-sonnet-4-5");
@@ -158,14 +165,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "session.jsonl", &sample_jsonl());
 
-        let mut reader = PiReader::new(dir.path().to_path_buf());
+        let mut reader = PiReader::new(dir.path().to_path_buf(), Platform::Pi);
         assert_eq!(reader.scan_all().len(), 1);
         assert_eq!(reader.poll_delta().len(), 0);
     }
 
     #[test]
     fn missing_directory_yields_empty() {
-        let mut reader = PiReader::new(PathBuf::from("/nonexistent/pi"));
+        let mut reader = PiReader::new(PathBuf::from("/nonexistent/pi"), Platform::Pi);
         assert!(reader.scan_all().is_empty());
         assert!(reader.poll_delta().is_empty());
     }
