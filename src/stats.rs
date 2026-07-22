@@ -415,6 +415,7 @@ mod tests {
             session: crate::state::intern(session),
             session_id: crate::state::intern(session),
             cwd: crate::state::intern("/tmp/test"),
+            title: crate::state::intern(""),
             id: crate::state::intern(&format!("{session}:{day}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,

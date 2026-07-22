@@ -7,9 +7,18 @@ use super::FileScanner;
 use super::UsageSource;
 use super::find_recursive;
 
+/// Per-file running state: the conversation title, carried across lines and
+/// polls. Claude logs the title on its own `ai-title` lines interspersed with
+/// the `assistant` records, so it must persist rather than being re-derived
+/// from each line.
+#[derive(Clone, Default)]
+struct ClaudeState {
+    title: String,
+}
+
 pub struct ClaudeReader {
     pub(crate) data_dir: PathBuf,
-    scanner: FileScanner<()>,
+    scanner: FileScanner<ClaudeState>,
 }
 
 impl ClaudeReader {
@@ -34,9 +43,11 @@ impl ClaudeReader {
         let files = self.find_files();
         self.scanner.scan(
             files,
-            |_| (),
-            |file, offset, _| {
-                crate::reader::read_lines_from_offset(file, offset, parse_claude_line)
+            |_| ClaudeState::default(),
+            |file, offset, st| {
+                crate::reader::read_lines_from_offset(file, offset, |line| {
+                    parse_claude_line(line, st)
+                })
             },
         )
     }
@@ -57,10 +68,23 @@ impl UsageSource for ClaudeReader {
     }
 }
 
-fn parse_claude_line(line: &str) -> Option<UsageRecord> {
+fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
 
-    if v.get("type")?.as_str()? != "assistant" {
+    let line_type = v.get("type")?.as_str()?;
+
+    // `ai-title` lines carry the conversation title Claude Code shows in its
+    // resume picker; capture the latest so records below display it.
+    if line_type == "ai-title" {
+        if let Some(title) = v.get("aiTitle").and_then(|s| s.as_str())
+            && !title.is_empty()
+        {
+            st.title = title.to_string();
+        }
+        return None;
+    }
+
+    if line_type != "assistant" {
         return None;
     }
 
@@ -126,6 +150,7 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
         session: crate::state::intern(&session),
         session_id: crate::state::intern(session_id),
         cwd: crate::state::intern(cwd),
+        title: crate::state::intern(&st.title),
         id: crate::state::intern(record_id),
         input_tokens,
         output_tokens,
@@ -161,6 +186,21 @@ mod tests {
         let mut f = fs::File::create(&path).unwrap();
         f.write_all(content.as_bytes()).unwrap();
         path
+    }
+
+    #[test]
+    fn ai_title_line_becomes_the_record_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "{}\n{}\n",
+            r#"{"type":"ai-title","aiTitle":"Fix the login bug","sessionId":"s1"}"#,
+            r#"{"type":"assistant","timestamp":"2026-05-29T10:00:00Z","requestId":"r1","message":{"id":"m1","model":"claude-opus-4","usage":{"input_tokens":100,"output_tokens":50}}}"#,
+        );
+        write_file(dir.path(), "a.jsonl", &content);
+        let mut reader = ClaudeReader::new(dir.path().to_path_buf());
+        let records = reader.scan_all();
+        assert_eq!(records.len(), 1);
+        assert_eq!(crate::state::resolve(records[0].title), "Fix the login bug");
     }
 
     #[test]

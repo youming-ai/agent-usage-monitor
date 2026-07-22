@@ -144,7 +144,7 @@ impl Tab {
     pub fn primary_color(self) -> ratatui::style::Color {
         match self {
             Tab::ClaudeCode => ratatui::style::Color::Rgb(217, 119, 87),
-            Tab::Codex => ratatui::style::Color::Rgb(215, 95, 215),
+            Tab::Codex => ratatui::style::Color::Rgb(59, 130, 246),
             Tab::Cursor => ratatui::style::Color::Rgb(136, 192, 208),
         }
     }
@@ -207,6 +207,10 @@ pub struct UsageRecord {
     /// the right project. Empty when the source doesn't record a real path
     /// (Cursor exposes a display-only project label, not a filesystem path).
     pub cwd: InternedString,
+    /// Human-readable conversation title when the source records one (Claude's
+    /// `ai-title`), shown in the sessions list in place of the `dir + id`
+    /// label. Empty when the agent doesn't log a title (Codex, Cursor).
+    pub title: InternedString,
     /// Stable identity used to dedup re-emitted records (e.g. after a file
     /// truncation/rewrite forces a reader to re-read from byte 0). Readers
     /// build this from the strongest identifier their source data carries —
@@ -296,6 +300,7 @@ impl PlatformState {
             requests: u64,
             session_id: InternedString,
             cwd: InternedString,
+            title: InternedString,
         }
         let mut by: HashMap<InternedString, Acc> = HashMap::new();
         for r in &self.records {
@@ -304,6 +309,7 @@ impl PlatformState {
                 requests: 0,
                 session_id: r.session_id,
                 cwd: r.cwd,
+                title: r.title,
             });
             e.tokens +=
                 r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens;
@@ -315,15 +321,29 @@ impl PlatformState {
             if resolve(e.cwd).is_empty() {
                 e.cwd = r.cwd;
             }
+            // The title can be set/renamed mid-session; the latest wins.
+            if !resolve(r.title).is_empty() {
+                e.title = r.title;
+            }
         }
         let mut entries: Vec<SessionEntry> = by
             .into_iter()
-            .map(|(label, a)| SessionEntry {
-                label: resolve(label),
-                session_id: a.session_id,
-                cwd: a.cwd,
-                tokens: a.tokens,
-                requests: a.requests,
+            .map(|(session_key, a)| {
+                // Show the conversation title when one exists, else fall back
+                // to the `dir + short-id` label.
+                let title = resolve(a.title);
+                let label = if title.is_empty() {
+                    resolve(session_key)
+                } else {
+                    title
+                };
+                SessionEntry {
+                    label,
+                    session_id: a.session_id,
+                    cwd: a.cwd,
+                    tokens: a.tokens,
+                    requests: a.requests,
+                }
             })
             .collect();
         entries.sort_by(|a, b| b.tokens.cmp(&a.tokens).then(a.label.cmp(b.label)));
@@ -559,6 +579,7 @@ mod tests {
             session: intern("test"),
             session_id: intern("test-sid"),
             cwd: intern("/tmp/test"),
+            title: intern(""),
             id: intern(id),
             input_tokens: input,
             output_tokens: output,
@@ -589,6 +610,18 @@ mod tests {
     }
 
     fn session_rec(session: &str, sid: &str, cwd: &str, tokens: u64, id: &str) -> UsageRecord {
+        session_rec_titled(session, sid, cwd, "", tokens, id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn session_rec_titled(
+        session: &str,
+        sid: &str,
+        cwd: &str,
+        title: &str,
+        tokens: u64,
+        id: &str,
+    ) -> UsageRecord {
         UsageRecord {
             timestamp: Utc::now(),
             platform: Platform::ClaudeCode,
@@ -596,6 +629,7 @@ mod tests {
             session: intern(session),
             session_id: intern(sid),
             cwd: intern(cwd),
+            title: intern(title),
             id: intern(id),
             input_tokens: tokens,
             output_tokens: 0,
@@ -622,6 +656,32 @@ mod tests {
         assert_eq!(entries[0].label, "proj-b bbb");
         assert_eq!(entries[1].tokens, 150);
         assert_eq!(resolve(entries[1].cwd), "/work/a");
+    }
+
+    #[test]
+    fn session_entry_label_prefers_title_when_present() {
+        let mut s = AppState::with_capacity(10);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                // First record has no title yet; a later one names the session.
+                session_rec("proj aaa", "aaa", "/work/a", 10, "r1"),
+                session_rec_titled("proj aaa", "aaa", "/work/a", "Fix login bug", 10, "r2"),
+                // A different session with no title keeps the dir+id label.
+                session_rec("proj bbb", "bbb", "/work/b", 5, "r3"),
+            ],
+        );
+        let entries = s.platform(Tab::ClaudeCode).session_entries();
+        let titled = entries
+            .iter()
+            .find(|e| resolve(e.session_id) == "aaa")
+            .unwrap();
+        assert_eq!(titled.label, "Fix login bug");
+        let untitled = entries
+            .iter()
+            .find(|e| resolve(e.session_id) == "bbb")
+            .unwrap();
+        assert_eq!(untitled.label, "proj bbb");
     }
 
     #[test]
