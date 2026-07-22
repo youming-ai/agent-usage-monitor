@@ -76,12 +76,12 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
         model_table::model_table(active, sessions, total_calls),
         main[0],
     );
-    // Derive the selected row index each render (selection is tracked by
-    // session_id, so a live re-sort can't strand the highlight on the wrong
-    // row). TableState scrolls it into view even when the list overflows.
+    // Derive the selected row index each render (selection is tracked by the
+    // stable per-row key, so a live re-sort can't strand the highlight on the
+    // wrong row). TableState scrolls it into view even when the list overflows.
     let selected_idx = state
-        .selected_session
-        .and_then(|sid| entries.iter().position(|e| e.session_id == sid));
+        .selected_key
+        .and_then(|key| entries.iter().position(|e| e.key == key));
     let mut table_state = ratatui::widgets::TableState::default();
     table_state.select(selected_idx);
     frame.render_stateful_widget(
@@ -98,7 +98,6 @@ mod tests {
     use super::*;
     use crate::quota::{QuotaInfo, QuotaWindow};
     use crate::state::{Platform, SessionSummary, Tab, UsageRecord};
-    use chrono::Utc;
     use ratatui::{Terminal, backend::TestBackend};
     use std::time::Instant;
 
@@ -154,19 +153,12 @@ mod tests {
         .map(|m| (m.model, m))
         .collect();
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
-            timestamp: Utc::now(),
-            platform: Platform::ClaudeCode,
-            model: crate::state::intern(model),
             session: crate::state::intern(session),
             session_id: crate::state::intern(session),
-            cwd: crate::state::intern("/tmp/test"),
-            title: crate::state::intern(""),
             id: crate::state::intern(&format!("{session}:{model}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            cost_usd: 0.0,
+            ..crate::state::test_record(Platform::ClaudeCode, model)
         };
         claude.records = vec![
             mk("ollama-monitor a3f2c1d8", "claude-opus-4", 1200, 340),
@@ -205,25 +197,17 @@ mod tests {
     fn selected_session_below_the_fold_is_scrolled_into_view() {
         let mut s = AppState::with_capacity(100);
         let mk = |session: &str| UsageRecord {
-            timestamp: Utc::now(),
-            platform: Platform::ClaudeCode,
-            model: crate::state::intern("claude-opus-4"),
             session: crate::state::intern(session),
             session_id: crate::state::intern(session),
-            cwd: crate::state::intern("/tmp/test"),
-            title: crate::state::intern(""),
             id: crate::state::intern(session),
             input_tokens: 100,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            cost_usd: 0.0,
+            ..crate::state::test_record(Platform::ClaudeCode, "claude-opus-4")
         };
         // 30 sessions — far more than a short panel can show at once.
         let records: Vec<_> = (0..30).map(|i| mk(&format!("sess-{i:02}"))).collect();
         s.add_records(Platform::ClaudeCode, records);
         // Select and focus the last row (all equal usage → sorted by label).
-        s.selected_session = Some(crate::state::intern("sess-29"));
+        s.selected_key = Some(crate::state::intern("sess-29"));
         s.sessions_focused = true;
 
         let out = dump(80, 16, s);
