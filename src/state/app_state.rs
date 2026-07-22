@@ -223,6 +223,15 @@ pub struct UsageRecord {
     pub cache_creation_tokens: u64,
     pub cost_usd: f64,
 }
+impl UsageRecord {
+    pub fn is_usage(&self) -> bool {
+        self.input_tokens > 0
+            || self.output_tokens > 0
+            || self.cache_read_tokens > 0
+            || self.cache_creation_tokens > 0
+            || self.cost_usd > 0.0
+    }
+}
 
 /// Aggregated per-model totals.
 #[derive(Debug, Clone)]
@@ -313,7 +322,9 @@ impl PlatformState {
             });
             e.tokens +=
                 r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens;
-            e.requests += 1;
+            if r.is_usage() {
+                e.requests += 1;
+            }
             // Prefer a real id/path if a later record in the group carries one.
             if resolve(e.session_id).is_empty() {
                 e.session_id = r.session_id;
@@ -474,8 +485,10 @@ impl AppState {
                 reverse_model_aggregate(&mut p.sessions, &old);
             }
             p.total_cost += r.cost_usd;
-            p.total_calls += 1;
-            upsert_model_aggregate(&mut p.sessions, &r);
+            if r.is_usage() {
+                p.total_calls += 1;
+                upsert_model_aggregate(&mut p.sessions, &r);
+            }
             p.records.push_back(r);
         }
     }
