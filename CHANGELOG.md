@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.18.1...v1.0.0) (2026-07-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* config keys and CLI flags for the removed agents no longer exist. Old config.toml files still load (serde ignores unknown keys).
+
+### Features
+
+* support only Claude Code, Codex & Cursor ([26a0eba](https://github.com/youming-ai/agent-usage-monitor/commit/26a0eba1eaca8c58fb06b8feec162eacfd6986de))
+
 ## [0.18.1](https://github.com/youming-ai/agent-usage-monitor/compare/v0.18.0...v0.18.1) (2026-07-21)
 
 
