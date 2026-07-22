@@ -541,29 +541,61 @@ fn spawn_new_window(
     Ok(())
 }
 
-/// Linux: no standard "new terminal window" mechanism, so this is best-effort.
-/// `x-terminal-emulator` is the Debian/Ubuntu alternatives entry pointing at
-/// the user's default emulator; if it's absent, `spawn` errors and the caller
-/// falls back to the exec hand-off.
-#[cfg(not(target_os = "macos"))]
-fn spawn_new_window(
+/// Linux: no standard "new terminal window" mechanism, so try common terminal
+/// emulators in order. If none succeed, `spawn` errors and the caller falls
+/// back to the exec hand-off.
+#[allow(dead_code)]
+fn spawn_new_window_linux(
     program: &str,
     args: &[String],
     cwd: &str,
     _session_id: &str,
 ) -> std::io::Result<()> {
     use std::process::Stdio;
+    let shell_line = resume_shell_line(program, args, cwd);
+    let candidates: &[(&str, &[&str])] = &[
+        ("x-terminal-emulator", &["-e"]),
+        ("ghostty", &["-e"]),
+        ("kitty", &["--"]),
+        ("alacritty", &["-e"]),
+        ("wezterm", &["start", "--"]),
+        ("foot", &[]),
+        ("gnome-terminal", &["--"]),
+        ("konsole", &["-e"]),
+        ("xfce4-terminal", &["-e"]),
+        ("xterm", &["-e"]),
+    ];
 
-    std::process::Command::new("x-terminal-emulator")
-        .arg("-e")
-        .arg("sh")
-        .arg("-c")
-        .arg(resume_shell_line(program, args, cwd))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    Ok(())
+    let mut last_err = None;
+    for &(emu, emu_args) in candidates {
+        let mut cmd = std::process::Command::new(emu);
+        cmd.args(emu_args);
+        cmd.arg("sh").arg("-c").arg(&shell_line);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        match cmd.spawn() {
+            Ok(_) => return Ok(()),
+            Err(e) => last_err = Some(e),
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no supported terminal emulator found",
+        )
+    }))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn spawn_new_window(
+    program: &str,
+    args: &[String],
+    cwd: &str,
+    session_id: &str,
+) -> std::io::Result<()> {
+    spawn_new_window_linux(program, args, cwd, session_id)
 }
 
 /// Fallback path: restore the terminal and `exec`-replace this process with the
