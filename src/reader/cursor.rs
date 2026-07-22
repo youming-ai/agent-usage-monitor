@@ -471,6 +471,7 @@ fn flush_transcript_progress(st: &mut TranscriptTurnState) -> Option<UsageRecord
         session_id: crate::state::intern(&st.conversation_id),
         // Cursor's "project" is a display label, not a filesystem path.
         cwd: crate::state::intern(""),
+        title: crate::state::intern(""),
         id: crate::state::intern(&record_id),
         input_tokens: input,
         output_tokens: output,
@@ -564,6 +565,7 @@ fn parse_store_blob(
             session: crate::state::intern(session),
             session_id: crate::state::intern(session_id),
             cwd: crate::state::intern(""),
+            title: crate::state::intern(""),
             id: crate::state::intern(&dedup),
             input_tokens: 0,
             output_tokens: output,
@@ -636,6 +638,7 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
         // conversation id. Placeholders here so this fn works standalone.
         session_id: crate::state::intern(""),
         cwd: crate::state::intern(""),
+        title: crate::state::intern(""),
         id: crate::state::intern(""),
         input_tokens: input,
         output_tokens: output,

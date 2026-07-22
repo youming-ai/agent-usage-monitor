@@ -215,6 +215,8 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         session: crate::state::intern(&st.session()),
         session_id: crate::state::intern(&st.sid),
         cwd: crate::state::intern(&st.cwd),
+        // Codex rollout files don't record a conversation title.
+        title: crate::state::intern(""),
         id: crate::state::intern(&record_id),
         input_tokens: delta_input,
         output_tokens: delta_output,
