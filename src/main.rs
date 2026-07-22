@@ -441,8 +441,20 @@ fn run_tui(
                             let sid = resolve(sid).to_string();
                             let cwd = resolve(cwd).to_string();
                             if !sid.is_empty() {
-                                // exec replaces this process; returns only on error.
-                                return launch_session(tab, &sid, &cwd);
+                                let (program, args) =
+                                    platforms::entry_for_tab(tab).resume_command(&sid);
+                                // Open the session in a new terminal window and
+                                // keep monitoring. If no new window could be
+                                // opened (e.g. no terminal emulator on Linux),
+                                // fall back to handing off the current terminal
+                                // by exec-replacing this process.
+                                if let Err(e) = spawn_new_window(program, &args, &cwd, &sid) {
+                                    warn!(
+                                        "could not open a new terminal window ({e}); \
+                                         handing off the current terminal instead"
+                                    );
+                                    return exec_handoff(program, &args, &cwd);
+                                }
                             }
                         }
                     }
@@ -462,24 +474,112 @@ fn run_tui(
     Ok(())
 }
 
-/// Restore the terminal and hand it to the agent CLI, resuming `session_id` in
-/// its working directory. Uses `exec` to replace this process outright: the
-/// child inherits a clean terminal and there's no monitor still polling stdin
-/// to fight the CLI for keystrokes. Only returns (an `Err`) if `exec` fails,
-/// e.g. the CLI binary isn't on `PATH`.
-fn launch_session(
-    tab: Tab,
+/// Single-quote a string for `/bin/sh`, escaping embedded quotes — so a cwd
+/// or arg containing spaces or shell metacharacters is passed through literally.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// The `/bin/sh` command that resumes a session: `cd <cwd> && exec <prog> …`
+/// (the `cd` is omitted when the working directory is unknown). Shared by the
+/// macOS `.command` script and the Linux `sh -c` invocation.
+fn resume_shell_line(program: &str, args: &[String], cwd: &str) -> String {
+    let mut line = String::new();
+    if !cwd.is_empty() {
+        line.push_str(&format!("cd {} && ", shell_quote(cwd)));
+    }
+    line.push_str("exec ");
+    line.push_str(&shell_quote(program));
+    for a in args {
+        line.push(' ');
+        line.push_str(&shell_quote(a));
+    }
+    line
+}
+
+/// Open the resume command in a new terminal window, leaving `aum` running.
+/// `Ok` means a window was launched; `Err` means the caller should fall back
+/// to `exec_handoff`. stdin/stdout/stderr are detached so the launcher can't
+/// disturb the TUI still drawing on this terminal.
+#[cfg(target_os = "macos")]
+fn spawn_new_window(
+    program: &str,
+    args: &[String],
+    cwd: &str,
     session_id: &str,
+) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Stdio;
+
+    // A `*.command` file opened via `open` launches the user's default
+    // terminal (Terminal.app, or iTerm if they've set it) in a new window.
+    let safe: String = session_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let path = std::env::temp_dir().join(format!("aum-resume-{safe}.command"));
+    // ponytail: the script lingers in the temp dir until the OS clears it;
+    // reopening the same session overwrites it, so at most one per session.
+    std::fs::write(
+        &path,
+        format!("#!/bin/sh\n{}\n", resume_shell_line(program, args, cwd)),
+    )?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+
+    std::process::Command::new("open")
+        .arg(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
+/// Linux: no standard "new terminal window" mechanism, so this is best-effort.
+/// `x-terminal-emulator` is the Debian/Ubuntu alternatives entry pointing at
+/// the user's default emulator; if it's absent, `spawn` errors and the caller
+/// falls back to the exec hand-off.
+#[cfg(not(target_os = "macos"))]
+fn spawn_new_window(
+    program: &str,
+    args: &[String],
+    cwd: &str,
+    _session_id: &str,
+) -> std::io::Result<()> {
+    use std::process::Stdio;
+
+    std::process::Command::new("x-terminal-emulator")
+        .arg("-e")
+        .arg("sh")
+        .arg("-c")
+        .arg(resume_shell_line(program, args, cwd))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
+/// Fallback path: restore the terminal and `exec`-replace this process with the
+/// agent CLI, resuming `session_id` in `cwd`. Used only when no new window
+/// could be opened. Returns (an `Err`) only if `exec` itself fails.
+fn exec_handoff(
+    program: &str,
+    args: &[String],
     cwd: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use std::os::unix::process::CommandExt;
 
-    let (program, args) = platforms::entry_for_tab(tab).resume_command(session_id);
-
     ratatui::restore();
 
     let mut cmd = std::process::Command::new(program);
-    cmd.args(&args);
+    cmd.args(args);
     if !cwd.is_empty() {
         cmd.current_dir(cwd);
     }
@@ -489,4 +589,28 @@ fn launch_session(
     let err = cmd.exec();
     eprintln!("Failed to launch `{program}` to resume session: {err}");
     Err(Box::new(err))
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    #[test]
+    fn shell_quote_wraps_and_escapes() {
+        assert_eq!(shell_quote("/a/b c"), "'/a/b c'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn resume_shell_line_includes_cd_only_when_cwd_known() {
+        let args = vec!["--resume".to_string(), "abc".to_string()];
+        assert_eq!(
+            resume_shell_line("claude", &args, "/work/proj"),
+            "cd '/work/proj' && exec 'claude' '--resume' 'abc'"
+        );
+        assert_eq!(
+            resume_shell_line("cursor-agent", &["--resume=abc".to_string()], ""),
+            "exec 'cursor-agent' '--resume=abc'"
+        );
+    }
 }

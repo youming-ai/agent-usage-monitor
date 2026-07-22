@@ -35,7 +35,7 @@ aum stats         # print JSON usage report (no TUI)
 
 **Keys:** `Tab` / `←` / `→` switch tab · `↑` / `↓` focus & move through the sessions list · `Enter` resume the selected session in its agent CLI · `Esc` leave the list · `r` clear current tab · `q` quit
 
-Selecting a session and pressing `Enter` restores the terminal and hands off to the agent, resuming that session in its working directory. `aum` exits when it launches.
+Selecting a session and pressing `Enter` opens that session in a **new terminal window**, resuming it in its working directory — `aum` keeps running so you can launch more. On macOS the window is the default terminal (Terminal.app, or iTerm if that's your default); on Linux it uses `x-terminal-emulator`, and if no terminal emulator is found it falls back to handing off the current terminal (`aum` exits).
 
 - **Claude Code** — `claude --resume <id>` (verified)
 - **Codex** — `codex resume <id>` (verified)
