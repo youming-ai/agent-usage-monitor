@@ -406,37 +406,25 @@ fn run_tui(
                             state.reset_session_focus();
                         }
                     }
-                    // Down/j: enter the sessions list (highlighting the first
-                    // row) or move down within it. Up/k moves up once focused.
+                    // Down/j and Up/k enter the sessions list (highlighting the
+                    // first row) or move within it once focused.
                     KeyCode::Down | KeyCode::Char('j') => {
                         if let Ok(mut state) = app_state.write() {
-                            if state.sessions_focused {
-                                state.move_selection(1);
-                            } else {
-                                state.focus_sessions();
-                            }
+                            state.nav_down();
                         }
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
                         if let Ok(mut state) = app_state.write() {
-                            if state.sessions_focused {
-                                state.move_selection(-1);
-                            } else {
-                                state.focus_sessions();
-                            }
+                            state.nav_up();
                         }
                     }
                     // Enter: focus the list, then let the launcher resume
                     // the selected session without exposing its OS policy here.
                     KeyCode::Enter => {
-                        let selection = app_state.write().ok().and_then(|mut state| {
-                            if state.sessions_focused {
-                                state.selected_resume()
-                            } else {
-                                state.focus_sessions();
-                                None
-                            }
-                        });
+                        let selection = app_state
+                            .write()
+                            .ok()
+                            .and_then(|mut state| state.activate_sessions());
                         if let Some(selection) = selection {
                             launcher::resume(selection)?;
                         }

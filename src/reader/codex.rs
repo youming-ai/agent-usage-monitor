@@ -271,6 +271,29 @@ mod tests {
         )
     }
 
+    #[test]
+    fn session_meta_populates_session_id_and_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let meta = r#"{"type":"session_meta","timestamp":"2026-05-29T09:59:00Z","payload":{"cwd":"/Users/me/proj","id":"sess-42"}}"#.to_string();
+        write_rollout(
+            &sessions,
+            "rollout-meta.jsonl",
+            &[
+                meta,
+                turn_context("gpt-5.4"),
+                token_count("2026-05-29T10:00:00Z", 100, 50),
+            ],
+        );
+        let mut reader = reader_for(&sessions);
+        let records = reader.scan_all();
+        assert_eq!(records.len(), 1);
+        // The real id and working dir must be threaded through for resume.
+        assert_eq!(crate::state::resolve(records[0].session_id), "sess-42");
+        assert_eq!(crate::state::resolve(records[0].cwd), "/Users/me/proj");
+    }
+
     /// A rollout whose `last_token_usage` is `null` (as opposed to absent)
     /// must not fall back to the cumulative total as if it were a delta —
     /// that would record 10k, then 20k, then 30k as deltas summing to 60k

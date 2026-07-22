@@ -243,6 +243,11 @@ pub struct SessionSummary {
 /// disagree.
 #[derive(Debug, Clone)]
 pub struct SessionEntry {
+    /// Stable, unique per-row selection key: the label records were grouped
+    /// by. Unlike `session_id` (which is empty for sources that log no id, so
+    /// several rows would collide on it) this is distinct for every row by
+    /// construction, so the selection can always address exactly one row.
+    pub key: InternedString,
     pub label: &'static str,
     pub session_id: InternedString,
     /// Absolute working dir, or empty when the source has no real path.
@@ -348,6 +353,7 @@ impl PlatformState {
                     title
                 };
                 SessionEntry {
+                    key: session_key,
                     label,
                     session_id: a.session_id,
                     cwd: a.cwd,
@@ -369,10 +375,11 @@ pub struct AppState {
     /// Whether keyboard focus is on the sessions list (arrow keys move the
     /// selection and Enter launches, instead of switching tabs).
     pub sessions_focused: bool,
-    /// The selected session, tracked by `session_id` rather than row index so
-    /// live re-sorting of the list never moves the cursor onto a different
-    /// session between selecting and pressing Enter.
-    pub selected_session: Option<InternedString>,
+    /// The selected session, tracked by its stable [`SessionEntry::key`]
+    /// rather than row index (so live re-sorting never moves the cursor onto
+    /// a different session between selecting and pressing Enter) and rather
+    /// than `session_id` (which collides across id-less rows).
+    pub selected_key: Option<InternedString>,
 }
 
 impl AppState {
@@ -393,7 +400,7 @@ impl AppState {
             active_tab: Tab::ClaudeCode,
             available_tabs: Vec::new(),
             sessions_focused: false,
-            selected_session: None,
+            selected_key: None,
         }
     }
 
@@ -406,15 +413,15 @@ impl AppState {
     pub fn focus_sessions(&mut self) {
         let entries = self.active_session_entries();
         if entries.is_empty() {
-            self.selected_session = None;
+            self.selected_key = None;
             return;
         }
         self.sessions_focused = true;
         let valid = self
-            .selected_session
-            .is_some_and(|sid| entries.iter().any(|e| e.session_id == sid));
+            .selected_key
+            .is_some_and(|key| entries.iter().any(|e| e.key == key));
         if !valid {
-            self.selected_session = Some(entries[0].session_id);
+            self.selected_key = Some(entries[0].key);
         }
     }
 
@@ -427,27 +434,59 @@ impl AppState {
     pub fn move_selection(&mut self, delta: i32) {
         let entries = self.active_session_entries();
         if entries.is_empty() {
-            self.selected_session = None;
+            self.selected_key = None;
             return;
         }
         let cur = self
-            .selected_session
-            .and_then(|sid| entries.iter().position(|e| e.session_id == sid));
+            .selected_key
+            .and_then(|key| entries.iter().position(|e| e.key == key));
         let next = match cur {
             Some(i) => (i as i32 + delta).rem_euclid(entries.len() as i32) as usize,
             None => 0,
         };
-        self.selected_session = Some(entries[next].session_id);
+        self.selected_key = Some(entries[next].key);
+    }
+
+    /// Down/j: enter the sessions list (highlighting the first row) or move
+    /// down within it once focused.
+    pub fn nav_down(&mut self) {
+        if self.sessions_focused {
+            self.move_selection(1);
+        } else {
+            self.focus_sessions();
+        }
+    }
+
+    /// Up/k: enter the sessions list or move up within it once focused.
+    pub fn nav_up(&mut self) {
+        if self.sessions_focused {
+            self.move_selection(-1);
+        } else {
+            self.focus_sessions();
+        }
+    }
+
+    /// Enter: focus the sessions list, or (if already focused) return the
+    /// selected session to resume. `None` means "nothing to launch yet".
+    pub fn activate_sessions(&mut self) -> Option<ResumeSelection> {
+        if self.sessions_focused {
+            self.selected_resume()
+        } else {
+            self.focus_sessions();
+            None
+        }
     }
 
     /// The selected session as a named resume request. `None` means the
-    /// selection disappeared during a live refresh or lacks a usable id.
+    /// selection disappeared during a live refresh or lacks a usable id — a
+    /// row keyed by its label but without a `session_id` (e.g. an id-less
+    /// source) is selectable for display but cannot be resumed.
     pub fn selected_resume(&self) -> Option<ResumeSelection> {
-        let selected_session = self.selected_session?;
+        let selected_key = self.selected_key?;
         let entry = self
             .active_session_entries()
             .into_iter()
-            .find(|entry| entry.session_id == selected_session)?;
+            .find(|entry| entry.key == selected_key)?;
         (!resolve(entry.session_id).is_empty()).then_some(ResumeSelection {
             tab: self.active_tab,
             session_id: entry.session_id,
@@ -459,7 +498,7 @@ impl AppState {
     /// wholesale (tab switch, tab clear) so a stale selection can't launch.
     pub fn reset_session_focus(&mut self) {
         self.sessions_focused = false;
-        self.selected_session = None;
+        self.selected_key = None;
     }
 
     pub fn new() -> Self {
@@ -568,6 +607,29 @@ impl Default for AppState {
     }
 }
 
+/// Shared test-record builder — the single place that lists every
+/// `UsageRecord` field, so adding a field updates only this function instead
+/// of every test module. Callers override the few fields they care about via
+/// struct-update syntax: `UsageRecord { id: intern("x"), ..test_record(p, m) }`.
+#[cfg(test)]
+pub(crate) fn test_record(platform: Platform, model: &str) -> UsageRecord {
+    UsageRecord {
+        timestamp: Utc::now(),
+        platform,
+        model: intern(model),
+        session: intern("test"),
+        session_id: intern("test-sid"),
+        cwd: intern("/tmp/test"),
+        title: intern(""),
+        id: intern("test-id"),
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        cost_usd: 0.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,19 +650,11 @@ mod tests {
         id: &str,
     ) -> UsageRecord {
         UsageRecord {
-            timestamp: Utc::now(),
-            platform,
-            model: intern(model),
-            session: intern("test"),
-            session_id: intern("test-sid"),
-            cwd: intern("/tmp/test"),
-            title: intern(""),
             id: intern(id),
             input_tokens: input,
             output_tokens: output,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
             cost_usd: cost,
+            ..test_record(platform, model)
         }
     }
 
@@ -638,19 +692,13 @@ mod tests {
         id: &str,
     ) -> UsageRecord {
         UsageRecord {
-            timestamp: Utc::now(),
-            platform: Platform::ClaudeCode,
-            model: intern("opus-4"),
             session: intern(session),
             session_id: intern(sid),
             cwd: intern(cwd),
             title: intern(title),
             id: intern(id),
             input_tokens: tokens,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            cost_usd: 0.0,
+            ..test_record(Platform::ClaudeCode, "opus-4")
         }
     }
 
@@ -732,6 +780,35 @@ mod tests {
         let mut s = AppState::with_capacity(10);
         s.focus_sessions();
         assert!(!s.sessions_focused);
+        assert!(s.selected_resume().is_none());
+    }
+
+    #[test]
+    fn id_less_rows_are_individually_selectable_and_not_launchable() {
+        // Two sessions from a source that records no session id (empty sid).
+        // Tracked by row key (their labels), they must be distinct rows the
+        // cursor can address separately — the bug the key fix addresses.
+        let mut s = AppState::with_capacity(10);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                session_rec("proj-a", "", "", 100, "r1"),
+                session_rec("proj-b", "", "", 50, "r2"),
+            ],
+        );
+        let entries = s.active_session_entries();
+        assert_eq!(entries.len(), 2, "id-less rows must not collapse into one");
+
+        s.focus_sessions();
+        let first = s.selected_key;
+        s.move_selection(1);
+        assert_ne!(
+            s.selected_key, first,
+            "moving must land on a different id-less row"
+        );
+        // Neither row can launch: no session id to resume.
+        assert!(s.selected_resume().is_none());
+        s.move_selection(1);
         assert!(s.selected_resume().is_none());
     }
 

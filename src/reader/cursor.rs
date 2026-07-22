@@ -205,9 +205,9 @@ impl CursorReader {
         // rowid resume cursor, which was the root cause of silent data loss
         // after store.db recreation: a fresh db's rowids restart at 1, so a
         let session_id = extract_store_session_id(path);
-        let (project, raw_proj) = extract_store_project(path);
-        let cwd = decode_cursor_project_cwd(&raw_proj);
-        let session = session_label(&project, &session_id);
+        let project = extract_store_project(path);
+        let cwd = decode_cursor_project_cwd(&project.raw);
+        let session = session_label(&project.display, &session_id);
 
         let mut stmt = match conn
             .prepare("SELECT rowid, key, value FROM blobs WHERE rowid > 0 ORDER BY rowid")
@@ -254,15 +254,40 @@ impl UsageSource for CursorReader {
     }
 }
 
+/// A Cursor "project" identifier. `display` is the human-friendly label shown
+/// in the sessions list; `raw` is the original hyphen-encoded folder segment
+/// used to reconstruct the working directory. Bundled so the two strings can't
+/// be transposed at a call site.
+struct CursorProject {
+    display: String,
+    raw: String,
+}
+
+impl CursorProject {
+    fn unknown() -> Self {
+        Self {
+            display: "cursor".to_string(),
+            raw: String::new(),
+        }
+    }
+
+    fn from_encoded(raw: &str) -> Self {
+        Self {
+            display: prettify_project_id(raw),
+            raw: raw.to_string(),
+        }
+    }
+}
+
 fn transcript_meta_for(path: &Path, models: &HashMap<String, String>) -> TranscriptTurnState {
-    let (project, raw_project, conversation_id) = extract_transcript_paths(path);
-    let cwd = decode_cursor_project_cwd(&raw_project);
+    let (project, conversation_id) = extract_transcript_paths(path);
+    let cwd = decode_cursor_project_cwd(&project.raw);
     let model = models
         .get(&conversation_id)
         .cloned()
         .unwrap_or_else(|| "cursor-auto".to_string());
     TranscriptTurnState {
-        project,
+        project: project.display,
         cwd,
         conversation_id,
         model,
@@ -270,9 +295,8 @@ fn transcript_meta_for(path: &Path, models: &HashMap<String, String>) -> Transcr
     }
 }
 
-fn extract_transcript_paths(path: &Path) -> (String, String, String) {
-    let mut project = "cursor".to_string();
-    let mut raw_project = String::new();
+fn extract_transcript_paths(path: &Path) -> (CursorProject, String) {
+    let mut project = CursorProject::unknown();
     let mut conversation_id = String::new();
 
     for ancestor in path.ancestors() {
@@ -283,8 +307,7 @@ fn extract_transcript_paths(path: &Path) -> (String, String, String) {
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
                 {
-                    raw_project = proj.to_string();
-                    project = prettify_project_id(proj);
+                    project = CursorProject::from_encoded(proj);
                 }
                 break;
             }
@@ -302,7 +325,7 @@ fn extract_transcript_paths(path: &Path) -> (String, String, String) {
             .to_string();
     }
 
-    (project, raw_project, conversation_id)
+    (project, conversation_id)
 }
 
 fn extract_store_session_id(path: &Path) -> String {
@@ -313,7 +336,7 @@ fn extract_store_session_id(path: &Path) -> String {
         .to_string()
 }
 
-fn extract_store_project(path: &Path) -> (String, String) {
+fn extract_store_project(path: &Path) -> CursorProject {
     path.ancestors()
         .find_map(|a| {
             let name = a.file_name()?.to_str()?;
@@ -323,12 +346,12 @@ fn extract_store_project(path: &Path) -> (String, String) {
                 .parent()
                 .is_some_and(|p| p.file_name().is_some_and(|n| n == "chats"))
             {
-                Some((prettify_project_id(name), name.to_string()))
+                Some(CursorProject::from_encoded(name))
             } else {
                 None
             }
         })
-        .unwrap_or_else(|| ("cursor".to_string(), String::new()))
+        .unwrap_or_else(CursorProject::unknown)
 }
 
 fn prettify_project_id(raw: &str) -> String {

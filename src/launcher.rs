@@ -46,6 +46,19 @@ impl ResumeTarget {
     }
 }
 
+/// Spawn `cmd` fully detached and reap it on a background thread. The new
+/// terminal window owns its own I/O, so we neither wait for it nor hold its
+/// `Child`; the reaper thread prevents the exited launcher (notably macOS
+/// `open`, which returns immediately) from lingering as a zombie for the life
+/// of the long-running monitor.
+fn spawn_detached(cmd: &mut std::process::Command) -> std::io::Result<()> {
+    let mut child = cmd.spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 /// Single-quote a string for `/bin/sh`, escaping embedded quotes — so a cwd
 /// or arg containing spaces or shell metacharacters is passed through literally.
 fn shell_quote(s: &str) -> String {
@@ -95,13 +108,13 @@ fn spawn_new_window(target: &ResumeTarget) -> std::io::Result<()> {
     std::fs::write(&path, format!("#!/bin/sh\n{}\n", resume_shell_line(target)))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
 
-    std::process::Command::new("open")
-        .arg(&path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    Ok(())
+    spawn_detached(
+        std::process::Command::new("open")
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
 }
 
 /// One Linux terminal emulator plus the arguments needed before `sh -c`.
@@ -173,8 +186,8 @@ fn spawn_new_window(target: &ResumeTarget) -> std::io::Result<()> {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        match cmd.spawn() {
-            Ok(_) => return Ok(()),
+        match spawn_detached(&mut cmd) {
+            Ok(()) => return Ok(()),
             Err(e) => last_err = Some(e),
         }
     }
