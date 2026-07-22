@@ -223,15 +223,6 @@ pub struct UsageRecord {
     pub cache_creation_tokens: u64,
     pub cost_usd: f64,
 }
-impl UsageRecord {
-    pub fn is_usage(&self) -> bool {
-        self.input_tokens > 0
-            || self.output_tokens > 0
-            || self.cache_read_tokens > 0
-            || self.cache_creation_tokens > 0
-            || self.cost_usd > 0.0
-    }
-}
 
 /// Aggregated per-model totals.
 #[derive(Debug, Clone)]
@@ -258,6 +249,16 @@ pub struct SessionEntry {
     pub cwd: InternedString,
     pub tokens: u64,
     pub requests: u64,
+}
+
+/// The selected session and platform needed to build a resume command. This
+/// keeps selection lookup inside `AppState`; callers only hand the result to
+/// the launcher rather than reassembling tab, id, and working directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResumeSelection {
+    pub(crate) tab: Tab,
+    pub(crate) session_id: InternedString,
+    pub(crate) cwd: InternedString,
 }
 
 /// Per-platform state held in a `[PlatformState; Platform::COUNT]` array.
@@ -322,9 +323,7 @@ impl PlatformState {
             });
             e.tokens +=
                 r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens;
-            if r.is_usage() {
-                e.requests += 1;
-            }
+            e.requests += 1;
             // Prefer a real id/path if a later record in the group carries one.
             if resolve(e.session_id).is_empty() {
                 e.session_id = r.session_id;
@@ -441,14 +440,19 @@ impl AppState {
         self.selected_session = Some(entries[next].session_id);
     }
 
-    /// The currently selected session's `(session_id, cwd)`, if any. Empty
-    /// strings mean "unknown" (Cursor has no real cwd).
-    pub fn selected_launch(&self) -> Option<(InternedString, InternedString)> {
-        let sid = self.selected_session?;
-        self.active_session_entries()
-            .iter()
-            .find(|e| e.session_id == sid)
-            .map(|e| (e.session_id, e.cwd))
+    /// The selected session as a named resume request. `None` means the
+    /// selection disappeared during a live refresh or lacks a usable id.
+    pub fn selected_resume(&self) -> Option<ResumeSelection> {
+        let selected_session = self.selected_session?;
+        let entry = self
+            .active_session_entries()
+            .into_iter()
+            .find(|entry| entry.session_id == selected_session)?;
+        (!resolve(entry.session_id).is_empty()).then_some(ResumeSelection {
+            tab: self.active_tab,
+            session_id: entry.session_id,
+            cwd: entry.cwd,
+        })
     }
 
     /// Reset session focus/selection — call when the visible list changes
@@ -485,10 +489,8 @@ impl AppState {
                 reverse_model_aggregate(&mut p.sessions, &old);
             }
             p.total_cost += r.cost_usd;
-            if r.is_usage() {
-                p.total_calls += 1;
-                upsert_model_aggregate(&mut p.sessions, &r);
-            }
+            p.total_calls += 1;
+            upsert_model_aggregate(&mut p.sessions, &r);
             p.records.push_back(r);
         }
     }
@@ -710,18 +712,19 @@ mod tests {
         // Focus selects the top (highest-usage) row.
         s.focus_sessions();
         assert!(s.sessions_focused);
-        let (sid, cwd) = s.selected_launch().unwrap();
-        assert_eq!(resolve(sid), "bbb");
-        assert_eq!(resolve(cwd), "/work/b");
+        let resume = s.selected_resume().unwrap();
+        assert_eq!(resume.tab, Tab::ClaudeCode);
+        assert_eq!(resolve(resume.session_id), "bbb");
+        assert_eq!(resolve(resume.cwd), "/work/b");
         // Down moves to the second row.
         s.move_selection(1);
-        assert_eq!(resolve(s.selected_launch().unwrap().0), "aaa");
+        assert_eq!(resolve(s.selected_resume().unwrap().session_id), "aaa");
         // Down again wraps back to the top.
         s.move_selection(1);
-        assert_eq!(resolve(s.selected_launch().unwrap().0), "bbb");
+        assert_eq!(resolve(s.selected_resume().unwrap().session_id), "bbb");
         // Up wraps to the bottom.
         s.move_selection(-1);
-        assert_eq!(resolve(s.selected_launch().unwrap().0), "aaa");
+        assert_eq!(resolve(s.selected_resume().unwrap().session_id), "aaa");
     }
 
     #[test]
@@ -729,7 +732,7 @@ mod tests {
         let mut s = AppState::with_capacity(10);
         s.focus_sessions();
         assert!(!s.sessions_focused);
-        assert!(s.selected_launch().is_none());
+        assert!(s.selected_resume().is_none());
     }
 
     #[test]
