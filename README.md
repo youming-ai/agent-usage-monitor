@@ -1,6 +1,6 @@
 # Agent Usage Monitor
 
-Real-time terminal dashboard for **Claude Code**, **Codex**, **opencode**, **Kimi Code**, **pi**, **openclaw**, **hermes-agent**, **Factory AI**, **Grok Build**, **Cursor CLI**, **Copilot CLI**, **Antigravity CLI**, **MiMo Code** & **omp (Oh My Pi)** usage — quota windows, token usage, and cost, read straight from local log files. No API keys required. The command is `aum`.
+Real-time terminal dashboard for **Claude Code**, **Codex** & **Cursor CLI** usage — quota windows, token usage, and cost, read straight from local log files. No API keys required. The command is `aum`.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -30,18 +30,7 @@ aum stats         # print JSON usage report (no TUI)
 |------|---------|-------------|
 | `--claude-path` | `~/.claude/projects` | Claude Code data directory |
 | `--codex-path` | `~/.codex` | Codex data directory |
-| `--opencode-path` | `$XDG_DATA_HOME/opencode` | opencode data directory |
-| `--kimi-code-path` | `~/.kimi-code` | Kimi Code data directory |
-| `--pi-path` | `~/.pi/agent/sessions` | pi data directory |
-| `--openclaw-path` | `~/.openclaw/agents` | openclaw data directory |
-| `--hermes-path` | `~/.hermes` | hermes-agent data directory |
-| `--factory-path` | `~/.factory/projects` | Factory AI data directory |
-| `--grok-path` | `~/.grok` | Grok Build data directory |
 | `--cursor-path` | `~/.cursor` | Cursor CLI data directory |
-| `--copilot-path` | `~/.copilot` | Copilot CLI data directory |
-| `--antigravity-path` | `~/.gemini/antigravity-cli` | Antigravity CLI data directory |
-| `--mimo-code-path` | `~/.local/share/mimocode` | MiMo Code data directory |
-| `--omp-path` | `~/.omp/agent/sessions` | omp (Oh My Pi) data directory |
 | `-r, --refresh` | `5` | Poll interval, in seconds |
 
 **Keys:** `Tab` / `←` / `→` switch tab · `r` clear current tab · `q` quit
@@ -94,18 +83,7 @@ Configuration is stored in `~/.config/aum/config.toml` (or platform equivalent).
 
 - `claude_path` - Path to Claude Code data directory
 - `codex_path` - Path to Codex data directory
-- `opencode_path` - Path to opencode data directory
-- `kimi_code_path` - Path to Kimi Code data directory
-- `pi_path` - Path to pi data directory
-- `openclaw_path` - Path to openclaw data directory
-- `hermes_path` - Path to hermes-agent data directory
-- `factory_path` - Path to Factory AI data directory
-- `grok_path` - Path to Grok Build data directory
 - `cursor_path` - Path to Cursor CLI data directory
-- `copilot_path` - Path to Copilot CLI data directory
-- `antigravity_path` - Path to Antigravity CLI data directory
-- `mimo_code_path` - Path to MiMo Code data directory
-- `omp_path` - Path to omp (Oh My Pi) data directory
 - `refresh` - Polling interval in seconds
 - `max_records` - Maximum number of records to keep in memory
 
@@ -113,12 +91,7 @@ Example:
 ```bash
 aum config set refresh 2
 aum config set max_records 200
-aum config set grok_path ~/.grok
 aum config set cursor_path ~/.cursor
-aum config set copilot_path ~/.copilot
-aum config set antigravity_path ~/.gemini/antigravity-cli
-aum config set mimo_code_path ~/.local/share/mimocode
-aum config set omp_path ~/.omp/agent/sessions
 ```
 
 ## Real-time updates
@@ -171,7 +144,7 @@ Add to your client's MCP config (e.g., `~/.config/claude-code/.mcp.json`):
 | URI | Description |
 |---|---|
 | `aum://summary` | Cross-platform totals (calls, cost, platforms with data) |
-| `aum://platforms` | 14-platform index with availability and resolved paths |
+| `aum://platforms` | Platform index with availability and resolved paths |
 
 ### Manual smoke test
 
@@ -188,7 +161,7 @@ Each agent tab uses the same layout; only the accent color and data source chang
 ### Claude Code (quota + usage)
 
 ```
- CLAUDE   codex   opencode   kimi-code   GROK   CURSOR                 ✓ you@mail.com
+ CLAUDE   codex   CURSOR                                              ✓ you@mail.com
 ───────────────────────────────────────────────────────────────────────────────
  ✓ 5h ▓▓▓▓▓▓▓▓▓▓░░  82%  resets 2h30m
  ✓ 7d ▓▓▓▓▓▓░░░░░░  54%  resets 4d6h
@@ -204,27 +177,10 @@ Each agent tab uses the same layout; only the accent color and data source chang
  42 calls · $12.34                                                    tab·r·q
 ```
 
-### Grok Build (usage only)
-
-```
- GROK   CURSOR   CLAUDE   codex
-───────────────────────────────────────────────────────────────────────────────
- (no quota API — usage from local session logs)
-┌ GROK models (8) ──────────────────────────────────────────────────────────────┐
-│ MODEL                 INPUT    OUTPUT   CACHE   COST     #                    │
-│ grok-composer-2.5-fast  45.2k    0       0      $0.12    8                    │
-└───────────────────────────────────────────────────────────────────────────────┘
-┌ sessions ─────────────────────────────────────────────────────────────────────┐
-│ SESSION                       TOKENS    REQUESTS                              │
-│ my-project 019ea524           12.1k     4                                     │
-└───────────────────────────────────────────────────────────────────────────────┘
- 8 calls · $0.12                                                      tab·r·q
-```
-
 ### Cursor CLI (usage only)
 
 ```
- CURSOR   GROK   CLAUDE   codex
+ CURSOR   CLAUDE   codex
 ───────────────────────────────────────────────────────────────────────────────
  (no quota API — usage from transcripts and store.db)
 ┌ CURSOR models (3) ────────────────────────────────────────────────────────────┐
@@ -242,7 +198,7 @@ Each agent tab uses the same layout; only the accent color and data source chang
 - **models** — per-model totals: tokens, cost, and request count.
 - **sessions** — per-conversation usage (tokens, requests), labelled `<dir> <id>` so multiple sessions in one project stay distinct.
 
-Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex magenta, OpenCode peach, Kimi Code cyan, Pi sage, OpenClaw lobster orange, Hermes gold, Factory orange, Grok purple, Cursor cyan, Copilot green, Antigravity blue, MiMo Code Xiaomi orange, omp indigo); everything else stays default or dimmed. These are defined in `src/state/app_state.rs` (`Tab::primary_color`).
+Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex magenta, Cursor cyan); everything else stays default or dimmed. These are defined in `src/state/app_state.rs` (`Tab::primary_color`).
 
 ## How it works
 
@@ -250,18 +206,7 @@ Each platform uses an accent color matched to its official CLI theme or brand pa
 
 - **Claude Code** — `~/.claude/projects/**/*.jsonl`
 - **Codex** — `~/.codex/sessions/**/rollout-*.jsonl`
-- **opencode** — `$XDG_DATA_HOME/opencode/opencode.db` (SQLite, read-only)
-- **Kimi Code** — `~/.kimi-code/sessions/**/agents/*/wire.jsonl`
-- **pi** — `~/.pi/agent/sessions/**/*.jsonl`
-- **openclaw** — `~/.openclaw/agents/**/sessions/*.jsonl`
-- **hermes-agent** — `~/.hermes/state.db` (SQLite, read-only)
-- **Factory AI** — `~/.factory/projects/**/<session-uuid>.jsonl`
-- **Grok Build** — `~/.grok/sessions/**/<session-id>/updates.jsonl` (+ `summary.json` for session metadata)
 - **Cursor CLI** — `~/.cursor/projects/**/agent-transcripts/**/*.jsonl`, `~/.cursor/chats/**/store.db`, and `~/.config/cursor/chats/**/store.db`
-- **Copilot CLI** — `~/.copilot/session-state/*/events.jsonl`
-- **Antigravity CLI** — `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl`
-- **MiMo Code** — `~/.local/share/mimocode/mimocode.db` (SQLite, read-only)
-- **omp (Oh My Pi)** — `~/.omp/agent/sessions/**/*.jsonl`
 
 Quota percentages come from the official endpoints, authenticated with your existing local credentials (Claude: macOS Keychain or `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`). Cost is computed from built-in pricing tables for Anthropic & OpenAI models; unknown models show `$0.00`.
 

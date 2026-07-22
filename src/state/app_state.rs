@@ -80,41 +80,19 @@ impl AgentPaths {
 pub enum Platform {
     ClaudeCode,
     Codex,
-    OpenCode,
-    KimiCode,
-    Pi,
-    OpenClaw,
-    Hermes,
-    Factory,
-    Grok,
     Cursor,
-    Copilot,
-    Antigravity,
-    MimoCode,
-    Omp,
 }
 
 impl Platform {
     /// Number of platform variants — used to size the fixed array in `AppState`.
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 3;
 
     /// Zero-based index for array access. Must stay in sync with variant order.
     pub const fn index(self) -> usize {
         match self {
             Platform::ClaudeCode => 0,
             Platform::Codex => 1,
-            Platform::OpenClaw => 2,
-            Platform::Hermes => 3,
-            Platform::OpenCode => 4,
-            Platform::KimiCode => 5,
-            Platform::Pi => 6,
-            Platform::Factory => 7,
-            Platform::Grok => 8,
-            Platform::Cursor => 9,
-            Platform::Copilot => 10,
-            Platform::Antigravity => 11,
-            Platform::MimoCode => 12,
-            Platform::Omp => 13,
+            Platform::Cursor => 2,
         }
     }
 }
@@ -123,18 +101,7 @@ impl Platform {
 pub enum Tab {
     ClaudeCode,
     Codex,
-    OpenCode,
-    KimiCode,
-    Pi,
-    OpenClaw,
-    Hermes,
-    Factory,
-    Grok,
     Cursor,
-    Copilot,
-    Antigravity,
-    MimoCode,
-    Omp,
 }
 
 impl Tab {
@@ -144,18 +111,7 @@ impl Tab {
         match self {
             Tab::ClaudeCode => 0,
             Tab::Codex => 1,
-            Tab::OpenClaw => 2,
-            Tab::Hermes => 3,
-            Tab::OpenCode => 4,
-            Tab::KimiCode => 5,
-            Tab::Pi => 6,
-            Tab::Factory => 7,
-            Tab::Grok => 8,
-            Tab::Cursor => 9,
-            Tab::Copilot => 10,
-            Tab::Antigravity => 11,
-            Tab::MimoCode => 12,
-            Tab::Omp => 13,
+            Tab::Cursor => 2,
         }
     }
 
@@ -179,18 +135,7 @@ impl Tab {
         match self {
             Tab::ClaudeCode => "CLAUDE",
             Tab::Codex => "CODEX",
-            Tab::OpenClaw => "OPENCLAW",
-            Tab::Hermes => "HERMES",
-            Tab::OpenCode => "OPENCODE",
-            Tab::KimiCode => "KIMI-CODE",
-            Tab::Pi => "PI",
-            Tab::Factory => "FACTORY",
-            Tab::Grok => "GROK",
             Tab::Cursor => "CURSOR",
-            Tab::Copilot => "COPILOT",
-            Tab::Antigravity => "ANTIGRAVITY",
-            Tab::MimoCode => "MIMO-CODE",
-            Tab::Omp => "OMP",
         }
     }
 
@@ -200,18 +145,7 @@ impl Tab {
         match self {
             Tab::ClaudeCode => ratatui::style::Color::Rgb(217, 119, 87),
             Tab::Codex => ratatui::style::Color::Rgb(215, 95, 215),
-            Tab::OpenClaw => ratatui::style::Color::Rgb(255, 90, 45),
-            Tab::Hermes => ratatui::style::Color::Rgb(255, 215, 0),
-            Tab::OpenCode => ratatui::style::Color::Rgb(250, 178, 131),
-            Tab::KimiCode => ratatui::style::Color::Rgb(103, 232, 249),
-            Tab::Pi => ratatui::style::Color::Rgb(138, 190, 183),
-            Tab::Factory => ratatui::style::Color::Rgb(242, 123, 47),
-            Tab::Grok => ratatui::style::Color::Rgb(187, 154, 247),
             Tab::Cursor => ratatui::style::Color::Rgb(136, 192, 208),
-            Tab::Copilot => ratatui::style::Color::Rgb(35, 134, 54),
-            Tab::Antigravity => ratatui::style::Color::Rgb(66, 133, 244),
-            Tab::MimoCode => ratatui::style::Color::Rgb(255, 103, 0),
-            Tab::Omp => ratatui::style::Color::Rgb(129, 140, 248),
         }
     }
 
@@ -222,52 +156,16 @@ impl Tab {
         match p {
             Platform::ClaudeCode => Tab::ClaudeCode,
             Platform::Codex => Tab::Codex,
-            Platform::OpenClaw => Tab::OpenClaw,
-            Platform::Hermes => Tab::Hermes,
-            Platform::OpenCode => Tab::OpenCode,
-            Platform::KimiCode => Tab::KimiCode,
-            Platform::Pi => Tab::Pi,
-            Platform::Factory => Tab::Factory,
-            Platform::Grok => Tab::Grok,
             Platform::Cursor => Tab::Cursor,
-            Platform::Copilot => Tab::Copilot,
-            Platform::Antigravity => Tab::Antigravity,
-            Platform::MimoCode => Tab::MimoCode,
-            Platform::Omp => Tab::Omp,
         }
     }
 
     pub const fn has_quota_api(self) -> bool {
-        matches!(
-            self,
-            Tab::ClaudeCode
-                | Tab::Codex
-                | Tab::Copilot
-                | Tab::Cursor
-                | Tab::Antigravity
-                | Tab::OpenCode
-                | Tab::Grok
-                | Tab::Factory
-        )
+        matches!(self, Tab::ClaudeCode | Tab::Codex | Tab::Cursor)
     }
 
     pub fn all() -> &'static [Tab] {
-        &[
-            Tab::ClaudeCode,
-            Tab::Codex,
-            Tab::Cursor,
-            Tab::OpenClaw,
-            Tab::Hermes,
-            Tab::Omp,
-            Tab::Copilot,
-            Tab::Antigravity,
-            Tab::OpenCode,
-            Tab::Factory,
-            Tab::Grok,
-            Tab::KimiCode,
-            Tab::MimoCode,
-            Tab::Pi,
-        ]
+        &[Tab::ClaudeCode, Tab::Codex, Tab::Cursor]
     }
 
     pub fn default_path(self) -> std::path::PathBuf {
@@ -275,35 +173,14 @@ impl Tab {
         match self {
             Tab::ClaudeCode => home.join(".claude/projects"),
             Tab::Codex => home.join(".codex"),
-            Tab::OpenClaw => home.join(".openclaw/agents"),
-            Tab::Hermes => home.join(".hermes"),
-            Tab::OpenCode => crate::config::xdg_data_dir().join("opencode"),
-            Tab::KimiCode => home.join(".kimi-code"),
-            Tab::Pi => home.join(".pi/agent/sessions"),
-            Tab::Factory => home.join(".factory/projects"),
-            Tab::Grok => home.join(".grok"),
             Tab::Cursor => home.join(".cursor"),
-            Tab::Copilot => home.join(".copilot"),
-            Tab::Antigravity => home.join(".gemini/antigravity-cli"),
-            Tab::MimoCode => crate::config::xdg_data_dir().join("mimocode"),
-            Tab::Omp => home.join(".omp/agent/sessions"),
         }
     }
 
     /// Shared detection logic: does the agent's data exist at this path?
     fn is_available_at_path(path: &std::path::Path, tab: Tab) -> bool {
         match tab {
-            Tab::OpenClaw => path.exists(),
-            Tab::Hermes => path.join("state.db").exists(),
-            Tab::OpenCode => path.join("opencode.db").exists(),
-            Tab::KimiCode => path.exists(),
-            Tab::Pi => path.exists(),
-            Tab::Factory => path.exists(),
-            Tab::Grok => path.join("sessions").exists(),
             Tab::Cursor => path.join("projects").exists() || path.join("chats").exists(),
-            Tab::Copilot => path.join("session-state").exists(),
-            Tab::Antigravity => path.join("brain").exists(),
-            Tab::MimoCode => path.join("mimocode.db").exists(),
             _ => path.exists(),
         }
     }
@@ -408,22 +285,8 @@ impl AppState {
             seen_ids: HashSet::new(),
         };
         Self {
-            platforms: [
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-                make(),
-            ],
+            // ponytail: size-agnostic init, tracks Platform::COUNT automatically
+            platforms: std::array::from_fn(|_| make()),
             active_tab: Tab::ClaudeCode,
             available_tabs: Vec::new(),
         }
@@ -582,18 +445,7 @@ mod tests {
             let p = match tab {
                 Tab::ClaudeCode => Platform::ClaudeCode,
                 Tab::Codex => Platform::Codex,
-                Tab::OpenClaw => Platform::OpenClaw,
-                Tab::Hermes => Platform::Hermes,
-                Tab::OpenCode => Platform::OpenCode,
-                Tab::KimiCode => Platform::KimiCode,
-                Tab::Pi => Platform::Pi,
-                Tab::Factory => Platform::Factory,
-                Tab::Grok => Platform::Grok,
                 Tab::Cursor => Platform::Cursor,
-                Tab::Copilot => Platform::Copilot,
-                Tab::Antigravity => Platform::Antigravity,
-                Tab::MimoCode => Platform::MimoCode,
-                Tab::Omp => Platform::Omp,
             };
             assert_eq!(tab.index(), p.index(), "mismatch for {tab:?} / {p:?}");
         }
@@ -673,18 +525,7 @@ mod tests {
         let paths = AgentPaths::new(HashMap::from([
             (Tab::ClaudeCode, claude),
             (Tab::Codex, missing.join("codex")),
-            (Tab::OpenCode, missing.join("opencode")),
-            (Tab::KimiCode, missing.join("kimi")),
-            (Tab::Pi, missing.join("pi")),
-            (Tab::OpenClaw, missing.join("openclaw")),
-            (Tab::Hermes, missing.join("hermes")),
-            (Tab::Factory, missing.join("factory")),
-            (Tab::Grok, missing.join("grok")),
             (Tab::Cursor, missing.join("cursor")),
-            (Tab::Copilot, missing.join("copilot")),
-            (Tab::Antigravity, missing.join("antigravity")),
-            (Tab::MimoCode, missing.join("mimocode")),
-            (Tab::Omp, missing.join("omp")),
         ]));
 
         let mut state = AppState::new();
@@ -744,19 +585,6 @@ mod tests {
         let r = rec(Platform::ClaudeCode, "opus-4", 0, 0, 1.5);
         reverse_model_aggregate(&mut map, &r);
         assert_eq!(map.get(&intern("opus-4")).unwrap().total_cost, 0.0);
-    }
-
-    #[test]
-    fn opencode_default_path_uses_xdg_not_macos_app_support() {
-        let p = Tab::OpenCode.default_path();
-        assert!(
-            !p.to_string_lossy().contains("Application Support"),
-            "opencode should use XDG, got {p:?}"
-        );
-        assert!(
-            p.ends_with("opencode"),
-            "opencode default path should end with 'opencode', got {p:?}"
-        );
     }
 
     #[test]

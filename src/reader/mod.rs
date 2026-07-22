@@ -1,17 +1,7 @@
-pub mod antigravity;
 pub mod claude;
 pub mod codex;
-pub mod copilot;
 pub mod cursor;
-pub mod factory;
-pub mod grok;
-pub mod hermes;
-pub mod kimi_code;
-pub mod openclaw;
-pub mod pi;
 pub mod pricing;
-pub(crate) mod session_jsonl;
-pub(crate) mod sqlite_message_reader;
 
 use crate::state::{Platform, UsageRecord};
 use std::collections::{HashMap, HashSet};
@@ -181,12 +171,6 @@ pub(crate) fn is_uuid(stem: &str) -> bool {
     })
 }
 
-/// True when the file stem matches `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
-pub(crate) fn is_uuid_jsonl(path: &Path) -> bool {
-    path.file_stem()
-        .and_then(|s| s.to_str())
-        .is_some_and(is_uuid)
-}
 
 /// Label for a single conversation: working-dir basename plus a short id
 /// suffix so multiple sessions in the same directory stay distinct.
@@ -253,12 +237,4 @@ mod tests {
         assert_eq!(basename("repo"), "repo");
     }
 
-    #[test]
-    fn is_uuid_jsonl_matches_session_files() {
-        use std::path::Path;
-        assert!(is_uuid_jsonl(Path::new(
-            "a3f2c1d8-10e5-4b2a-9c1d-ef0123456789.jsonl"
-        )));
-        assert!(!is_uuid_jsonl(Path::new("session.jsonl")));
-    }
 }

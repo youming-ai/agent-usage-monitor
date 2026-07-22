@@ -1,4 +1,0 @@
-{"timestamp":1000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk"},"_meta":{"promptId":"prompt-a","totalTokens":1000,"agentTimestampMs":1000000}}}
-{"timestamp":1001,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call"},"_meta":{"promptId":"prompt-a","totalTokens":1500,"agentTimestampMs":1001000}}}
-{"timestamp":1002,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk"},"_meta":{"promptId":"prompt-b","totalTokens":2200,"agentTimestampMs":1002000}}}
-{"timestamp":1003,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call"},"_meta":{"promptId":"prompt-b","totalTokens":2500,"agentTimestampMs":1003000}}}
