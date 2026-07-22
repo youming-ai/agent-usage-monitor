@@ -1,11 +1,12 @@
 use agent_usage_monitor::cli;
 use agent_usage_monitor::config::{self, Config};
 use agent_usage_monitor::event::{AppEvent, EventLoop};
+use agent_usage_monitor::launcher;
 use agent_usage_monitor::mcp;
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
 use agent_usage_monitor::readers::{self, PlatformReaders};
-use agent_usage_monitor::state::{AppState, Platform, Tab, resolve};
+use agent_usage_monitor::state::{AppState, Platform, Tab};
 use agent_usage_monitor::stats;
 use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
@@ -425,37 +426,19 @@ fn run_tui(
                             }
                         }
                     }
-                    // Enter: focus the list, then resume the selected session.
+                    // Enter: focus the list, then let the launcher resume
+                    // the selected session without exposing its OS policy here.
                     KeyCode::Enter => {
-                        let launch = app_state.write().ok().and_then(|mut state| {
+                        let selection = app_state.write().ok().and_then(|mut state| {
                             if state.sessions_focused {
-                                state
-                                    .selected_launch()
-                                    .map(|(sid, cwd)| (state.active_tab, sid, cwd))
+                                state.selected_resume()
                             } else {
                                 state.focus_sessions();
                                 None
                             }
                         });
-                        if let Some((tab, sid, cwd)) = launch {
-                            let sid = resolve(sid).to_string();
-                            let cwd = resolve(cwd).to_string();
-                            if !sid.is_empty() {
-                                let (program, args) =
-                                    platforms::entry_for_tab(tab).resume_command(&sid);
-                                // Open the session in a new terminal window and
-                                // keep monitoring. If no new window could be
-                                // opened (e.g. no terminal emulator on Linux),
-                                // fall back to handing off the current terminal
-                                // by exec-replacing this process.
-                                if let Err(e) = spawn_new_window(program, &args, &cwd, &sid) {
-                                    warn!(
-                                        "could not open a new terminal window ({e}); \
-                                         handing off the current terminal instead"
-                                    );
-                                    return exec_handoff(program, &args, &cwd);
-                                }
-                            }
+                        if let Some(selection) = selection {
+                            launcher::resume(selection)?;
                         }
                     }
                     KeyCode::Char('r') => {
@@ -472,177 +455,4 @@ fn run_tui(
     }
 
     Ok(())
-}
-
-/// Single-quote a string for `/bin/sh`, escaping embedded quotes — so a cwd
-/// or arg containing spaces or shell metacharacters is passed through literally.
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// The `/bin/sh` command that resumes a session: `cd <cwd> && exec <prog> …`
-/// (the `cd` is omitted when the working directory is unknown). Shared by the
-/// macOS `.command` script and the Linux `sh -c` invocation.
-fn resume_shell_line(program: &str, args: &[String], cwd: &str) -> String {
-    let mut line = String::new();
-    if !cwd.is_empty() {
-        line.push_str(&format!("cd {} && ", shell_quote(cwd)));
-    }
-    line.push_str("exec ");
-    line.push_str(&shell_quote(program));
-    for a in args {
-        line.push(' ');
-        line.push_str(&shell_quote(a));
-    }
-    line
-}
-
-/// Open the resume command in a new terminal window, leaving `aum` running.
-/// `Ok` means a window was launched; `Err` means the caller should fall back
-/// to `exec_handoff`. stdin/stdout/stderr are detached so the launcher can't
-/// disturb the TUI still drawing on this terminal.
-#[cfg(target_os = "macos")]
-fn spawn_new_window(
-    program: &str,
-    args: &[String],
-    cwd: &str,
-    session_id: &str,
-) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    use std::process::Stdio;
-
-    // A `*.command` file opened via `open` launches the user's default
-    // terminal (Terminal.app, or iTerm if they've set it) in a new window.
-    let safe: String = session_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let path = std::env::temp_dir().join(format!("aum-resume-{safe}.command"));
-    // ponytail: the script lingers in the temp dir until the OS clears it;
-    // reopening the same session overwrites it, so at most one per session.
-    std::fs::write(
-        &path,
-        format!("#!/bin/sh\n{}\n", resume_shell_line(program, args, cwd)),
-    )?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
-
-    std::process::Command::new("open")
-        .arg(&path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    Ok(())
-}
-
-/// Linux: no standard "new terminal window" mechanism, so try common terminal
-/// emulators in order. If none succeed, `spawn` errors and the caller falls
-/// back to the exec hand-off.
-#[allow(dead_code)]
-fn spawn_new_window_linux(
-    program: &str,
-    args: &[String],
-    cwd: &str,
-    _session_id: &str,
-) -> std::io::Result<()> {
-    use std::process::Stdio;
-    let shell_line = resume_shell_line(program, args, cwd);
-    let candidates: &[(&str, &[&str])] = &[
-        ("x-terminal-emulator", &["-e"]),
-        ("ghostty", &["-e"]),
-        ("kitty", &["--"]),
-        ("alacritty", &["-e"]),
-        ("wezterm", &["start", "--"]),
-        ("foot", &[]),
-        ("gnome-terminal", &["--"]),
-        ("konsole", &["-e"]),
-        ("xfce4-terminal", &["-e"]),
-        ("xterm", &["-e"]),
-    ];
-
-    let mut last_err = None;
-    for &(emu, emu_args) in candidates {
-        let mut cmd = std::process::Command::new(emu);
-        cmd.args(emu_args);
-        cmd.arg("sh").arg("-c").arg(&shell_line);
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        match cmd.spawn() {
-            Ok(_) => return Ok(()),
-            Err(e) => last_err = Some(e),
-        }
-    }
-
-    Err(last_err.unwrap_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no supported terminal emulator found",
-        )
-    }))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn spawn_new_window(
-    program: &str,
-    args: &[String],
-    cwd: &str,
-    session_id: &str,
-) -> std::io::Result<()> {
-    spawn_new_window_linux(program, args, cwd, session_id)
-}
-
-/// Fallback path: restore the terminal and `exec`-replace this process with the
-/// agent CLI, resuming `session_id` in `cwd`. Used only when no new window
-/// could be opened. Returns (an `Err`) only if `exec` itself fails.
-fn exec_handoff(
-    program: &str,
-    args: &[String],
-    cwd: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use std::os::unix::process::CommandExt;
-
-    ratatui::restore();
-
-    let mut cmd = std::process::Command::new(program);
-    cmd.args(args);
-    if !cwd.is_empty() {
-        cmd.current_dir(cwd);
-    }
-
-    // `exec` only returns on failure. Surface it plainly on the now-restored
-    // terminal so the user knows why nothing launched.
-    let err = cmd.exec();
-    eprintln!("Failed to launch `{program}` to resume session: {err}");
-    Err(Box::new(err))
-}
-
-#[cfg(test)]
-mod launch_tests {
-    use super::*;
-
-    #[test]
-    fn shell_quote_wraps_and_escapes() {
-        assert_eq!(shell_quote("/a/b c"), "'/a/b c'");
-        assert_eq!(shell_quote("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn resume_shell_line_includes_cd_only_when_cwd_known() {
-        let args = vec!["--resume".to_string(), "abc".to_string()];
-        assert_eq!(
-            resume_shell_line("claude", &args, "/work/proj"),
-            "cd '/work/proj' && exec 'claude' '--resume' 'abc'"
-        );
-        assert_eq!(
-            resume_shell_line("cursor-agent", &["--resume=abc".to_string()], ""),
-            "exec 'cursor-agent' '--resume=abc'"
-        );
-    }
 }
