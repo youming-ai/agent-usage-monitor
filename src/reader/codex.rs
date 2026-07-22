@@ -16,6 +16,9 @@ use super::find_recursive;
 struct FileState {
     model: String,
     dir: String,
+    /// Full working-directory path (from `session_meta`/`turn_context` `cwd`),
+    /// kept alongside `dir` (its basename) so a resume can launch there.
+    cwd: String,
     sid: String,
 }
 
@@ -59,6 +62,7 @@ impl CodexReader {
             |file| FileState {
                 model: "unknown".to_string(),
                 dir: "codex".to_string(),
+                cwd: String::new(),
                 sid: extract_codex_project(file),
             },
             read_codex_from_offset,
@@ -100,6 +104,7 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         let payload = v.get("payload");
         if let Some(cwd) = payload.and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
             st.dir = crate::reader::basename(cwd);
+            st.cwd = cwd.to_string();
         }
         if let Some(id) = payload.and_then(|p| p.get("id")).and_then(|i| i.as_str()) {
             st.sid = id.to_string();
@@ -121,6 +126,7 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
             .and_then(|c| c.as_str())
         {
             st.dir = crate::reader::basename(cwd);
+            st.cwd = cwd.to_string();
         }
         return None;
     }
@@ -207,6 +213,8 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         platform: Platform::Codex,
         model: crate::state::intern(&st.model),
         session: crate::state::intern(&st.session()),
+        session_id: crate::state::intern(&st.sid),
+        cwd: crate::state::intern(&st.cwd),
         id: crate::state::intern(&record_id),
         input_tokens: delta_input,
         output_tokens: delta_output,

@@ -5,7 +5,7 @@ use agent_usage_monitor::mcp;
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
 use agent_usage_monitor::readers::{self, PlatformReaders};
-use agent_usage_monitor::state::{AppState, Platform, Tab};
+use agent_usage_monitor::state::{AppState, Platform, Tab, resolve};
 use agent_usage_monitor::stats;
 use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
@@ -376,21 +376,81 @@ fn run_tui(
             match event {
                 AppEvent::Tick => {}
                 AppEvent::Key(key) => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Tab | KeyCode::Right => {
+                    KeyCode::Char('q') => break,
+                    // Esc backs out of session-selection mode; quits otherwise.
+                    KeyCode::Esc => {
                         if let Ok(mut state) = app_state.write() {
+                            if state.sessions_focused {
+                                state.unfocus_sessions();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    // Tab/←/→ switch tabs only when not selecting a session, so
+                    // the arrow keys can drive the list once it has focus.
+                    KeyCode::Tab | KeyCode::Right => {
+                        if let Ok(mut state) = app_state.write()
+                            && !state.sessions_focused
+                        {
                             state.active_tab = state.active_tab.next_in(&state.available_tabs);
+                            state.reset_session_focus();
                         }
                     }
                     KeyCode::Left => {
-                        if let Ok(mut state) = app_state.write() {
+                        if let Ok(mut state) = app_state.write()
+                            && !state.sessions_focused
+                        {
                             state.active_tab = state.active_tab.prev_in(&state.available_tabs);
+                            state.reset_session_focus();
+                        }
+                    }
+                    // Down/j: enter the sessions list (highlighting the first
+                    // row) or move down within it. Up/k moves up once focused.
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if let Ok(mut state) = app_state.write() {
+                            if state.sessions_focused {
+                                state.move_selection(1);
+                            } else {
+                                state.focus_sessions();
+                            }
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if let Ok(mut state) = app_state.write() {
+                            if state.sessions_focused {
+                                state.move_selection(-1);
+                            } else {
+                                state.focus_sessions();
+                            }
+                        }
+                    }
+                    // Enter: focus the list, then resume the selected session.
+                    KeyCode::Enter => {
+                        let launch = app_state.write().ok().and_then(|mut state| {
+                            if state.sessions_focused {
+                                state
+                                    .selected_launch()
+                                    .map(|(sid, cwd)| (state.active_tab, sid, cwd))
+                            } else {
+                                state.focus_sessions();
+                                None
+                            }
+                        });
+                        if let Some((tab, sid, cwd)) = launch {
+                            let sid = resolve(sid).to_string();
+                            let cwd = resolve(cwd).to_string();
+                            if !sid.is_empty() {
+                                // exec replaces this process; returns only on error.
+                                return launch_session(tab, &sid, &cwd);
+                            }
                         }
                     }
                     KeyCode::Char('r') => {
                         if let Ok(mut state) = app_state.write() {
                             let tab = state.active_tab;
                             state.clear_tab(tab);
+                            state.reset_session_focus();
                         }
                     }
                     _ => {}
@@ -400,4 +460,33 @@ fn run_tui(
     }
 
     Ok(())
+}
+
+/// Restore the terminal and hand it to the agent CLI, resuming `session_id` in
+/// its working directory. Uses `exec` to replace this process outright: the
+/// child inherits a clean terminal and there's no monitor still polling stdin
+/// to fight the CLI for keystrokes. Only returns (an `Err`) if `exec` fails,
+/// e.g. the CLI binary isn't on `PATH`.
+fn launch_session(
+    tab: Tab,
+    session_id: &str,
+    cwd: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use std::os::unix::process::CommandExt;
+
+    let (program, args) = platforms::entry_for_tab(tab).resume_command(session_id);
+
+    ratatui::restore();
+
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(&args);
+    if !cwd.is_empty() {
+        cmd.current_dir(cwd);
+    }
+
+    // `exec` only returns on failure. Surface it plainly on the now-restored
+    // terminal so the user knows why nothing launched.
+    let err = cmd.exec();
+    eprintln!("Failed to launch `{program}` to resume session: {err}");
+    Err(Box::new(err))
 }

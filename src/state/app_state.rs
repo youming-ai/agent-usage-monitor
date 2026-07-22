@@ -199,6 +199,14 @@ pub struct UsageRecord {
     pub platform: Platform,
     pub model: InternedString,
     pub session: InternedString,
+    /// Full session/conversation id used to resume the agent CLI (Claude
+    /// `sessionId`, Codex `session_meta.id`, Cursor `conversation_id`). The
+    /// `session` field above is only a display label; this is the real key.
+    pub session_id: InternedString,
+    /// Absolute working directory the session ran in, so a resume launches in
+    /// the right project. Empty when the source doesn't record a real path
+    /// (Cursor exposes a display-only project label, not a filesystem path).
+    pub cwd: InternedString,
     /// Stable identity used to dedup re-emitted records (e.g. after a file
     /// truncation/rewrite forces a reader to re-read from byte 0). Readers
     /// build this from the strongest identifier their source data carries —
@@ -222,6 +230,21 @@ pub struct SessionSummary {
     pub total_cache_creation: u64,
     pub total_cost: f64,
     pub request_count: u64,
+}
+
+/// One selectable/launchable session row: display label plus the real
+/// identifiers needed to resume the agent CLI. Built by aggregating the recent
+/// records; the single source of truth for both the sessions table render and
+/// the launch action, so the highlighted row and the resumed session can never
+/// disagree.
+#[derive(Debug, Clone)]
+pub struct SessionEntry {
+    pub label: &'static str,
+    pub session_id: InternedString,
+    /// Absolute working dir, or empty when the source has no real path.
+    pub cwd: InternedString,
+    pub tokens: u64,
+    pub requests: u64,
 }
 
 /// Per-platform state held in a `[PlatformState; Platform::COUNT]` array.
@@ -263,6 +286,49 @@ impl PlatformState {
             self.total_cost,
         )
     }
+
+    /// Sessions aggregated from the recent records, highest usage first
+    /// (ties broken by label so the order is stable across live refreshes —
+    /// the cursor won't jump when equal-usage rows re-sort).
+    pub fn session_entries(&self) -> Vec<SessionEntry> {
+        struct Acc {
+            tokens: u64,
+            requests: u64,
+            session_id: InternedString,
+            cwd: InternedString,
+        }
+        let mut by: HashMap<InternedString, Acc> = HashMap::new();
+        for r in &self.records {
+            let e = by.entry(r.session).or_insert(Acc {
+                tokens: 0,
+                requests: 0,
+                session_id: r.session_id,
+                cwd: r.cwd,
+            });
+            e.tokens +=
+                r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens;
+            e.requests += 1;
+            // Prefer a real id/path if a later record in the group carries one.
+            if resolve(e.session_id).is_empty() {
+                e.session_id = r.session_id;
+            }
+            if resolve(e.cwd).is_empty() {
+                e.cwd = r.cwd;
+            }
+        }
+        let mut entries: Vec<SessionEntry> = by
+            .into_iter()
+            .map(|(label, a)| SessionEntry {
+                label: resolve(label),
+                session_id: a.session_id,
+                cwd: a.cwd,
+                tokens: a.tokens,
+                requests: a.requests,
+            })
+            .collect();
+        entries.sort_by(|a, b| b.tokens.cmp(&a.tokens).then(a.label.cmp(b.label)));
+        entries
+    }
 }
 
 /// Global application state
@@ -270,6 +336,13 @@ pub struct AppState {
     pub platforms: [PlatformState; Platform::COUNT],
     pub active_tab: Tab,
     pub available_tabs: Vec<Tab>,
+    /// Whether keyboard focus is on the sessions list (arrow keys move the
+    /// selection and Enter launches, instead of switching tabs).
+    pub sessions_focused: bool,
+    /// The selected session, tracked by `session_id` rather than row index so
+    /// live re-sorting of the list never moves the cursor onto a different
+    /// session between selecting and pressing Enter.
+    pub selected_session: Option<InternedString>,
 }
 
 impl AppState {
@@ -289,7 +362,69 @@ impl AppState {
             platforms: std::array::from_fn(|_| make()),
             active_tab: Tab::ClaudeCode,
             available_tabs: Vec::new(),
+            sessions_focused: false,
+            selected_session: None,
         }
+    }
+
+    /// Sessions of the active tab, highest usage first.
+    pub fn active_session_entries(&self) -> Vec<SessionEntry> {
+        self.platform(self.active_tab).session_entries()
+    }
+
+    /// Enter session-selection mode, ensuring a valid row is highlighted.
+    pub fn focus_sessions(&mut self) {
+        let entries = self.active_session_entries();
+        if entries.is_empty() {
+            self.selected_session = None;
+            return;
+        }
+        self.sessions_focused = true;
+        let valid = self
+            .selected_session
+            .is_some_and(|sid| entries.iter().any(|e| e.session_id == sid));
+        if !valid {
+            self.selected_session = Some(entries[0].session_id);
+        }
+    }
+
+    /// Leave session-selection mode; the selection is remembered.
+    pub fn unfocus_sessions(&mut self) {
+        self.sessions_focused = false;
+    }
+
+    /// Move the selection by `delta` rows within the active tab, wrapping.
+    pub fn move_selection(&mut self, delta: i32) {
+        let entries = self.active_session_entries();
+        if entries.is_empty() {
+            self.selected_session = None;
+            return;
+        }
+        let cur = self
+            .selected_session
+            .and_then(|sid| entries.iter().position(|e| e.session_id == sid));
+        let next = match cur {
+            Some(i) => (i as i32 + delta).rem_euclid(entries.len() as i32) as usize,
+            None => 0,
+        };
+        self.selected_session = Some(entries[next].session_id);
+    }
+
+    /// The currently selected session's `(session_id, cwd)`, if any. Empty
+    /// strings mean "unknown" (Cursor has no real cwd).
+    pub fn selected_launch(&self) -> Option<(InternedString, InternedString)> {
+        let sid = self.selected_session?;
+        self.active_session_entries()
+            .iter()
+            .find(|e| e.session_id == sid)
+            .map(|e| (e.session_id, e.cwd))
+    }
+
+    /// Reset session focus/selection — call when the visible list changes
+    /// wholesale (tab switch, tab clear) so a stale selection can't launch.
+    pub fn reset_session_focus(&mut self) {
+        self.sessions_focused = false;
+        self.selected_session = None;
     }
 
     pub fn new() -> Self {
@@ -422,6 +557,8 @@ mod tests {
             platform,
             model: intern(model),
             session: intern("test"),
+            session_id: intern("test-sid"),
+            cwd: intern("/tmp/test"),
             id: intern(id),
             input_tokens: input,
             output_tokens: output,
@@ -449,6 +586,77 @@ mod tests {
             };
             assert_eq!(tab.index(), p.index(), "mismatch for {tab:?} / {p:?}");
         }
+    }
+
+    fn session_rec(session: &str, sid: &str, cwd: &str, tokens: u64, id: &str) -> UsageRecord {
+        UsageRecord {
+            timestamp: Utc::now(),
+            platform: Platform::ClaudeCode,
+            model: intern("opus-4"),
+            session: intern(session),
+            session_id: intern(sid),
+            cwd: intern(cwd),
+            id: intern(id),
+            input_tokens: tokens,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cost_usd: 0.0,
+        }
+    }
+
+    #[test]
+    fn session_entries_ordered_and_carry_launch_info() {
+        let mut s = AppState::with_capacity(10);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                session_rec("proj-a aaa", "aaa", "/work/a", 100, "r1"),
+                session_rec("proj-b bbb", "bbb", "/work/b", 500, "r2"),
+                session_rec("proj-a aaa", "aaa", "/work/a", 50, "r3"),
+            ],
+        );
+        let entries = s.platform(Tab::ClaudeCode).session_entries();
+        assert_eq!(entries.len(), 2);
+        // Highest usage first: proj-b (500) before proj-a (150).
+        assert_eq!(entries[0].label, "proj-b bbb");
+        assert_eq!(entries[1].tokens, 150);
+        assert_eq!(resolve(entries[1].cwd), "/work/a");
+    }
+
+    #[test]
+    fn selection_focus_wraps_and_resolves_launch_target() {
+        let mut s = AppState::with_capacity(10);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                session_rec("proj-b bbb", "bbb", "/work/b", 500, "r1"),
+                session_rec("proj-a aaa", "aaa", "/work/a", 100, "r2"),
+            ],
+        );
+        // Focus selects the top (highest-usage) row.
+        s.focus_sessions();
+        assert!(s.sessions_focused);
+        let (sid, cwd) = s.selected_launch().unwrap();
+        assert_eq!(resolve(sid), "bbb");
+        assert_eq!(resolve(cwd), "/work/b");
+        // Down moves to the second row.
+        s.move_selection(1);
+        assert_eq!(resolve(s.selected_launch().unwrap().0), "aaa");
+        // Down again wraps back to the top.
+        s.move_selection(1);
+        assert_eq!(resolve(s.selected_launch().unwrap().0), "bbb");
+        // Up wraps to the bottom.
+        s.move_selection(-1);
+        assert_eq!(resolve(s.selected_launch().unwrap().0), "aaa");
+    }
+
+    #[test]
+    fn focus_sessions_noop_when_no_sessions() {
+        let mut s = AppState::with_capacity(10);
+        s.focus_sessions();
+        assert!(!s.sessions_focused);
+        assert!(s.selected_launch().is_none());
     }
 
     #[test]

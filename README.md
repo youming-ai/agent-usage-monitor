@@ -33,7 +33,13 @@ aum stats         # print JSON usage report (no TUI)
 | `--cursor-path` | `~/.cursor` | Cursor CLI data directory |
 | `-r, --refresh` | `5` | Poll interval, in seconds |
 
-**Keys:** `Tab` / `←` / `→` switch tab · `r` clear current tab · `q` quit
+**Keys:** `Tab` / `←` / `→` switch tab · `↑` / `↓` focus & move through the sessions list · `Enter` resume the selected session in its agent CLI · `Esc` leave the list · `r` clear current tab · `q` quit
+
+Selecting a session and pressing `Enter` restores the terminal and hands off to the agent, resuming that session in its working directory. `aum` exits when it launches.
+
+- **Claude Code** — `claude --resume <id>` (verified)
+- **Codex** — `codex resume <id>` (verified)
+- **Cursor** — `cursor-agent --resume=<id>` (best-effort; not yet verified against a live `cursor-agent`). Cursor sessions carry no recorded working directory, so they resume from the current directory.
 
 Only tabs for agents whose data directory exists are shown in the TUI.
 

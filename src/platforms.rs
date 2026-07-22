@@ -18,6 +18,9 @@ pub struct RegistryEntry {
     cli_path: fn(&Cli) -> Option<PathBuf>,
     set_config_path: fn(&mut Config, PathBuf),
     create_reader: fn(PathBuf) -> Box<dyn UsageSource>,
+    /// Builds the `(program, args)` to resume a session by id. Run in the
+    /// session's working directory (see `RegistryEntry::resume_command`).
+    resume: fn(&str) -> (&'static str, Vec<String>),
 }
 
 static REGISTRY: &[RegistryEntry] = &[
@@ -30,6 +33,7 @@ static REGISTRY: &[RegistryEntry] = &[
         cli_path: |cli| cli.claude_path.clone(),
         set_config_path: |c, p| c.claude_path = p,
         create_reader: |p| Box::new(ClaudeReader::new(p)),
+        resume: |id| ("claude", vec!["--resume".into(), id.into()]),
     },
     RegistryEntry {
         tab: Tab::Codex,
@@ -40,6 +44,7 @@ static REGISTRY: &[RegistryEntry] = &[
         cli_path: |cli| cli.codex_path.clone(),
         set_config_path: |c, p| c.codex_path = p,
         create_reader: |p| Box::new(CodexReader::new(p)),
+        resume: |id| ("codex", vec!["resume".into(), id.into()]),
     },
     RegistryEntry {
         tab: Tab::Cursor,
@@ -50,6 +55,9 @@ static REGISTRY: &[RegistryEntry] = &[
         cli_path: |cli| cli.cursor_path.clone(),
         set_config_path: |c, p| c.cursor_path = p,
         create_reader: |p| Box::new(CursorReader::new(p)),
+        // ponytail: best-effort — cursor-agent's resume flag is unverified
+        // against a live binary; adjust here if the real flag differs.
+        resume: |id| ("cursor-agent", vec![format!("--resume={id}")]),
     },
 ];
 
@@ -70,6 +78,12 @@ impl RegistryEntry {
     /// Construct a usage reader for this platform at `path`.
     pub fn build_reader(&self, path: PathBuf) -> Box<dyn UsageSource> {
         (self.create_reader)(path)
+    }
+
+    /// `(program, args)` to resume session `session_id`. Launch it in the
+    /// session's working directory when known.
+    pub fn resume_command(&self, session_id: &str) -> (&'static str, Vec<String>) {
+        (self.resume)(session_id)
     }
 }
 
@@ -152,6 +166,16 @@ mod tests {
         let mut config = Config::default();
         apply_config_key(&mut config, "cursor_path", "/tmp/cursor").unwrap();
         assert_eq!(config.cursor_path, PathBuf::from("/tmp/cursor"));
+    }
+
+    #[test]
+    fn resume_commands_match_each_cli() {
+        let claude = entry_for_tab(Tab::ClaudeCode).resume_command("SID");
+        assert_eq!(claude, ("claude", vec!["--resume".into(), "SID".into()]));
+        let codex = entry_for_tab(Tab::Codex).resume_command("SID");
+        assert_eq!(codex, ("codex", vec!["resume".into(), "SID".into()]));
+        let cursor = entry_for_tab(Tab::Cursor).resume_command("SID");
+        assert_eq!(cursor, ("cursor-agent", vec!["--resume=SID".into()]));
     }
 
     #[test]
