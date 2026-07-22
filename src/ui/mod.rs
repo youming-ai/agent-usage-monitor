@@ -32,7 +32,8 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
 
     // Active-tab data — single array lookup instead of a 13-way match.
     let p = state.platform(active);
-    let (quota, sessions, records, total_calls, total_cost) = p.refs();
+    let (quota, sessions, _records, total_calls, total_cost) = p.refs();
+    let entries = p.session_entries();
 
     // Header: a bottom rule in the accent color, with tabs left and the
     // account right-aligned on the row above it.
@@ -62,15 +63,32 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     frame.render_widget(quota_widget, chunks[1]);
 
     // Split the main area: the per-model table sized to its rows on top, with
-    // the per-session usage table filling the remaining space below.
-    let models_h = (sessions.len() as u16 + 3).clamp(3, chunks[2].height.saturating_sub(3));
+    // the per-session usage table filling the remaining space below. Compute
+    // the upper bound with `.min().max(3)` rather than `clamp(3, upper)`: on a
+    // very short terminal `upper` drops below 3, and `clamp` panics when
+    // min > max (the layout tolerates an over-tall length, a panic doesn't).
+    let models_h = (sessions.len() as u16 + 3)
+        .min(chunks[2].height.saturating_sub(3))
+        .max(3);
     let main =
         Layout::vertical([Constraint::Length(models_h), Constraint::Min(3)]).split(chunks[2]);
     frame.render_widget(
         model_table::model_table(active, sessions, total_calls),
         main[0],
     );
-    frame.render_widget(session_table::session_table(records), main[1]);
+    // Derive the selected row index each render (selection is tracked by
+    // session_id, so a live re-sort can't strand the highlight on the wrong
+    // row). TableState scrolls it into view even when the list overflows.
+    let selected_idx = state
+        .selected_session
+        .and_then(|sid| entries.iter().position(|e| e.session_id == sid));
+    let mut table_state = ratatui::widgets::TableState::default();
+    table_state.select(selected_idx);
+    frame.render_stateful_widget(
+        session_table::session_table(&entries, state.sessions_focused, accent),
+        main[1],
+        &mut table_state,
+    );
 
     frame.render_widget(status_bar::status_bar(total_calls, total_cost), chunks[3]);
 }
@@ -140,6 +158,8 @@ mod tests {
             platform: Platform::ClaudeCode,
             model: crate::state::intern(model),
             session: crate::state::intern(session),
+            session_id: crate::state::intern(session),
+            cwd: crate::state::intern("/tmp/test"),
             id: crate::state::intern(&format!("{session}:{model}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,
@@ -169,5 +189,45 @@ mod tests {
         assert!(out.contains("ollama-monitor"));
         assert!(out.contains("sessions"));
         assert!(out.contains("42 calls"));
+    }
+
+    #[test]
+    fn renders_on_a_very_short_terminal_without_panicking() {
+        // Height 5 makes the main area's height < 6, which used to drive the
+        // models-height clamp's upper bound below its lower bound and panic.
+        for h in 3..=7 {
+            let _ = dump(80, h, sample_state());
+        }
+    }
+
+    #[test]
+    fn selected_session_below_the_fold_is_scrolled_into_view() {
+        let mut s = AppState::with_capacity(100);
+        let mk = |session: &str| UsageRecord {
+            timestamp: Utc::now(),
+            platform: Platform::ClaudeCode,
+            model: crate::state::intern("claude-opus-4"),
+            session: crate::state::intern(session),
+            session_id: crate::state::intern(session),
+            cwd: crate::state::intern("/tmp/test"),
+            id: crate::state::intern(session),
+            input_tokens: 100,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cost_usd: 0.0,
+        };
+        // 30 sessions — far more than a short panel can show at once.
+        let records: Vec<_> = (0..30).map(|i| mk(&format!("sess-{i:02}"))).collect();
+        s.add_records(Platform::ClaudeCode, records);
+        // Select and focus the last row (all equal usage → sorted by label).
+        s.selected_session = Some(crate::state::intern("sess-29"));
+        s.sessions_focused = true;
+
+        let out = dump(80, 16, s);
+        assert!(
+            out.contains("sess-29"),
+            "selection past the fold must scroll into view:\n{out}"
+        );
     }
 }

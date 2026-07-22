@@ -468,6 +468,9 @@ fn flush_transcript_progress(st: &mut TranscriptTurnState) -> Option<UsageRecord
         platform: Platform::Cursor,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session_label(&st.project, &st.conversation_id)),
+        session_id: crate::state::intern(&st.conversation_id),
+        // Cursor's "project" is a display label, not a filesystem path.
+        cwd: crate::state::intern(""),
         id: crate::state::intern(&record_id),
         input_tokens: input,
         output_tokens: output,
@@ -512,6 +515,7 @@ fn parse_store_blob(
         }
         let mut rec = rec;
         rec.id = crate::state::intern(&dedup);
+        rec.session_id = crate::state::intern(session_id);
         return Some(rec);
     }
 
@@ -558,6 +562,8 @@ fn parse_store_blob(
             platform: Platform::Cursor,
             model: crate::state::intern(&model),
             session: crate::state::intern(session),
+            session_id: crate::state::intern(session_id),
+            cwd: crate::state::intern(""),
             id: crate::state::intern(&dedup),
             input_tokens: 0,
             output_tokens: output,
@@ -625,9 +631,11 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
         platform: Platform::Cursor,
         model: crate::state::intern(&model),
         session: crate::state::intern(session),
-        // Overwritten by the caller (`parse_store_blob`) with the blob's
-        // stable `key`-based dedup id; placeholder here so this function can
-        // still be tested/used standalone.
+        // Both overwritten by the caller (`parse_store_blob`): `id` with the
+        // blob's stable `key`-based dedup id, `session_id` with the real
+        // conversation id. Placeholders here so this fn works standalone.
+        session_id: crate::state::intern(""),
+        cwd: crate::state::intern(""),
         id: crate::state::intern(""),
         input_tokens: input,
         output_tokens: output,

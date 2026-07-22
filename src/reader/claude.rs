@@ -91,11 +91,12 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
     let timestamp_str = v.get("timestamp")?.as_str()?;
     let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
 
-    let dir = v
-        .get("cwd")
-        .and_then(|c| c.as_str())
-        .map(crate::reader::basename)
-        .unwrap_or_else(|| "unknown".to_string());
+    let cwd = v.get("cwd").and_then(|c| c.as_str()).unwrap_or("");
+    let dir = if cwd.is_empty() {
+        "unknown".to_string()
+    } else {
+        crate::reader::basename(cwd)
+    };
     let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
     let session = crate::reader::session_label(&dir, session_id);
 
@@ -123,6 +124,8 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
         platform: Platform::ClaudeCode,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session),
+        session_id: crate::state::intern(session_id),
+        cwd: crate::state::intern(cwd),
         id: crate::state::intern(record_id),
         input_tokens,
         output_tokens,

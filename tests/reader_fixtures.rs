@@ -25,6 +25,9 @@ fn claude_fixture_parses_assistant_records() {
     assert_eq!(records[0].output_tokens, 50);
     assert_eq!(records[0].cost_usd, 0.01);
     assert_eq!(resolve(records[0].session), "agent-usage-monitor a3f2c1d8");
+    // Full identifiers must survive for session resume, not just the label.
+    assert_eq!(resolve(records[0].session_id), "a3f2c1d8");
+    assert_eq!(resolve(records[0].cwd), "/Users/me/agent-usage-monitor");
     assert!(reader.poll_delta().is_empty());
 }
 
