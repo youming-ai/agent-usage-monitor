@@ -303,7 +303,10 @@ impl ServerHandler for AumMcpServer {
                     uri: resource_uris::PLATFORMS.to_string(),
                     name: "platforms".to_string(),
                     title: Some("Supported platforms".to_string()),
-                    description: Some("13-platform index with availability status".to_string()),
+                    description: Some(format!(
+                        "{}-platform index with availability status",
+                        crate::platforms::entries().len()
+                    )),
                     mime_type: None,
                     size: None,
                     icons: None,
