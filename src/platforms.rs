@@ -1,18 +1,9 @@
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::reader::UsageSource;
-use crate::reader::antigravity::AntigravityReader;
 use crate::reader::claude::ClaudeReader;
 use crate::reader::codex::CodexReader;
-use crate::reader::copilot::CopilotReader;
 use crate::reader::cursor::CursorReader;
-use crate::reader::factory::FactoryReader;
-use crate::reader::grok::GrokReader;
-use crate::reader::hermes::HermesReader;
-use crate::reader::kimi_code::KimiCodeReader;
-use crate::reader::openclaw::OpenClawReader;
-use crate::reader::pi::PiReader;
-use crate::reader::sqlite_message_reader::SqliteMessageReader;
 use crate::state::{AgentPaths, Platform, Tab};
 use std::path::PathBuf;
 
@@ -51,83 +42,6 @@ static REGISTRY: &[RegistryEntry] = &[
         create_reader: |p| Box::new(CodexReader::new(p)),
     },
     RegistryEntry {
-        tab: Tab::OpenClaw,
-        platform: Platform::OpenClaw,
-        config_key: "openclaw_path",
-        log_name: "OpenClaw",
-        config_path: |c| c.openclaw_path.clone(),
-        cli_path: |cli| cli.openclaw_path.clone(),
-        set_config_path: |c, p| c.openclaw_path = p,
-        create_reader: |p| Box::new(OpenClawReader::new(p)),
-    },
-    RegistryEntry {
-        tab: Tab::Hermes,
-        platform: Platform::Hermes,
-        config_key: "hermes_path",
-        log_name: "Hermes",
-        config_path: |c| c.hermes_path.clone(),
-        cli_path: |cli| cli.hermes_path.clone(),
-        set_config_path: |c, p| c.hermes_path = p,
-        create_reader: |p| Box::new(HermesReader::new(p)),
-    },
-    RegistryEntry {
-        tab: Tab::OpenCode,
-        platform: Platform::OpenCode,
-        config_key: "opencode_path",
-        log_name: "opencode",
-        config_path: |c| c.opencode_path.clone(),
-        cli_path: |cli| cli.opencode_path.clone(),
-        set_config_path: |c, p| c.opencode_path = p,
-        create_reader: |p| {
-            Box::new(SqliteMessageReader::new(
-                p,
-                "opencode.db",
-                Platform::OpenCode,
-                "opencode",
-            ))
-        },
-    },
-    RegistryEntry {
-        tab: Tab::KimiCode,
-        platform: Platform::KimiCode,
-        config_key: "kimi_code_path",
-        log_name: "Kimi Code",
-        config_path: |c| c.kimi_code_path.clone(),
-        cli_path: |cli| cli.kimi_code_path.clone(),
-        set_config_path: |c, p| c.kimi_code_path = p,
-        create_reader: |p| Box::new(KimiCodeReader::new(p)),
-    },
-    RegistryEntry {
-        tab: Tab::Pi,
-        platform: Platform::Pi,
-        config_key: "pi_path",
-        log_name: "Pi",
-        config_path: |c| c.pi_path.clone(),
-        cli_path: |cli| cli.pi_path.clone(),
-        set_config_path: |c, p| c.pi_path = p,
-        create_reader: |p| Box::new(PiReader::new(p, Platform::Pi)),
-    },
-    RegistryEntry {
-        tab: Tab::Factory,
-        platform: Platform::Factory,
-        config_key: "factory_path",
-        log_name: "Factory",
-        config_path: |c| c.factory_path.clone(),
-        cli_path: |cli| cli.factory_path.clone(),
-        set_config_path: |c, p| c.factory_path = p,
-        create_reader: |p| Box::new(FactoryReader::new(p)),
-    },
-    RegistryEntry {
-        tab: Tab::Grok,
-        platform: Platform::Grok,
-        config_key: "grok_path",
-        log_name: "Grok",
-        config_path: |c| c.grok_path.clone(),
-        cli_path: |cli| cli.grok_path.clone(),
-        set_config_path: |c, p| c.grok_path = p,
-        create_reader: |p| Box::new(GrokReader::new(p)),
-    },
-    RegistryEntry {
         tab: Tab::Cursor,
         platform: Platform::Cursor,
         config_key: "cursor_path",
@@ -136,53 +50,6 @@ static REGISTRY: &[RegistryEntry] = &[
         cli_path: |cli| cli.cursor_path.clone(),
         set_config_path: |c, p| c.cursor_path = p,
         create_reader: |p| Box::new(CursorReader::new(p)),
-    },
-    RegistryEntry {
-        tab: Tab::Copilot,
-        platform: Platform::Copilot,
-        config_key: "copilot_path",
-        log_name: "Copilot CLI",
-        config_path: |c| c.copilot_path.clone(),
-        cli_path: |cli| cli.copilot_path.clone(),
-        set_config_path: |c, p| c.copilot_path = p,
-        create_reader: |p| Box::new(CopilotReader::new(p)),
-    },
-    RegistryEntry {
-        tab: Tab::Antigravity,
-        platform: Platform::Antigravity,
-        config_key: "antigravity_path",
-        log_name: "Antigravity CLI",
-        config_path: |c| c.antigravity_path.clone(),
-        cli_path: |cli| cli.antigravity_path.clone(),
-        set_config_path: |c, p| c.antigravity_path = p,
-        create_reader: |p| Box::new(AntigravityReader::new(p)),
-    },
-    RegistryEntry {
-        tab: Tab::MimoCode,
-        platform: Platform::MimoCode,
-        config_key: "mimo_code_path",
-        log_name: "MiMo Code",
-        config_path: |c| c.mimo_code_path.clone(),
-        cli_path: |cli| cli.mimo_code_path.clone(),
-        set_config_path: |c, p| c.mimo_code_path = p,
-        create_reader: |p| {
-            Box::new(SqliteMessageReader::new(
-                p,
-                "mimocode.db",
-                Platform::MimoCode,
-                "mimocode",
-            ))
-        },
-    },
-    RegistryEntry {
-        tab: Tab::Omp,
-        platform: Platform::Omp,
-        config_key: "omp_path",
-        log_name: "omp",
-        config_path: |c| c.omp_path.clone(),
-        cli_path: |cli| cli.omp_path.clone(),
-        set_config_path: |c, p| c.omp_path = p,
-        create_reader: |p| Box::new(PiReader::new(p, Platform::Omp)),
     },
 ];
 
@@ -283,8 +150,8 @@ mod tests {
     #[test]
     fn apply_config_key_sets_path() {
         let mut config = Config::default();
-        apply_config_key(&mut config, "grok_path", "/tmp/grok").unwrap();
-        assert_eq!(config.grok_path, PathBuf::from("/tmp/grok"));
+        apply_config_key(&mut config, "cursor_path", "/tmp/cursor").unwrap();
+        assert_eq!(config.cursor_path, PathBuf::from("/tmp/cursor"));
     }
 
     #[test]
@@ -300,18 +167,7 @@ mod tests {
             command: None,
             claude_path: Some(PathBuf::from("/cli/claude")),
             codex_path: None,
-            opencode_path: None,
-            kimi_code_path: None,
-            pi_path: None,
-            openclaw_path: None,
-            hermes_path: None,
-            factory_path: None,
-            grok_path: None,
             cursor_path: None,
-            copilot_path: None,
-            antigravity_path: None,
-            mimo_code_path: None,
-            omp_path: None,
             refresh: None,
         };
         let paths = resolve_paths(&cli, &config);

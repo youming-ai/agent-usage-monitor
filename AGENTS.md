@@ -1,10 +1,10 @@
 # Repository Guidelines
 
 ## Project Overview
-`agent-usage-monitor` (`aum`) is a single Rust binary that provides a terminal user interface (TUI) dashboard and a command-line interface (CLI) to track local AI agent usage, costs, and API quotas. It currently monitors 14 developer agent tools: Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI, MiMo Code, and omp (Oh My Pi).
+`agent-usage-monitor` (`aum`) is a single Rust binary that provides a terminal user interface (TUI) dashboard and a command-line interface (CLI) to track local AI agent usage, costs, and API quotas. It currently monitors three developer agent tools: Claude Code, Codex, and Cursor CLI.
 
 ## Architecture & Data Flow
-- **Data Ingestion**: A dual-track system uses a file system watcher (`src/watcher.rs` based on the `notify` crate) with 50ms debouncing, alongside a 30-second fallback timer interval. Logs from various platforms are abstracted via the `UsageSource` trait, supporting JSONL log files (`JsonlReader`) and SQLite databases (`SqliteMessageReader`).
+- **Data Ingestion**: A dual-track system uses a file system watcher (`src/watcher.rs` based on the `notify` crate) with 50ms debouncing, alongside a 30-second fallback timer interval. Logs from various platforms are abstracted via the `UsageSource` trait, supporting JSONL log files and SQLite databases (Cursor's `store.db`).
 - **State Management**: The global state `AppState` is wrapped in `Arc<RwLock<AppState>>` for safe multi-threaded sharing. It maintains a fixed-size `PlatformState` array indexed by the platform enum's value. To keep memory usage extremely low under massive logs, a thread-safe string interner (`ThreadedRodeo` from the `lasso` crate) converts repetitive model names and session IDs into lightweight `Spur` tokens (Copy types).
 - **Platform Registry**: All platform-specific metadata, CLI parameters, default data paths, and reader initializations are managed centrally in `src/platforms.rs` (`REGISTRY`). Adding a platform follows the Open-Closed Principle—adding a single entry to `REGISTRY` without touching `main.rs`.
 - **TUI & UI Rendering**: The TUI runs on its own thread, utilizing `std::sync::RwLock`'s `try_read()` method to fetch state from `AppState`. If a lock conflict occurs, the frame is skipped to prevent any interface lag.
@@ -41,7 +41,7 @@
 - **Persistent Readers**: All readers are stored in a `SharedReader` (`Arc<Mutex<Box<dyn UsageSource>>>`) within `PlatformReaders`. Rebuilding them on every refresh discards cursors/offsets, leading to double-counting and performance degradation.
 - **No-Blocking UI**: UI rendering must never block. Use `AppState::try_read` instead of `read` or `unwrap`.
 - **Formatting**: Always run `cargo fmt` and `cargo clippy` before committing code.
-- **XDG Path Compliance**: Standardize non-App-Support platforms (e.g. `opencode` and `MiMo Code`) under `~/.local/share/` (or `$XDG_DATA_HOME`) using `xdg_data_dir()`.
+- **Default Paths**: Each agent's default data directory is defined once in `Tab::default_path` (`src/state/app_state.rs`); config defaults are thin shims around it.
 
 ## Important Files
 - `src/main.rs`: Entry point containing the asynchronous runner, initializing watchers, TUI, and state update loops.

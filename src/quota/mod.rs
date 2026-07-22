@@ -1,11 +1,6 @@
-pub mod antigravity;
 pub mod claude;
 pub mod codex;
-pub mod copilot;
 pub mod cursor;
-pub mod factory;
-pub mod grok;
-pub mod opencode;
 pub(crate) mod util;
 
 use crate::state::Platform;
@@ -23,12 +18,7 @@ type Fetcher = fn() -> Option<QuotaInfo>;
 pub static FETCHERS: &[(Platform, Fetcher)] = &[
     (Platform::ClaudeCode, claude::fetch_quota),
     (Platform::Codex, codex::fetch_quota),
-    (Platform::Copilot, copilot::fetch_quota),
     (Platform::Cursor, cursor::fetch_quota),
-    (Platform::Antigravity, antigravity::fetch_quota),
-    (Platform::OpenCode, opencode::fetch_quota),
-    (Platform::Grok, grok::fetch_quota),
-    (Platform::Factory, factory::fetch_quota),
 ];
 
 /// Reason a quota fetch failed. Surfaced verbatim in the UI and used to decide

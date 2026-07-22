@@ -4,9 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "aum")]
 #[command(version)]
-#[command(
-    about = "Real-time usage monitor for Claude Code, Codex, opencode, Kimi Code, pi, openclaw, hermes-agent, Factory AI, Grok Build, Cursor CLI, Copilot CLI, Antigravity CLI, MiMo Code & omp"
-)]
+#[command(about = "Real-time usage monitor for Claude Code, Codex & Cursor CLI")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -19,53 +17,9 @@ pub struct Cli {
     #[arg(long)]
     pub codex_path: Option<PathBuf>,
 
-    /// Path to opencode data directory
-    #[arg(long)]
-    pub opencode_path: Option<PathBuf>,
-
-    /// Path to Kimi Code data directory
-    #[arg(long)]
-    pub kimi_code_path: Option<PathBuf>,
-
-    /// Path to pi data directory
-    #[arg(long)]
-    pub pi_path: Option<PathBuf>,
-
-    /// Path to openclaw data directory
-    #[arg(long)]
-    pub openclaw_path: Option<PathBuf>,
-
-    /// Path to hermes-agent data directory
-    #[arg(long)]
-    pub hermes_path: Option<PathBuf>,
-
-    /// Path to Factory AI data directory
-    #[arg(long)]
-    pub factory_path: Option<PathBuf>,
-
-    /// Path to Grok Build data directory
-    #[arg(long)]
-    pub grok_path: Option<PathBuf>,
-
     /// Path to Cursor CLI data directory
     #[arg(long)]
     pub cursor_path: Option<PathBuf>,
-
-    /// Path to Copilot CLI data directory
-    #[arg(long)]
-    pub copilot_path: Option<PathBuf>,
-
-    /// Path to Antigravity CLI data directory
-    #[arg(long)]
-    pub antigravity_path: Option<PathBuf>,
-
-    /// Path to MiMo Code data directory
-    #[arg(long)]
-    pub mimo_code_path: Option<PathBuf>,
-
-    /// Path to omp (Oh My Pi) data directory
-    #[arg(long)]
-    pub omp_path: Option<PathBuf>,
 
     /// Polling interval in seconds
     #[arg(short, long)]

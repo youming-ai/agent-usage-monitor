@@ -1,3 +1,0 @@
-{"type":"session.start","data":{"cwd":"/Users/me/myproject","model":"gpt-4.1"},"id":"1","timestamp":"2026-06-01T10:00:00Z"}
-{"type":"tool.execution_complete","data":{"toolName":"read_file","model":"gpt-4.1","success":true},"id":"2","timestamp":"2026-06-01T10:00:05Z"}
-{"type":"session.compaction_complete","data":{"preCompactionTokens":50000,"compactionTokensUsed":{"inputTokens":2000},"model":"gpt-4.1"},"id":"3","timestamp":"2026-06-01T10:05:00Z"}

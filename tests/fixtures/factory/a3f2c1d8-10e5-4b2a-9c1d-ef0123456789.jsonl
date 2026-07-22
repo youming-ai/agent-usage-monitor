@@ -1,2 +1,0 @@
-{"type":"session","id":"abc123","timestamp":"2026-06-05T10:00:00Z","cwd":"/Users/me/project"}
-{"type":"message","id":"msg1","timestamp":"2026-06-05T10:00:01Z","message":{"role":"assistant","model":"claude-sonnet-4-5","usage":{"input_tokens":1200,"output_tokens":450,"cache_read_tokens":800,"cache_write_tokens":150},"cost":{"total":0.02}}}

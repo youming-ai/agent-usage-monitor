@@ -1,2 +1,0 @@
-{"type":"session","id":"abc12345","cwd":"/Users/me/project","version":3,"timestamp":"2026-06-05T10:00:00Z"}
-{"type":"message","id":"msg1","parentId":"msg0","timestamp":"2026-06-05T10:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"Hello world"}],"provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":150,"output":60,"cacheRead":8,"cacheWrite":2,"totalTokens":220,"cost":{"input":0.00045,"output":0.0009,"cacheRead":0.000024,"cacheWrite":0.000006,"total":0.00138}},"stopReason":"stop","timestamp":1717584002000}}

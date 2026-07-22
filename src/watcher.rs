@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::platforms;
-use crate::state::{AgentPaths, Platform, Tab};
+use crate::state::{AgentPaths, Platform};
 
 #[derive(Debug, Clone)]
 pub enum WatcherMessage {
@@ -69,7 +69,7 @@ pub fn start_watchers(
     // collapse duplicate events for the same path within the debounce
     // window so downstream consumers see one event per logical change.
     let recent: Arc<Mutex<HashMap<PathBuf, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
-    let mut watchers = Vec::with_capacity(14);
+    let mut watchers = Vec::with_capacity(platforms::entries().len());
 
     for entry in platforms::entries() {
         let path = paths.path_for(entry.tab);
@@ -83,7 +83,6 @@ pub fn start_watchers(
         // which every impl just echoed back from this same `path`.
         let watch_dirs = [path.clone()];
 
-        let is_sqlite = matches!(entry.tab, Tab::OpenCode | Tab::Hermes | Tab::MimoCode);
         let tx = tx.clone();
         let platform = entry.platform;
         let recent = recent.clone();
@@ -157,11 +156,7 @@ pub fn start_watchers(
         };
 
         for dir in &watch_dirs {
-            let candidate = if is_sqlite && dir.is_file() {
-                dir.parent().unwrap_or(dir)
-            } else {
-                dir.as_path()
-            };
+            let candidate = dir.as_path();
             let Some(watch_path) = candidate
                 .ancestors()
                 .find(|p| p.exists())
@@ -216,7 +211,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = synthetic_paths(tmp.path());
         let (watchers, _rx) = start_watchers(&paths);
-        assert_eq!(watchers.len(), 14);
+        assert_eq!(watchers.len(), crate::platforms::entries().len());
     }
 
     #[tokio::test]
