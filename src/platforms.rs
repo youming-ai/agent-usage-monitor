@@ -7,6 +7,14 @@ use crate::reader::cursor::CursorReader;
 use crate::state::{AgentPaths, Platform, Tab};
 use std::path::PathBuf;
 
+/// Platform-specific process invocation for resuming a session. The launcher
+/// supplies the working directory and terminal-window policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResumeCommand {
+    pub(crate) program: &'static str,
+    pub(crate) args: Vec<String>,
+}
+
 /// Metadata and wiring for one supported agent platform. New platforms add a
 /// single `RegistryEntry` here instead of touching `main.rs` match arms.
 pub struct RegistryEntry {
@@ -18,6 +26,9 @@ pub struct RegistryEntry {
     cli_path: fn(&Cli) -> Option<PathBuf>,
     set_config_path: fn(&mut Config, PathBuf),
     create_reader: fn(PathBuf) -> Box<dyn UsageSource>,
+    /// Builds the platform-specific command to resume a session by id. The
+    /// launcher runs it in the selected session's working directory.
+    resume: fn(&str) -> ResumeCommand,
 }
 
 static REGISTRY: &[RegistryEntry] = &[
@@ -30,6 +41,10 @@ static REGISTRY: &[RegistryEntry] = &[
         cli_path: |cli| cli.claude_path.clone(),
         set_config_path: |c, p| c.claude_path = p,
         create_reader: |p| Box::new(ClaudeReader::new(p)),
+        resume: |id| ResumeCommand {
+            program: "claude",
+            args: vec!["--resume".into(), id.into()],
+        },
     },
     RegistryEntry {
         tab: Tab::Codex,
@@ -40,6 +55,10 @@ static REGISTRY: &[RegistryEntry] = &[
         cli_path: |cli| cli.codex_path.clone(),
         set_config_path: |c, p| c.codex_path = p,
         create_reader: |p| Box::new(CodexReader::new(p)),
+        resume: |id| ResumeCommand {
+            program: "codex",
+            args: vec!["resume".into(), id.into()],
+        },
     },
     RegistryEntry {
         tab: Tab::Cursor,
@@ -50,6 +69,12 @@ static REGISTRY: &[RegistryEntry] = &[
         cli_path: |cli| cli.cursor_path.clone(),
         set_config_path: |c, p| c.cursor_path = p,
         create_reader: |p| Box::new(CursorReader::new(p)),
+        // ponytail: best-effort — cursor-agent's resume flag is unverified
+        // against a live binary; adjust here if the real flag differs.
+        resume: |id| ResumeCommand {
+            program: "cursor-agent",
+            args: vec![format!("--resume={id}")],
+        },
     },
 ];
 
@@ -70,6 +95,11 @@ impl RegistryEntry {
     /// Construct a usage reader for this platform at `path`.
     pub fn build_reader(&self, path: PathBuf) -> Box<dyn UsageSource> {
         (self.create_reader)(path)
+    }
+
+    /// Platform-specific command to resume `session_id`.
+    pub(crate) fn resume_command(&self, session_id: &str) -> ResumeCommand {
+        (self.resume)(session_id)
     }
 }
 
@@ -152,6 +182,21 @@ mod tests {
         let mut config = Config::default();
         apply_config_key(&mut config, "cursor_path", "/tmp/cursor").unwrap();
         assert_eq!(config.cursor_path, PathBuf::from("/tmp/cursor"));
+    }
+
+    #[test]
+    fn resume_commands_match_each_cli() {
+        let claude = entry_for_tab(Tab::ClaudeCode).resume_command("SID");
+        assert_eq!(claude.program, "claude");
+        assert_eq!(claude.args, vec!["--resume", "SID"]);
+
+        let codex = entry_for_tab(Tab::Codex).resume_command("SID");
+        assert_eq!(codex.program, "codex");
+        assert_eq!(codex.args, vec!["resume", "SID"]);
+
+        let cursor = entry_for_tab(Tab::Cursor).resume_command("SID");
+        assert_eq!(cursor.program, "cursor-agent");
+        assert_eq!(cursor.args, vec!["--resume=SID"]);
     }
 
     #[test]

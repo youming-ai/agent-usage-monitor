@@ -1,6 +1,7 @@
 use agent_usage_monitor::cli;
 use agent_usage_monitor::config::{self, Config};
 use agent_usage_monitor::event::{AppEvent, EventLoop};
+use agent_usage_monitor::launcher;
 use agent_usage_monitor::mcp;
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
@@ -376,21 +377,63 @@ fn run_tui(
             match event {
                 AppEvent::Tick => {}
                 AppEvent::Key(key) => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Tab | KeyCode::Right => {
+                    KeyCode::Char('q') => break,
+                    // Esc backs out of session-selection mode; quits otherwise.
+                    KeyCode::Esc => {
                         if let Ok(mut state) = app_state.write() {
+                            if state.sessions_focused {
+                                state.unfocus_sessions();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    // Tab/←/→ switch tabs only when not selecting a session, so
+                    // the arrow keys can drive the list once it has focus.
+                    KeyCode::Tab | KeyCode::Right => {
+                        if let Ok(mut state) = app_state.write()
+                            && !state.sessions_focused
+                        {
                             state.active_tab = state.active_tab.next_in(&state.available_tabs);
+                            state.reset_session_focus();
                         }
                     }
                     KeyCode::Left => {
-                        if let Ok(mut state) = app_state.write() {
+                        if let Ok(mut state) = app_state.write()
+                            && !state.sessions_focused
+                        {
                             state.active_tab = state.active_tab.prev_in(&state.available_tabs);
+                            state.reset_session_focus();
+                        }
+                    }
+                    // Down/j and Up/k enter the sessions list (highlighting the
+                    // first row) or move within it once focused.
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if let Ok(mut state) = app_state.write() {
+                            state.nav_down();
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if let Ok(mut state) = app_state.write() {
+                            state.nav_up();
+                        }
+                    }
+                    // Enter: focus the list, then let the launcher resume
+                    // the selected session without exposing its OS policy here.
+                    KeyCode::Enter => {
+                        let selection = app_state
+                            .write()
+                            .ok()
+                            .and_then(|mut state| state.activate_sessions());
+                        if let Some(selection) = selection {
+                            launcher::resume(selection)?;
                         }
                     }
                     KeyCode::Char('r') => {
                         if let Ok(mut state) = app_state.write() {
                             let tab = state.active_tab;
                             state.clear_tab(tab);
+                            state.reset_session_focus();
                         }
                     }
                     _ => {}

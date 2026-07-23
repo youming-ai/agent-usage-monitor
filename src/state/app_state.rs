@@ -144,7 +144,7 @@ impl Tab {
     pub fn primary_color(self) -> ratatui::style::Color {
         match self {
             Tab::ClaudeCode => ratatui::style::Color::Rgb(217, 119, 87),
-            Tab::Codex => ratatui::style::Color::Rgb(215, 95, 215),
+            Tab::Codex => ratatui::style::Color::Rgb(59, 130, 246),
             Tab::Cursor => ratatui::style::Color::Rgb(136, 192, 208),
         }
     }
@@ -199,6 +199,18 @@ pub struct UsageRecord {
     pub platform: Platform,
     pub model: InternedString,
     pub session: InternedString,
+    /// Full session/conversation id used to resume the agent CLI (Claude
+    /// `sessionId`, Codex `session_meta.id`, Cursor `conversation_id`). The
+    /// `session` field above is only a display label; this is the real key.
+    pub session_id: InternedString,
+    /// Absolute working directory the session ran in, so a resume launches in
+    /// the right project. Empty when the source doesn't record a real path
+    /// (Cursor exposes a display-only project label, not a filesystem path).
+    pub cwd: InternedString,
+    /// Human-readable conversation title when the source records one (Claude's
+    /// `ai-title`), shown in the sessions list in place of the `dir + id`
+    /// label. Empty when the agent doesn't log a title (Codex, Cursor).
+    pub title: InternedString,
     /// Stable identity used to dedup re-emitted records (e.g. after a file
     /// truncation/rewrite forces a reader to re-read from byte 0). Readers
     /// build this from the strongest identifier their source data carries —
@@ -222,6 +234,36 @@ pub struct SessionSummary {
     pub total_cache_creation: u64,
     pub total_cost: f64,
     pub request_count: u64,
+}
+
+/// One selectable/launchable session row: display label plus the real
+/// identifiers needed to resume the agent CLI. Built by aggregating the recent
+/// records; the single source of truth for both the sessions table render and
+/// the launch action, so the highlighted row and the resumed session can never
+/// disagree.
+#[derive(Debug, Clone)]
+pub struct SessionEntry {
+    /// Stable, unique per-row selection key: the label records were grouped
+    /// by. Unlike `session_id` (which is empty for sources that log no id, so
+    /// several rows would collide on it) this is distinct for every row by
+    /// construction, so the selection can always address exactly one row.
+    pub key: InternedString,
+    pub label: &'static str,
+    pub session_id: InternedString,
+    /// Absolute working dir, or empty when the source has no real path.
+    pub cwd: InternedString,
+    pub tokens: u64,
+    pub requests: u64,
+}
+
+/// The selected session and platform needed to build a resume command. This
+/// keeps selection lookup inside `AppState`; callers only hand the result to
+/// the launcher rather than reassembling tab, id, and working directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResumeSelection {
+    pub(crate) tab: Tab,
+    pub(crate) session_id: InternedString,
+    pub(crate) cwd: InternedString,
 }
 
 /// Per-platform state held in a `[PlatformState; Platform::COUNT]` array.
@@ -263,6 +305,66 @@ impl PlatformState {
             self.total_cost,
         )
     }
+
+    /// Sessions aggregated from the recent records, highest usage first
+    /// (ties broken by label so the order is stable across live refreshes —
+    /// the cursor won't jump when equal-usage rows re-sort).
+    pub fn session_entries(&self) -> Vec<SessionEntry> {
+        struct Acc {
+            tokens: u64,
+            requests: u64,
+            session_id: InternedString,
+            cwd: InternedString,
+            title: InternedString,
+        }
+        let mut by: HashMap<InternedString, Acc> = HashMap::new();
+        for r in &self.records {
+            let e = by.entry(r.session).or_insert(Acc {
+                tokens: 0,
+                requests: 0,
+                session_id: r.session_id,
+                cwd: r.cwd,
+                title: r.title,
+            });
+            e.tokens +=
+                r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens;
+            e.requests += 1;
+            // Prefer a real id/path if a later record in the group carries one.
+            if resolve(e.session_id).is_empty() {
+                e.session_id = r.session_id;
+            }
+            if resolve(e.cwd).is_empty() {
+                e.cwd = r.cwd;
+            }
+            // The title can be set/renamed mid-session; the latest wins.
+            if !resolve(r.title).is_empty() {
+                e.title = r.title;
+            }
+        }
+        let mut entries: Vec<SessionEntry> = by
+            .into_iter()
+            .map(|(session_key, a)| {
+                // Show the conversation title when one exists, else fall back
+                // to the `dir + short-id` label.
+                let title = resolve(a.title);
+                let label = if title.is_empty() {
+                    resolve(session_key)
+                } else {
+                    title
+                };
+                SessionEntry {
+                    key: session_key,
+                    label,
+                    session_id: a.session_id,
+                    cwd: a.cwd,
+                    tokens: a.tokens,
+                    requests: a.requests,
+                }
+            })
+            .collect();
+        entries.sort_by(|a, b| b.tokens.cmp(&a.tokens).then(a.label.cmp(b.label)));
+        entries
+    }
 }
 
 /// Global application state
@@ -270,6 +372,14 @@ pub struct AppState {
     pub platforms: [PlatformState; Platform::COUNT],
     pub active_tab: Tab,
     pub available_tabs: Vec<Tab>,
+    /// Whether keyboard focus is on the sessions list (arrow keys move the
+    /// selection and Enter launches, instead of switching tabs).
+    pub sessions_focused: bool,
+    /// The selected session, tracked by its stable [`SessionEntry::key`]
+    /// rather than row index (so live re-sorting never moves the cursor onto
+    /// a different session between selecting and pressing Enter) and rather
+    /// than `session_id` (which collides across id-less rows).
+    pub selected_key: Option<InternedString>,
 }
 
 impl AppState {
@@ -289,7 +399,106 @@ impl AppState {
             platforms: std::array::from_fn(|_| make()),
             active_tab: Tab::ClaudeCode,
             available_tabs: Vec::new(),
+            sessions_focused: false,
+            selected_key: None,
         }
+    }
+
+    /// Sessions of the active tab, highest usage first.
+    pub fn active_session_entries(&self) -> Vec<SessionEntry> {
+        self.platform(self.active_tab).session_entries()
+    }
+
+    /// Enter session-selection mode, ensuring a valid row is highlighted.
+    pub fn focus_sessions(&mut self) {
+        let entries = self.active_session_entries();
+        if entries.is_empty() {
+            self.selected_key = None;
+            return;
+        }
+        self.sessions_focused = true;
+        let valid = self
+            .selected_key
+            .is_some_and(|key| entries.iter().any(|e| e.key == key));
+        if !valid {
+            self.selected_key = Some(entries[0].key);
+        }
+    }
+
+    /// Leave session-selection mode; the selection is remembered.
+    pub fn unfocus_sessions(&mut self) {
+        self.sessions_focused = false;
+    }
+
+    /// Move the selection by `delta` rows within the active tab, wrapping.
+    pub fn move_selection(&mut self, delta: i32) {
+        let entries = self.active_session_entries();
+        if entries.is_empty() {
+            self.selected_key = None;
+            return;
+        }
+        let cur = self
+            .selected_key
+            .and_then(|key| entries.iter().position(|e| e.key == key));
+        let next = match cur {
+            Some(i) => (i as i32 + delta).rem_euclid(entries.len() as i32) as usize,
+            None => 0,
+        };
+        self.selected_key = Some(entries[next].key);
+    }
+
+    /// Down/j: enter the sessions list (highlighting the first row) or move
+    /// down within it once focused.
+    pub fn nav_down(&mut self) {
+        if self.sessions_focused {
+            self.move_selection(1);
+        } else {
+            self.focus_sessions();
+        }
+    }
+
+    /// Up/k: enter the sessions list or move up within it once focused.
+    pub fn nav_up(&mut self) {
+        if self.sessions_focused {
+            self.move_selection(-1);
+        } else {
+            self.focus_sessions();
+        }
+    }
+
+    /// Enter: focus the sessions list, or (if already focused) return the
+    /// selected session to resume. `None` means "nothing to launch yet".
+    pub fn activate_sessions(&mut self) -> Option<ResumeSelection> {
+        if self.sessions_focused {
+            self.selected_resume()
+        } else {
+            self.focus_sessions();
+            None
+        }
+    }
+
+    /// The selected session as a named resume request. `None` means the
+    /// selection disappeared during a live refresh or lacks a usable id — a
+    /// row keyed by its label but without a `session_id` (e.g. an id-less
+    /// source) is selectable for display but cannot be resumed.
+    pub fn selected_resume(&self) -> Option<ResumeSelection> {
+        let selected_key = self.selected_key?;
+        let entry = self
+            .active_session_entries()
+            .into_iter()
+            .find(|entry| entry.key == selected_key)?;
+        (!resolve(entry.session_id).is_empty()).then_some(ResumeSelection {
+            tab: self.active_tab,
+            session_id: entry.session_id,
+            cwd: entry.cwd,
+        })
+    }
+
+    /// Reset session focus/selection — call when the visible list changes
+    /// wholesale (tab switch, tab clear) so a stale selection can't launch.
+    pub fn reset_session_focus(&mut self) {
+        self.sessions_focused = false;
+        self.selected_key = None;
     }
 
     pub fn new() -> Self {
@@ -398,6 +607,29 @@ impl Default for AppState {
     }
 }
 
+/// Shared test-record builder — the single place that lists every
+/// `UsageRecord` field, so adding a field updates only this function instead
+/// of every test module. Callers override the few fields they care about via
+/// struct-update syntax: `UsageRecord { id: intern("x"), ..test_record(p, m) }`.
+#[cfg(test)]
+pub(crate) fn test_record(platform: Platform, model: &str) -> UsageRecord {
+    UsageRecord {
+        timestamp: Utc::now(),
+        platform,
+        model: intern(model),
+        session: intern("test"),
+        session_id: intern("test-sid"),
+        cwd: intern("/tmp/test"),
+        title: intern(""),
+        id: intern("test-id"),
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        cost_usd: 0.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,16 +650,11 @@ mod tests {
         id: &str,
     ) -> UsageRecord {
         UsageRecord {
-            timestamp: Utc::now(),
-            platform,
-            model: intern(model),
-            session: intern("test"),
             id: intern(id),
             input_tokens: input,
             output_tokens: output,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
             cost_usd: cost,
+            ..test_record(platform, model)
         }
     }
 
@@ -449,6 +676,140 @@ mod tests {
             };
             assert_eq!(tab.index(), p.index(), "mismatch for {tab:?} / {p:?}");
         }
+    }
+
+    fn session_rec(session: &str, sid: &str, cwd: &str, tokens: u64, id: &str) -> UsageRecord {
+        session_rec_titled(session, sid, cwd, "", tokens, id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn session_rec_titled(
+        session: &str,
+        sid: &str,
+        cwd: &str,
+        title: &str,
+        tokens: u64,
+        id: &str,
+    ) -> UsageRecord {
+        UsageRecord {
+            session: intern(session),
+            session_id: intern(sid),
+            cwd: intern(cwd),
+            title: intern(title),
+            id: intern(id),
+            input_tokens: tokens,
+            ..test_record(Platform::ClaudeCode, "opus-4")
+        }
+    }
+
+    #[test]
+    fn session_entries_ordered_and_carry_launch_info() {
+        let mut s = AppState::with_capacity(10);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                session_rec("proj-a aaa", "aaa", "/work/a", 100, "r1"),
+                session_rec("proj-b bbb", "bbb", "/work/b", 500, "r2"),
+                session_rec("proj-a aaa", "aaa", "/work/a", 50, "r3"),
+            ],
+        );
+        let entries = s.platform(Tab::ClaudeCode).session_entries();
+        assert_eq!(entries.len(), 2);
+        // Highest usage first: proj-b (500) before proj-a (150).
+        assert_eq!(entries[0].label, "proj-b bbb");
+        assert_eq!(entries[1].tokens, 150);
+        assert_eq!(resolve(entries[1].cwd), "/work/a");
+    }
+
+    #[test]
+    fn session_entry_label_prefers_title_when_present() {
+        let mut s = AppState::with_capacity(10);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                // First record has no title yet; a later one names the session.
+                session_rec("proj aaa", "aaa", "/work/a", 10, "r1"),
+                session_rec_titled("proj aaa", "aaa", "/work/a", "Fix login bug", 10, "r2"),
+                // A different session with no title keeps the dir+id label.
+                session_rec("proj bbb", "bbb", "/work/b", 5, "r3"),
+            ],
+        );
+        let entries = s.platform(Tab::ClaudeCode).session_entries();
+        let titled = entries
+            .iter()
+            .find(|e| resolve(e.session_id) == "aaa")
+            .unwrap();
+        assert_eq!(titled.label, "Fix login bug");
+        let untitled = entries
+            .iter()
+            .find(|e| resolve(e.session_id) == "bbb")
+            .unwrap();
+        assert_eq!(untitled.label, "proj bbb");
+    }
+
+    #[test]
+    fn selection_focus_wraps_and_resolves_launch_target() {
+        let mut s = AppState::with_capacity(10);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                session_rec("proj-b bbb", "bbb", "/work/b", 500, "r1"),
+                session_rec("proj-a aaa", "aaa", "/work/a", 100, "r2"),
+            ],
+        );
+        // Focus selects the top (highest-usage) row.
+        s.focus_sessions();
+        assert!(s.sessions_focused);
+        let resume = s.selected_resume().unwrap();
+        assert_eq!(resume.tab, Tab::ClaudeCode);
+        assert_eq!(resolve(resume.session_id), "bbb");
+        assert_eq!(resolve(resume.cwd), "/work/b");
+        // Down moves to the second row.
+        s.move_selection(1);
+        assert_eq!(resolve(s.selected_resume().unwrap().session_id), "aaa");
+        // Down again wraps back to the top.
+        s.move_selection(1);
+        assert_eq!(resolve(s.selected_resume().unwrap().session_id), "bbb");
+        // Up wraps to the bottom.
+        s.move_selection(-1);
+        assert_eq!(resolve(s.selected_resume().unwrap().session_id), "aaa");
+    }
+
+    #[test]
+    fn focus_sessions_noop_when_no_sessions() {
+        let mut s = AppState::with_capacity(10);
+        s.focus_sessions();
+        assert!(!s.sessions_focused);
+        assert!(s.selected_resume().is_none());
+    }
+
+    #[test]
+    fn id_less_rows_are_individually_selectable_and_not_launchable() {
+        // Two sessions from a source that records no session id (empty sid).
+        // Tracked by row key (their labels), they must be distinct rows the
+        // cursor can address separately — the bug the key fix addresses.
+        let mut s = AppState::with_capacity(10);
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                session_rec("proj-a", "", "", 100, "r1"),
+                session_rec("proj-b", "", "", 50, "r2"),
+            ],
+        );
+        let entries = s.active_session_entries();
+        assert_eq!(entries.len(), 2, "id-less rows must not collapse into one");
+
+        s.focus_sessions();
+        let first = s.selected_key;
+        s.move_selection(1);
+        assert_ne!(
+            s.selected_key, first,
+            "moving must land on a different id-less row"
+        );
+        // Neither row can launch: no session id to resume.
+        assert!(s.selected_resume().is_none());
+        s.move_selection(1);
+        assert!(s.selected_resume().is_none());
     }
 
     #[test]

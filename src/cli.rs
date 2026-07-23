@@ -84,7 +84,7 @@ pub enum ConfigAction {
 
     /// Set a configuration value
     Set {
-        /// Configuration key (e.g., claude_path, copilot_path, antigravity_path, refresh, max_records)
+        /// Configuration key (e.g., claude_path, codex_path, cursor_path, refresh, max_records)
         key: String,
 
         /// Configuration value

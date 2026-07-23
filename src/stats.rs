@@ -410,15 +410,13 @@ mod tests {
     ) -> UsageRecord {
         UsageRecord {
             timestamp: Utc.with_ymd_and_hms(2026, 6, day, 12, 0, 0).unwrap(),
-            platform: Platform::ClaudeCode,
-            model: crate::state::intern(model),
             session: crate::state::intern(session),
+            session_id: crate::state::intern(session),
             id: crate::state::intern(&format!("{session}:{day}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
             cost_usd: cost,
+            ..crate::state::test_record(Platform::ClaudeCode, model)
         }
     }
 

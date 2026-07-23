@@ -15,6 +15,7 @@ const CHARS_PER_TOKEN: f64 = 4.0;
 #[derive(Clone, Default)]
 struct TranscriptTurnState {
     project: String,
+    cwd: String,
     conversation_id: String,
     model: String,
     finalized_turns: u64,
@@ -153,28 +154,18 @@ impl CursorReader {
                 // explicit "timestamp", keep the precise value.
                 // Incremental delta appends (offset > 0) keep their now()/captured ts.
                 let scan_now = Utc::now();
-                if let Ok(md) = std::fs::metadata(&file) {
-                    if let Ok(modified) = md.modified() {
-                        if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
-                            if let Some(file_ts) =
-                                Utc.timestamp_opt(dur.as_secs() as i64, 0).single()
-                            {
-                                for r in &mut entries {
-                                    let age_secs = scan_now
-                                        .signed_duration_since(r.timestamp)
-                                        .num_seconds()
-                                        .abs();
-                                    if age_secs < 300 {
-                                        // was produced by now() (recent synthetic timestamp) for a
-                                        // historical full read (offset==0); use file mtime instead.
-                                        // A precise embedded "timestamp" from the line — however old
-                                        // or however recent its *year* happens to be — is kept as-is;
-                                        // only a genuinely-recent (age-based) synthetic now() stamp is
-                                        // replaced.
-                                        r.timestamp = file_ts;
-                                    }
-                                }
-                            }
+                if let Ok(md) = std::fs::metadata(&file)
+                    && let Ok(modified) = md.modified()
+                    && let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH)
+                    && let Some(file_ts) = Utc.timestamp_opt(dur.as_secs() as i64, 0).single()
+                {
+                    for r in &mut entries {
+                        let age_secs = scan_now
+                            .signed_duration_since(r.timestamp)
+                            .num_seconds()
+                            .abs();
+                        if age_secs < 300 {
+                            r.timestamp = file_ts;
                         }
                     }
                 }
@@ -213,11 +204,10 @@ impl CursorReader {
         // (HashSet), which survives store.db replacement/rotation (unlike a
         // rowid resume cursor, which was the root cause of silent data loss
         // after store.db recreation: a fresh db's rowids restart at 1, so a
-        // "resume from last rowid" cursor left over from the old file would
-        // skip every row in the new one).
         let session_id = extract_store_session_id(path);
         let project = extract_store_project(path);
-        let session = session_label(&project, &session_id);
+        let cwd = decode_cursor_project_cwd(&project.raw);
+        let session = session_label(&project.display, &session_id);
 
         let mut stmt = match conn
             .prepare("SELECT rowid, key, value FROM blobs WHERE rowid > 0 ORDER BY rowid")
@@ -241,7 +231,7 @@ impl CursorReader {
 
         for row in rows.flatten() {
             let (_rowid, key, value) = row;
-            if let Some(rec) = parse_store_blob(&value, &key, &session, &session_id, seen) {
+            if let Some(rec) = parse_store_blob(&value, &key, &session, &session_id, &cwd, seen) {
                 records.push(rec);
             }
         }
@@ -264,22 +254,49 @@ impl UsageSource for CursorReader {
     }
 }
 
+/// A Cursor "project" identifier. `display` is the human-friendly label shown
+/// in the sessions list; `raw` is the original hyphen-encoded folder segment
+/// used to reconstruct the working directory. Bundled so the two strings can't
+/// be transposed at a call site.
+struct CursorProject {
+    display: String,
+    raw: String,
+}
+
+impl CursorProject {
+    fn unknown() -> Self {
+        Self {
+            display: "cursor".to_string(),
+            raw: String::new(),
+        }
+    }
+
+    fn from_encoded(raw: &str) -> Self {
+        Self {
+            display: prettify_project_id(raw),
+            raw: raw.to_string(),
+        }
+    }
+}
+
 fn transcript_meta_for(path: &Path, models: &HashMap<String, String>) -> TranscriptTurnState {
     let (project, conversation_id) = extract_transcript_paths(path);
+    let cwd = decode_cursor_project_cwd(&project.raw);
     let model = models
         .get(&conversation_id)
         .cloned()
         .unwrap_or_else(|| "cursor-auto".to_string());
     TranscriptTurnState {
-        project,
+        project: project.display,
+        cwd,
         conversation_id,
         model,
         ..Default::default()
     }
 }
 
-fn extract_transcript_paths(path: &Path) -> (String, String) {
-    let mut project = "cursor".to_string();
+fn extract_transcript_paths(path: &Path) -> (CursorProject, String) {
+    let mut project = CursorProject::unknown();
     let mut conversation_id = String::new();
 
     for ancestor in path.ancestors() {
@@ -290,7 +307,7 @@ fn extract_transcript_paths(path: &Path) -> (String, String) {
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
                 {
-                    project = prettify_project_id(proj);
+                    project = CursorProject::from_encoded(proj);
                 }
                 break;
             }
@@ -319,7 +336,7 @@ fn extract_store_session_id(path: &Path) -> String {
         .to_string()
 }
 
-fn extract_store_project(path: &Path) -> String {
+fn extract_store_project(path: &Path) -> CursorProject {
     path.ancestors()
         .find_map(|a| {
             let name = a.file_name()?.to_str()?;
@@ -329,22 +346,53 @@ fn extract_store_project(path: &Path) -> String {
                 .parent()
                 .is_some_and(|p| p.file_name().is_some_and(|n| n == "chats"))
             {
-                Some(prettify_project_id(name))
+                Some(CursorProject::from_encoded(name))
             } else {
                 None
             }
         })
-        .unwrap_or_else(|| "cursor".to_string())
+        .unwrap_or_else(CursorProject::unknown)
 }
 
 fn prettify_project_id(raw: &str) -> String {
     let stripped = raw.strip_prefix("-Users-").unwrap_or(raw);
     stripped
         .split('-')
-        .filter(|s| !s.is_empty())
-        .next_back()
+        .rfind(|s| !s.is_empty())
         .unwrap_or(stripped)
         .to_string()
+}
+fn decode_cursor_project_cwd(raw: &str) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    let stripped = raw.strip_prefix('-').unwrap_or(raw);
+    let parts: Vec<&str> = stripped.split('-').filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        return String::new();
+    }
+
+    let mut current = PathBuf::from("/");
+    let mut idx = 0;
+    while idx < parts.len() {
+        let mut matched = false;
+        // Try longest candidate first (greedy match for hyphenated folder names)
+        for len in (1..=(parts.len() - idx)).rev() {
+            let candidate_name = parts[idx..idx + len].join("-");
+            let candidate_path = current.join(&candidate_name);
+            if candidate_path.is_dir() {
+                current = candidate_path;
+                idx += len;
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return String::new();
+        }
+    }
+
+    current.to_str().unwrap_or("").to_string()
 }
 
 fn read_transcript_from_offset(
@@ -468,6 +516,10 @@ fn flush_transcript_progress(st: &mut TranscriptTurnState) -> Option<UsageRecord
         platform: Platform::Cursor,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session_label(&st.project, &st.conversation_id)),
+        session_id: crate::state::intern(&st.conversation_id),
+        // Cursor's "project" is a display label, not a filesystem path.
+        cwd: crate::state::intern(&st.cwd),
+        title: crate::state::intern(""),
         id: crate::state::intern(&record_id),
         input_tokens: input,
         output_tokens: output,
@@ -494,6 +546,7 @@ fn parse_store_blob(
     key: &str,
     session: &str,
     session_id: &str,
+    cwd: &str,
     seen: &mut HashSet<String>,
 ) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(value).ok()?;
@@ -512,6 +565,8 @@ fn parse_store_blob(
         }
         let mut rec = rec;
         rec.id = crate::state::intern(&dedup);
+        rec.session_id = crate::state::intern(session_id);
+        rec.cwd = crate::state::intern(cwd);
         return Some(rec);
     }
 
@@ -558,6 +613,9 @@ fn parse_store_blob(
             platform: Platform::Cursor,
             model: crate::state::intern(&model),
             session: crate::state::intern(session),
+            session_id: crate::state::intern(session_id),
+            cwd: crate::state::intern(cwd),
+            title: crate::state::intern(""),
             id: crate::state::intern(&dedup),
             input_tokens: 0,
             output_tokens: output,
@@ -625,9 +683,12 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
         platform: Platform::Cursor,
         model: crate::state::intern(&model),
         session: crate::state::intern(session),
-        // Overwritten by the caller (`parse_store_blob`) with the blob's
-        // stable `key`-based dedup id; placeholder here so this function can
-        // still be tested/used standalone.
+        // Both overwritten by the caller (`parse_store_blob`): `id` with the
+        // blob's stable `key`-based dedup id, `session_id` with the real
+        // conversation id. Placeholders here so this fn works standalone.
+        session_id: crate::state::intern(""),
+        cwd: crate::state::intern(""),
+        title: crate::state::intern(""),
         id: crate::state::intern(""),
         input_tokens: input,
         output_tokens: output,
@@ -1039,6 +1100,26 @@ mod tests {
             records.len(),
             2,
             "two distinct bubbles with identical createdAt+tokens must both survive dedup"
+        );
+    }
+
+    #[test]
+    fn decode_cursor_project_cwd_resolves_hyphenated_existing_directory() {
+        let cwd = std::env::current_dir().unwrap();
+        let encoded = format!(
+            "-{}",
+            cwd.to_str()
+                .unwrap()
+                .trim_start_matches('/')
+                .replace('/', "-")
+        );
+        let decoded = decode_cursor_project_cwd(&encoded);
+        assert_eq!(decoded, cwd.to_str().unwrap());
+
+        // Non-existent directory returns empty string
+        assert_eq!(
+            decode_cursor_project_cwd("Users-nonexistent-folder-12345"),
+            ""
         );
     }
 }

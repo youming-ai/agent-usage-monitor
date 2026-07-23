@@ -16,6 +16,9 @@ use super::find_recursive;
 struct FileState {
     model: String,
     dir: String,
+    /// Full working-directory path (from `session_meta`/`turn_context` `cwd`),
+    /// kept alongside `dir` (its basename) so a resume can launch there.
+    cwd: String,
     sid: String,
 }
 
@@ -59,6 +62,7 @@ impl CodexReader {
             |file| FileState {
                 model: "unknown".to_string(),
                 dir: "codex".to_string(),
+                cwd: String::new(),
                 sid: extract_codex_project(file),
             },
             read_codex_from_offset,
@@ -100,6 +104,7 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         let payload = v.get("payload");
         if let Some(cwd) = payload.and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
             st.dir = crate::reader::basename(cwd);
+            st.cwd = cwd.to_string();
         }
         if let Some(id) = payload.and_then(|p| p.get("id")).and_then(|i| i.as_str()) {
             st.sid = id.to_string();
@@ -121,6 +126,7 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
             .and_then(|c| c.as_str())
         {
             st.dir = crate::reader::basename(cwd);
+            st.cwd = cwd.to_string();
         }
         return None;
     }
@@ -207,6 +213,10 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         platform: Platform::Codex,
         model: crate::state::intern(&st.model),
         session: crate::state::intern(&st.session()),
+        session_id: crate::state::intern(&st.sid),
+        cwd: crate::state::intern(&st.cwd),
+        // Codex rollout files don't record a conversation title.
+        title: crate::state::intern(""),
         id: crate::state::intern(&record_id),
         input_tokens: delta_input,
         output_tokens: delta_output,
@@ -259,6 +269,29 @@ mod tests {
         format!(
             r#"{{"type":"event_msg","timestamp":"{ts}","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"output_tokens":{output},"cached_input_tokens":0}},"last_token_usage":{last}}}}}}}"#
         )
+    }
+
+    #[test]
+    fn session_meta_populates_session_id_and_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let meta = r#"{"type":"session_meta","timestamp":"2026-05-29T09:59:00Z","payload":{"cwd":"/Users/me/proj","id":"sess-42"}}"#.to_string();
+        write_rollout(
+            &sessions,
+            "rollout-meta.jsonl",
+            &[
+                meta,
+                turn_context("gpt-5.4"),
+                token_count("2026-05-29T10:00:00Z", 100, 50),
+            ],
+        );
+        let mut reader = reader_for(&sessions);
+        let records = reader.scan_all();
+        assert_eq!(records.len(), 1);
+        // The real id and working dir must be threaded through for resume.
+        assert_eq!(crate::state::resolve(records[0].session_id), "sess-42");
+        assert_eq!(crate::state::resolve(records[0].cwd), "/Users/me/proj");
     }
 
     /// A rollout whose `last_token_usage` is `null` (as opposed to absent)

@@ -171,7 +171,6 @@ pub(crate) fn is_uuid(stem: &str) -> bool {
     })
 }
 
-
 /// Label for a single conversation: working-dir basename plus a short id
 /// suffix so multiple sessions in the same directory stay distinct.
 pub(crate) fn session_label(dir: &str, id: &str) -> String {
@@ -236,5 +235,4 @@ mod tests {
         assert_eq!(basename("/Users/me/repo"), "repo");
         assert_eq!(basename("repo"), "repo");
     }
-
 }
