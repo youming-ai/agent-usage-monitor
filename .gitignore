@@ -1,5 +1,8 @@
 /target
 
+# macOS
+.DS_Store
+
 # Planning artifacts (brainstorming specs and implementation plans)
 /docs/superpowers/
 
