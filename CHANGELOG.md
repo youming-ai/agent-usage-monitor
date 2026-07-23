@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.1.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.0.0...v1.1.0) (2026-07-23)
+
+
+### Features
+
+* **tui:** resume a session by selecting it in the sessions list ([e605f8e](https://github.com/youming-ai/agent-usage-monitor/commit/e605f8e193da8f6d6d4bd0eaf3a917961ea02d95))
+* **tui:** resume agent session from sessions list in new terminal window ([f5fe7d7](https://github.com/youming-ai/agent-usage-monitor/commit/f5fe7d72e91695bd5b4db11f407da7c6c6b92a4c))
+* **tui:** resume in a new terminal window, keep monitoring ([5ba300a](https://github.com/youming-ai/agent-usage-monitor/commit/5ba300a5cb827b7f04597f5dfe850e9618c2cd21))
+* **tui:** show session titles; recolor Codex tab blue ([715c206](https://github.com/youming-ai/agent-usage-monitor/commit/715c206e367d143f8d6daf61e9bb26a6c409c503))
+
+
+### Bug Fixes
+
+* **mcp:** update platform count and config-set help examples for 3-platform registry ([69921de](https://github.com/youming-ai/agent-usage-monitor/commit/69921ded1039c77af57ae0cfb47a43cbb79c020a))
+* **tui:** expand Linux terminal fallback chain, resolve Cursor cwd, and guard usage metrics ([226cad0](https://github.com/youming-ai/agent-usage-monitor/commit/226cad028b452eaab6120c4bfc9b3992fb4bfbe6))
+
+
+### Refactors
+
+* **tui:** address PR [#45](https://github.com/youming-ai/agent-usage-monitor/issues/45) review findings ([ba27cc4](https://github.com/youming-ai/agent-usage-monitor/commit/ba27cc4f52d861172205a2e1730d12adb8dc0719))
+* **tui:** extract session launcher and cleanup app_state usage guards ([a39e914](https://github.com/youming-ai/agent-usage-monitor/commit/a39e9140afa019d270407bee35ab7076a755381f))
+
 ## [1.0.0](https://github.com/youming-ai/agent-usage-monitor/compare/v0.18.1...v1.0.0) (2026-07-22)
 
 
