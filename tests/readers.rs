@@ -7,16 +7,16 @@
 
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::readers::{PlatformReaders, poll_reader_into, scan_reader_into};
-use agent_usage_monitor::state::{AgentPaths, AppState, Platform, Tab};
+use agent_usage_monitor::state::{AgentPaths, AppState, Platform};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-/// Every tab pointed at `p`; caller overrides the one(s) it cares about.
-fn all_pointing_at(p: PathBuf) -> HashMap<Tab, PathBuf> {
+/// Every platform pointed at `p`; caller overrides the one(s) it cares about.
+fn all_pointing_at(p: PathBuf) -> HashMap<Platform, PathBuf> {
     platforms::entries()
         .iter()
-        .map(|e| (e.tab, p.clone()))
+        .map(|e| (e.platform, p.clone()))
         .collect()
 }
 
@@ -29,7 +29,7 @@ fn reused_reader_does_not_double_count_on_refresh() {
     // Only Claude points at a real fixture (2 assistant records); every other
     // tab points at a path that does not exist, so no reader is built for it.
     let mut map = all_pointing_at(PathBuf::from("/nonexistent/aum/definitely/not/here"));
-    map.insert(Tab::ClaudeCode, fixtures_root().join("claude"));
+    map.insert(Platform::ClaudeCode, fixtures_root().join("claude"));
     let paths = AgentPaths::new(map);
 
     let readers = PlatformReaders::build(&paths);
@@ -43,7 +43,11 @@ fn reused_reader_does_not_double_count_on_refresh() {
         scan_reader_into(&reader, &state, p);
     }
     assert_eq!(
-        state.read().unwrap().platform(Tab::ClaudeCode).total_calls,
+        state
+            .read()
+            .unwrap()
+            .platform(Platform::ClaudeCode)
+            .total_calls,
         2
     );
 
@@ -54,7 +58,11 @@ fn reused_reader_does_not_double_count_on_refresh() {
         poll_reader_into(&reader, &state, p);
     }
     assert_eq!(
-        state.read().unwrap().platform(Tab::ClaudeCode).total_calls,
+        state
+            .read()
+            .unwrap()
+            .platform(Platform::ClaudeCode)
+            .total_calls,
         2,
         "refresh re-added already-counted records"
     );
@@ -66,7 +74,7 @@ fn discover_new_picks_up_paths_created_after_launch() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let claude_dir = tmp.path().join("claude-appears-later");
     let mut map = all_pointing_at(tmp.path().join("nope"));
-    map.insert(Tab::ClaudeCode, claude_dir.clone());
+    map.insert(Platform::ClaudeCode, claude_dir.clone());
     let paths = AgentPaths::new(map);
 
     // At launch nothing exists -> no readers built.

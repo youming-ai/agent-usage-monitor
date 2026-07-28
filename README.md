@@ -17,7 +17,7 @@ Also available from [Releases](https://github.com/youming-ai/agent-usage-monitor
 
 ```bash
 aum                # start monitoring (defaults below)
-aum -r 2           # refresh every 2 seconds
+aum -r 2           # use a 2-second fallback poll
 aum update         # self-update to the latest release (--dry-run / --force)
 aum config         # show current configuration
 aum config set <key> <value>  # set a configuration value
@@ -31,7 +31,7 @@ aum stats         # print JSON usage report (no TUI)
 | `--claude-path` | `~/.claude/projects` | Claude Code data directory |
 | `--codex-path` | `~/.codex` | Codex data directory |
 | `--cursor-path` | `~/.cursor` | Cursor CLI data directory |
-| `-r, --refresh` | `5` | Poll interval, in seconds |
+| `-r, --refresh` | `5` | Fallback poll interval, in seconds |
 
 **Keys:** `Tab` / `←` / `→` switch tab · `↑` / `↓` focus & move through the sessions list · `Enter` resume the selected session in its agent CLI · `Esc` leave the list · `r` clear current tab · `q` quit
 
@@ -90,7 +90,7 @@ Configuration is stored in `~/.config/aum/config.toml` (or platform equivalent).
 - `claude_path` - Path to Claude Code data directory
 - `codex_path` - Path to Codex data directory
 - `cursor_path` - Path to Cursor CLI data directory
-- `refresh` - Polling interval in seconds
+- `refresh` - Fallback polling interval in seconds (minimum: 1)
 - `max_records` - Maximum number of records to keep in memory
 
 Example:
@@ -104,11 +104,12 @@ aum config set cursor_path ~/.cursor
 
 The TUI uses `notify` (FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW
 on Windows) to react to file changes immediately, instead of polling on a timer.
-A 50 ms per-platform debounce coalesces bursts of writes; a 30 s fallback poll
-ensures the display stays current even if a FS event is dropped.
+A 50 ms per-platform debounce coalesces bursts of writes; the configured fallback
+poll (5 s by default) ensures the display stays current even if a FS event is
+dropped. Paths created after startup are discovered by that poll and then watched.
 
-Network filesystems (NFS, SMB) are not officially supported by `notify`; on those
-paths the 30 s fallback still works.
+Network filesystems (NFS, SMB) are not officially supported by `notify`; the
+configured fallback poll still works there.
 
 ## MCP server
 
@@ -204,7 +205,7 @@ Each agent tab uses the same layout; only the accent color and data source chang
 - **models** — per-model totals: tokens, cost, and request count.
 - **sessions** — per-conversation usage (tokens, requests), labelled `<dir> <id>` so multiple sessions in one project stay distinct.
 
-Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue, Cursor cyan); everything else stays default or dimmed. These are defined in `src/state/app_state.rs` (`Tab::primary_color`).
+Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue, Cursor cyan); everything else stays default or dimmed. These are defined in `src/state/app_state.rs` (`Platform::primary_color`).
 
 ## How it works
 

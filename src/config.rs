@@ -16,7 +16,7 @@ pub struct Config {
     #[serde(default = "default_cursor_path")]
     pub cursor_path: PathBuf,
 
-    /// Polling interval in seconds
+    /// Fallback polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
 
@@ -38,23 +38,21 @@ impl Default for Config {
 }
 
 // Every `default_*_path` below is a thin `fn() -> PathBuf` shim around
-// `Tab::default_path` — required because `#[serde(default = "...")]` needs a
-// zero-arg free function, but `Tab::default_path` takes `self`. `Tab` is the
-// single source of truth for these paths; keeping them here too (rather than
-// inlining the join logic per-platform, as before) means there is exactly one
-// place that knows where each agent's data lives.
-use crate::state::Tab;
+// `Platform::default_path` — required because `#[serde(default = "...")]`
+// needs a zero-arg free function. `Platform` is the single source of truth
+// for these paths.
+use crate::state::Platform;
 
 fn default_claude_path() -> PathBuf {
-    Tab::ClaudeCode.default_path()
+    Platform::ClaudeCode.default_path()
 }
 
 fn default_codex_path() -> PathBuf {
-    Tab::Codex.default_path()
+    Platform::Codex.default_path()
 }
 
 fn default_cursor_path() -> PathBuf {
-    Tab::Cursor.default_path()
+    Platform::Cursor.default_path()
 }
 
 fn default_refresh() -> u64 {

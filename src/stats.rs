@@ -5,7 +5,7 @@
 //! the TUI: no event loop, no ratatui, no background tasks.
 
 use crate::quota::{QuotaInfo, QuotaWindow};
-use crate::state::{AgentPaths, Tab, UsageRecord};
+use crate::state::{AgentPaths, Platform, UsageRecord};
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
@@ -152,18 +152,11 @@ impl Filters {
     }
 }
 
-/// Derive the canonical snake_case JSON key for a Tab variant.
-///
-/// The registry's `config_key` field uses inconsistent forms (`claude_path`,
-/// `opencode_path`, `kimi_code_path`, `mimo_code_path`, etc.) — stripping
-/// `_path` would yield `claude` for ClaudeCode instead of the expected
-/// `claude_code`. We instead derive the key from the Tab variant's
-/// PascalCase Debug form (e.g. `ClaudeCode` -> `claude_code`,
-/// `OpenClaw` -> `open_claw`, `OpenCode` -> `open_code`).
-pub fn platform_canonical_key(tab: Tab) -> String {
-    let tab_name = format!("{:?}", tab);
-    let mut canonical = String::with_capacity(tab_name.len() + 2);
-    let mut chars = tab_name.chars();
+/// Derive the canonical snake_case JSON key for a platform variant.
+pub fn platform_canonical_key(platform: Platform) -> String {
+    let platform_name = format!("{:?}", platform);
+    let mut canonical = String::with_capacity(platform_name.len() + 2);
+    let mut chars = platform_name.chars();
     if let Some(first) = chars.next() {
         canonical.push(first.to_ascii_lowercase());
         for c in chars {
@@ -186,9 +179,12 @@ pub fn resolve_platform_filter(raw: &[String]) -> Result<BTreeSet<String>> {
         }
         let mut matched = false;
         for entry in platforms::entries() {
-            let tab_name = format!("{:?}", entry.tab);
-            let canonical = platform_canonical_key(entry.tab);
-            if canonical == normalized || tab_name == normalized || entry.log_name == normalized {
+            let platform_name = format!("{:?}", entry.platform);
+            let canonical = platform_canonical_key(entry.platform);
+            if canonical == normalized
+                || platform_name == normalized
+                || entry.log_name == normalized
+            {
                 set.insert(canonical);
                 matched = true;
                 break;
@@ -321,17 +317,16 @@ pub fn build_platform_report(
 pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsReport> {
     use crate::platforms;
 
-    use crate::state::Platform;
     use std::collections::HashMap;
 
     // 第一遍：scan_all 收集记录（顺序，task::spawn_blocking 包 I/O）
     let mut entries: Vec<(String, Platform, PathBuf, Vec<UsageRecord>)> = Vec::new();
     for entry in platforms::entries() {
-        let key = platform_canonical_key(entry.tab);
+        let key = platform_canonical_key(entry.platform);
         if !opts.filters.matches_platform(&key) {
             continue;
         }
-        let path = paths.path_for(entry.tab);
+        let path = paths.path_for(entry.platform);
         let mut reader = entry.build_reader(path.clone());
         let records = tokio::task::spawn_blocking(move || reader.scan_all())
             .await
@@ -529,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_platform_filter_accepts_tab_variant() {
+    fn resolve_platform_filter_accepts_platform_variant() {
         let result = resolve_platform_filter(&["ClaudeCode".to_string()]).unwrap();
         assert!(result.contains("claude_code"));
     }

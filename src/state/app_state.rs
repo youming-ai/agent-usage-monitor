@@ -57,21 +57,21 @@ impl serde::Serialize for CompactDate {
 /// custom paths are honored instead of always checking defaults.
 #[derive(Debug, Clone)]
 pub struct AgentPaths {
-    paths: HashMap<Tab, PathBuf>,
+    paths: HashMap<Platform, PathBuf>,
 }
 
 impl AgentPaths {
-    pub fn new(paths: HashMap<Tab, PathBuf>) -> Self {
+    pub fn new(paths: HashMap<Platform, PathBuf>) -> Self {
         Self { paths }
     }
 
-    pub fn path_for(&self, tab: Tab) -> PathBuf {
+    pub fn path_for(&self, platform: Platform) -> PathBuf {
         self.paths
-            .get(&tab)
+            .get(&platform)
             .cloned()
             .unwrap_or_else(|| {
-                tracing::warn!("AgentPaths missing {tab:?} — falling back to default path; use platforms::resolve_paths");
-                tab.default_path()
+                tracing::warn!("AgentPaths missing {platform:?} — falling back to default path; use platforms::resolve_paths");
+                platform.default_path()
             })
     }
 }
@@ -87,55 +87,36 @@ impl Platform {
     /// Number of platform variants — used to size the fixed array in `AppState`.
     pub const COUNT: usize = 3;
 
-    /// Zero-based index for array access. Must stay in sync with variant order.
+    /// Zero-based index for array access.
     pub const fn index(self) -> usize {
         match self {
-            Platform::ClaudeCode => 0,
-            Platform::Codex => 1,
-            Platform::Cursor => 2,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Tab {
-    ClaudeCode,
-    Codex,
-    Cursor,
-}
-
-impl Tab {
-    /// Zero-based index for array access. Mirrors `Platform::index()` by
-    /// construction — the two enums share variant order.
-    pub const fn index(self) -> usize {
-        match self {
-            Tab::ClaudeCode => 0,
-            Tab::Codex => 1,
-            Tab::Cursor => 2,
+            Self::ClaudeCode => 0,
+            Self::Codex => 1,
+            Self::Cursor => 2,
         }
     }
 
-    pub fn next_in(self, available: &[Tab]) -> Self {
+    pub fn next_in(self, available: &[Self]) -> Self {
         if available.is_empty() {
             return self;
         }
-        let pos = available.iter().position(|&t| t == self).unwrap_or(0);
+        let pos = available.iter().position(|&p| p == self).unwrap_or(0);
         available[(pos + 1) % available.len()]
     }
 
-    pub fn prev_in(self, available: &[Tab]) -> Self {
+    pub fn prev_in(self, available: &[Self]) -> Self {
         if available.is_empty() {
             return self;
         }
-        let pos = available.iter().position(|&t| t == self).unwrap_or(0);
+        let pos = available.iter().position(|&p| p == self).unwrap_or(0);
         available[(pos + available.len() - 1) % available.len()]
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Tab::ClaudeCode => "CLAUDE",
-            Tab::Codex => "CODEX",
-            Tab::Cursor => "CURSOR",
+            Self::ClaudeCode => "CLAUDE",
+            Self::Codex => "CODEX",
+            Self::Cursor => "CURSOR",
         }
     }
 
@@ -143,44 +124,33 @@ impl Tab {
     /// Sourced from each agent's official CLI theme / brand palette.
     pub fn primary_color(self) -> ratatui::style::Color {
         match self {
-            Tab::ClaudeCode => ratatui::style::Color::Rgb(217, 119, 87),
-            Tab::Codex => ratatui::style::Color::Rgb(59, 130, 246),
-            Tab::Cursor => ratatui::style::Color::Rgb(136, 192, 208),
-        }
-    }
-
-    /// Whether this platform has a quota API endpoint (Claude + Codex only).
-    /// Map from the corresponding `Platform` variant. The two enums share
-    /// variant order, so this is a constant-time match.
-    pub const fn from_platform(p: Platform) -> Self {
-        match p {
-            Platform::ClaudeCode => Tab::ClaudeCode,
-            Platform::Codex => Tab::Codex,
-            Platform::Cursor => Tab::Cursor,
+            Self::ClaudeCode => ratatui::style::Color::Rgb(217, 119, 87),
+            Self::Codex => ratatui::style::Color::Rgb(59, 130, 246),
+            Self::Cursor => ratatui::style::Color::Rgb(136, 192, 208),
         }
     }
 
     pub const fn has_quota_api(self) -> bool {
-        matches!(self, Tab::ClaudeCode | Tab::Codex | Tab::Cursor)
+        matches!(self, Self::ClaudeCode | Self::Codex | Self::Cursor)
     }
 
-    pub fn all() -> &'static [Tab] {
-        &[Tab::ClaudeCode, Tab::Codex, Tab::Cursor]
+    pub fn all() -> &'static [Self] {
+        &[Self::ClaudeCode, Self::Codex, Self::Cursor]
     }
 
     pub fn default_path(self) -> std::path::PathBuf {
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         match self {
-            Tab::ClaudeCode => home.join(".claude/projects"),
-            Tab::Codex => home.join(".codex"),
-            Tab::Cursor => home.join(".cursor"),
+            Self::ClaudeCode => home.join(".claude/projects"),
+            Self::Codex => home.join(".codex"),
+            Self::Cursor => home.join(".cursor"),
         }
     }
 
     /// Shared detection logic: does the agent's data exist at this path?
-    fn is_available_at_path(path: &std::path::Path, tab: Tab) -> bool {
-        match tab {
-            Tab::Cursor => path.join("projects").exists() || path.join("chats").exists(),
+    fn is_available_at_path(path: &std::path::Path, platform: Self) -> bool {
+        match platform {
+            Self::Cursor => path.join("projects").exists() || path.join("chats").exists(),
             _ => path.exists(),
         }
     }
@@ -190,6 +160,10 @@ impl Tab {
         Self::is_available_at_path(&path, self)
     }
 }
+
+/// UI calls platforms "tabs". Keep this alias for callers without maintaining
+/// a second enum and its fragile conversion/index mapping.
+pub type Tab = Platform;
 
 /// Single API call record
 #[derive(Debug, Clone)]
@@ -261,7 +235,7 @@ pub struct SessionEntry {
 /// the launcher rather than reassembling tab, id, and working directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResumeSelection {
-    pub(crate) tab: Tab,
+    pub(crate) platform: Platform,
     pub(crate) session_id: InternedString,
     pub(crate) cwd: InternedString,
 }
@@ -370,8 +344,8 @@ impl PlatformState {
 /// Global application state
 pub struct AppState {
     pub platforms: [PlatformState; Platform::COUNT],
-    pub active_tab: Tab,
-    pub available_tabs: Vec<Tab>,
+    pub active_tab: Platform,
+    pub available_tabs: Vec<Platform>,
     /// Whether keyboard focus is on the sessions list (arrow keys move the
     /// selection and Enter launches, instead of switching tabs).
     pub sessions_focused: bool,
@@ -397,7 +371,7 @@ impl AppState {
         Self {
             // ponytail: size-agnostic init, tracks Platform::COUNT automatically
             platforms: std::array::from_fn(|_| make()),
-            active_tab: Tab::ClaudeCode,
+            active_tab: Platform::ClaudeCode,
             available_tabs: Vec::new(),
             sessions_focused: false,
             selected_key: None,
@@ -488,7 +462,7 @@ impl AppState {
             .into_iter()
             .find(|entry| entry.key == selected_key)?;
         (!resolve(entry.session_id).is_empty()).then_some(ResumeSelection {
-            tab: self.active_tab,
+            platform: self.active_tab,
             session_id: entry.session_id,
             cwd: entry.cwd,
         })
@@ -505,12 +479,12 @@ impl AppState {
         Self::with_capacity(100)
     }
 
-    pub fn platform(&self, tab: Tab) -> &PlatformState {
-        &self.platforms[tab.index()]
+    pub fn platform(&self, platform: Platform) -> &PlatformState {
+        &self.platforms[platform.index()]
     }
 
-    pub fn platform_mut(&mut self, tab: Tab) -> &mut PlatformState {
-        &mut self.platforms[tab.index()]
+    pub fn platform_mut(&mut self, platform: Platform) -> &mut PlatformState {
+        &mut self.platforms[platform.index()]
     }
 
     pub fn add_records(&mut self, platform: Platform, records: Vec<UsageRecord>) {
@@ -544,9 +518,9 @@ impl AppState {
     }
 
     pub fn detect_available_tabs(&mut self, paths: &AgentPaths) {
-        self.available_tabs = Tab::all()
+        self.available_tabs = Platform::all()
             .iter()
-            .filter(|tab| tab.is_available_at(paths))
+            .filter(|platform| platform.is_available_at(paths))
             .copied()
             .collect();
 
@@ -555,7 +529,7 @@ impl AppState {
                 .available_tabs
                 .first()
                 .copied()
-                .unwrap_or(Tab::ClaudeCode);
+                .unwrap_or(Platform::ClaudeCode);
         }
     }
 }
@@ -659,23 +633,16 @@ mod tests {
     }
 
     fn claude_idx() -> usize {
-        Tab::ClaudeCode.index()
+        Platform::ClaudeCode.index()
     }
     fn codex_idx() -> usize {
-        Tab::Codex.index()
+        Platform::Codex.index()
     }
 
     #[test]
-    fn platform_and_tab_indices_are_in_sync() {
-        // If these ever drift, array access will panic at runtime.
-        for tab in Tab::all() {
-            let p = match tab {
-                Tab::ClaudeCode => Platform::ClaudeCode,
-                Tab::Codex => Platform::Codex,
-                Tab::Cursor => Platform::Cursor,
-            };
-            assert_eq!(tab.index(), p.index(), "mismatch for {tab:?} / {p:?}");
-        }
+    fn platform_indices_are_unique() {
+        let indices: HashSet<_> = Platform::all().iter().map(|p| p.index()).collect();
+        assert_eq!(indices.len(), Platform::COUNT);
     }
 
     fn session_rec(session: &str, sid: &str, cwd: &str, tokens: u64, id: &str) -> UsageRecord {
@@ -713,7 +680,7 @@ mod tests {
                 session_rec("proj-a aaa", "aaa", "/work/a", 50, "r3"),
             ],
         );
-        let entries = s.platform(Tab::ClaudeCode).session_entries();
+        let entries = s.platform(Platform::ClaudeCode).session_entries();
         assert_eq!(entries.len(), 2);
         // Highest usage first: proj-b (500) before proj-a (150).
         assert_eq!(entries[0].label, "proj-b bbb");
@@ -734,7 +701,7 @@ mod tests {
                 session_rec("proj bbb", "bbb", "/work/b", 5, "r3"),
             ],
         );
-        let entries = s.platform(Tab::ClaudeCode).session_entries();
+        let entries = s.platform(Platform::ClaudeCode).session_entries();
         let titled = entries
             .iter()
             .find(|e| resolve(e.session_id) == "aaa")
@@ -761,7 +728,7 @@ mod tests {
         s.focus_sessions();
         assert!(s.sessions_focused);
         let resume = s.selected_resume().unwrap();
-        assert_eq!(resume.tab, Tab::ClaudeCode);
+        assert_eq!(resume.platform, Platform::ClaudeCode);
         assert_eq!(resolve(resume.session_id), "bbb");
         assert_eq!(resolve(resume.cwd), "/work/b");
         // Down moves to the second row.
@@ -884,14 +851,14 @@ mod tests {
         std::fs::create_dir_all(&claude).unwrap();
         let missing = dir.path().join("missing");
         let paths = AgentPaths::new(HashMap::from([
-            (Tab::ClaudeCode, claude),
-            (Tab::Codex, missing.join("codex")),
-            (Tab::Cursor, missing.join("cursor")),
+            (Platform::ClaudeCode, claude),
+            (Platform::Codex, missing.join("codex")),
+            (Platform::Cursor, missing.join("cursor")),
         ]));
 
         let mut state = AppState::new();
         state.detect_available_tabs(&paths);
-        assert_eq!(state.available_tabs, vec![Tab::ClaudeCode]);
+        assert_eq!(state.available_tabs, vec![Platform::ClaudeCode]);
     }
 
     #[test]

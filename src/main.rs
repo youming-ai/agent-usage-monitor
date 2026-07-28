@@ -6,7 +6,7 @@ use agent_usage_monitor::mcp;
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::quota;
 use agent_usage_monitor::readers::{self, PlatformReaders};
-use agent_usage_monitor::state::{AppState, Platform, Tab};
+use agent_usage_monitor::state::{AppState, Platform};
 use agent_usage_monitor::stats;
 use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
@@ -69,14 +69,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // CLI `Option` paths override config; see `platforms::resolve_paths`.
     let agent_paths = platforms::resolve_paths(&args, &config);
-    // Reader refresh is now FS-driven (see watcher module); the 30s
-    // fallback below replaces the previous `tokio::time::interval` loop.
+    let fallback_seconds = args.refresh.unwrap_or(config.refresh);
+    if fallback_seconds == 0 {
+        warn!("refresh must be at least 1 second; using 1 second");
+    }
+    let fallback_interval = Duration::from_secs(fallback_seconds.max(1));
 
     for entry in platforms::entries() {
         info!(
             "Monitoring {} at {:?}",
             entry.log_name,
-            agent_paths.path_for(entry.tab)
+            agent_paths.path_for(entry.platform)
         );
     }
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
@@ -85,8 +88,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap()
         .detect_available_tabs(&agent_paths);
 
-    // Reader task: FS-driven via the watcher module, with a 30s fallback
-    // poll as a safety net for edge cases the watcher misses (atomic
+    // Reader task: FS-driven via the watcher module, with a configured
+    // fallback poll as a safety net for edge cases the watcher misses (atomic
     // rename, attribute-only writes, FS-event loss across reload).
     //
     // Readers are built ONCE and reused for every refresh. Rebuilding per
@@ -97,8 +100,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let app_state = app_state.clone();
         async move {
             let mut readers = PlatformReaders::build(&agent_paths);
-            let (_platform_watchers, mut watcher_rx) = watcher::start_watchers(&agent_paths);
-            let mut fallback = tokio::time::interval(Duration::from_secs(30));
+            let (mut platform_watchers, mut watcher_rx) = watcher::start_watchers(&agent_paths);
+            let mut fallback = tokio::time::interval(fallback_interval);
             fallback.tick().await; // discard immediate first tick
 
             // Initial full scan, AWAITED before entering the loop: otherwise a
@@ -120,37 +123,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .await;
             }
 
+            let mut refreshers = readers::ReaderRefreshers::new(app_state.clone());
+            for platform in readers.platforms() {
+                if let Some(reader) = readers.get(platform) {
+                    refreshers.add(platform, reader);
+                }
+            }
+
             loop {
                 tokio::select! {
-                    Some(msg) = watcher_rx.recv() => {
-                        // Poll only the platform whose files changed.
-                        let targets: Vec<Platform> = match &msg {
-                            WatcherMessage::Event { platform, .. } => vec![*platform],
-                        };
-                        for platform in targets {
-                            if let Some(reader) = readers.get(platform) {
-                                let app_state = app_state.clone();
-                                task::spawn_blocking(move || {
-                                    readers::poll_reader_into(&reader, &app_state, platform);
-                                });
-                            }
-                        }
+                    Some(WatcherMessage::Event { platform, .. }) = watcher_rx.recv() => {
+                        refreshers.request(platform);
                     }
                     _ = fallback.tick() => {
-                        // Pick up platforms whose data dir appeared after
-                        // launch (full scan once), poll the rest for deltas.
-                        let newly: Vec<Platform> = readers.discover_new(&agent_paths);
+                        // Pick up paths that appeared after launch, then give
+                        // every live reader a coalesced incremental refresh.
+                        let newly = readers.discover_new(&agent_paths);
+                        if let Ok(mut state) = app_state.write() {
+                            state.detect_available_tabs(&agent_paths);
+                        }
                         for platform in readers.platforms() {
+                            platform_watchers
+                                .watch_platform(platform, agent_paths.path_for(platform));
+                        }
+                        for &platform in &newly {
                             if let Some(reader) = readers.get(platform) {
                                 let app_state = app_state.clone();
-                                let is_new = newly.contains(&platform);
-                                task::spawn_blocking(move || {
-                                    if is_new {
-                                        readers::scan_reader_into(&reader, &app_state, platform);
-                                    } else {
-                                        readers::poll_reader_into(&reader, &app_state, platform);
-                                    }
-                                });
+                                let reader_for_scan = reader.clone();
+                                let _ = task::spawn_blocking(move || {
+                                    readers::scan_reader_into(
+                                        &reader_for_scan,
+                                        &app_state,
+                                        platform,
+                                    );
+                                })
+                                .await;
+                                refreshers.add(platform, reader);
+                            }
+                        }
+                        for platform in readers.platforms() {
+                            if !newly.contains(&platform) {
+                                refreshers.request(platform);
                             }
                         }
                     }
@@ -179,11 +192,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .unwrap_or_default();
 
             for (platform, q) in results {
-                let tab = Tab::from_platform(platform);
                 if let Some(quota) = q {
                     info!("{:?} quota fetched successfully", platform);
                     if let Ok(mut state) = qs.write() {
-                        state.platform_mut(tab).quota = Some(quota);
+                        state.platform_mut(platform).quota = Some(quota);
                     }
                 } else {
                     warn!("Failed to fetch {:?} quota", platform);
@@ -197,12 +209,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             interval.tick().await;
 
             for &(p, fetch) in quota::FETCHERS {
-                let tab = Tab::from_platform(p);
                 let stale = quota_state
                     .try_read()
                     .map(|state| {
                         state
-                            .platform(tab)
+                            .platform(p)
                             .quota
                             .as_ref()
                             .is_none_or(|q| q.is_stale())
@@ -211,11 +222,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 if stale {
                     let qs = quota_state.clone();
-                    if let Some(q) = task::spawn_blocking(fetch).await.unwrap_or_default() {
-                        let tab = Tab::from_platform(p);
-                        if let Ok(mut s) = qs.write() {
-                            s.platform_mut(tab).quota = Some(q);
-                        }
+                    if let Some(q) = task::spawn_blocking(fetch).await.unwrap_or_default()
+                        && let Ok(mut s) = qs.write()
+                    {
+                        s.platform_mut(p).quota = Some(q);
                     }
                 }
             }

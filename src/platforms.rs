@@ -4,7 +4,7 @@ use crate::reader::UsageSource;
 use crate::reader::claude::ClaudeReader;
 use crate::reader::codex::CodexReader;
 use crate::reader::cursor::CursorReader;
-use crate::state::{AgentPaths, Platform, Tab};
+use crate::state::{AgentPaths, Platform};
 use std::path::PathBuf;
 
 /// Platform-specific process invocation for resuming a session. The launcher
@@ -18,7 +18,6 @@ pub(crate) struct ResumeCommand {
 /// Metadata and wiring for one supported agent platform. New platforms add a
 /// single `RegistryEntry` here instead of touching `main.rs` match arms.
 pub struct RegistryEntry {
-    pub tab: Tab,
     pub platform: Platform,
     pub config_key: &'static str,
     pub log_name: &'static str,
@@ -33,7 +32,6 @@ pub struct RegistryEntry {
 
 static REGISTRY: &[RegistryEntry] = &[
     RegistryEntry {
-        tab: Tab::ClaudeCode,
         platform: Platform::ClaudeCode,
         config_key: "claude_path",
         log_name: "Claude Code",
@@ -47,7 +45,6 @@ static REGISTRY: &[RegistryEntry] = &[
         },
     },
     RegistryEntry {
-        tab: Tab::Codex,
         platform: Platform::Codex,
         config_key: "codex_path",
         log_name: "Codex",
@@ -61,7 +58,6 @@ static REGISTRY: &[RegistryEntry] = &[
         },
     },
     RegistryEntry {
-        tab: Tab::Cursor,
         platform: Platform::Cursor,
         config_key: "cursor_path",
         log_name: "Cursor CLI",
@@ -78,17 +74,17 @@ static REGISTRY: &[RegistryEntry] = &[
     },
 ];
 
-/// All registered platforms in tab order.
+/// All registered platforms in UI order.
 pub fn entries() -> &'static [RegistryEntry] {
     REGISTRY
 }
 
-/// Look up the registry row for a tab.
-pub fn entry_for_tab(tab: Tab) -> &'static RegistryEntry {
+/// Look up the registry row for a platform.
+pub fn entry_for_platform(platform: Platform) -> &'static RegistryEntry {
     REGISTRY
         .iter()
-        .find(|e| e.tab == tab)
-        .expect("every Tab must have a RegistryEntry")
+        .find(|e| e.platform == platform)
+        .expect("every Platform must have a RegistryEntry")
 }
 
 impl RegistryEntry {
@@ -109,14 +105,14 @@ pub fn resolve_paths(cli: &Cli, config: &Config) -> AgentPaths {
         .iter()
         .map(|entry| {
             let path = (entry.cli_path)(cli).unwrap_or_else(|| (entry.config_path)(config));
-            (entry.tab, path)
+            (entry.platform, path)
         })
         .collect();
     AgentPaths::new(paths)
 }
 
 /// Apply a `aum config set <key> <value>` update. Path keys are driven by the
-/// registry; `refresh` and `max_records` are handled separately.
+/// registry; fallback `refresh` and `max_records` are handled separately.
 pub fn apply_config_key(config: &mut Config, key: &str, value: &str) -> Result<(), String> {
     for entry in REGISTRY {
         if entry.config_key == key {
@@ -127,9 +123,13 @@ pub fn apply_config_key(config: &mut Config, key: &str, value: &str) -> Result<(
 
     match key {
         "refresh" => {
-            config.refresh = value
+            let refresh = value
                 .parse()
                 .map_err(|e: std::num::ParseIntError| e.to_string())?;
+            if refresh == 0 {
+                return Err("refresh must be at least 1 second".into());
+            }
+            config.refresh = refresh;
         }
         "max_records" => {
             config.max_records = value
@@ -161,10 +161,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_tab_has_registry_entry() {
-        for tab in Tab::all() {
-            let entry = entry_for_tab(*tab);
-            assert_eq!(entry.tab, *tab);
+    fn every_platform_has_registry_entry() {
+        for platform in Platform::all() {
+            let entry = entry_for_platform(*platform);
+            assert_eq!(entry.platform, *platform);
         }
     }
 
@@ -186,23 +186,24 @@ mod tests {
 
     #[test]
     fn resume_commands_match_each_cli() {
-        let claude = entry_for_tab(Tab::ClaudeCode).resume_command("SID");
+        let claude = entry_for_platform(Platform::ClaudeCode).resume_command("SID");
         assert_eq!(claude.program, "claude");
         assert_eq!(claude.args, vec!["--resume", "SID"]);
 
-        let codex = entry_for_tab(Tab::Codex).resume_command("SID");
+        let codex = entry_for_platform(Platform::Codex).resume_command("SID");
         assert_eq!(codex.program, "codex");
         assert_eq!(codex.args, vec!["resume", "SID"]);
 
-        let cursor = entry_for_tab(Tab::Cursor).resume_command("SID");
+        let cursor = entry_for_platform(Platform::Cursor).resume_command("SID");
         assert_eq!(cursor.program, "cursor-agent");
         assert_eq!(cursor.args, vec!["--resume=SID"]);
     }
 
     #[test]
-    fn apply_config_key_rejects_unknown() {
+    fn apply_config_key_rejects_unknown_or_zero_refresh() {
         let mut config = Config::default();
         assert!(apply_config_key(&mut config, "nope", "x").is_err());
+        assert!(apply_config_key(&mut config, "refresh", "0").is_err());
     }
 
     #[test]
@@ -217,9 +218,9 @@ mod tests {
         };
         let paths = resolve_paths(&cli, &config);
         assert_eq!(
-            paths.path_for(Tab::ClaudeCode),
+            paths.path_for(Platform::ClaudeCode),
             PathBuf::from("/cli/claude")
         );
-        assert_eq!(paths.path_for(Tab::Codex), config.codex_path);
+        assert_eq!(paths.path_for(Platform::Codex), config.codex_path);
     }
 }

@@ -39,7 +39,7 @@ impl ResumeTarget {
         );
 
         Self {
-            command: platforms::entry_for_tab(selection.tab).resume_command(&session_id),
+            command: platforms::entry_for_platform(selection.platform).resume_command(&session_id),
             cwd: resolve(selection.cwd).to_owned(),
             session_id,
         }
@@ -226,11 +226,11 @@ fn exec_handoff(target: &ResumeTarget) -> Result<(), Box<dyn std::error::Error +
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Tab, intern};
+    use crate::state::{Platform, intern};
 
-    fn target(tab: Tab, session_id: &str, cwd: &str) -> ResumeTarget {
+    fn target(platform: Platform, session_id: &str, cwd: &str) -> ResumeTarget {
         ResumeTarget::from_selection(ResumeSelection {
-            tab,
+            platform,
             session_id: intern(session_id),
             cwd: intern(cwd),
         })
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn target_combines_selection_with_platform_command() {
-        let target = target(Tab::Codex, "abc", "/work/proj");
+        let target = target(Platform::Codex, "abc", "/work/proj");
         assert_eq!(target.command.program, "codex");
         assert_eq!(target.command.args, vec!["resume", "abc"]);
         assert_eq!(target.cwd, "/work/proj");
@@ -254,11 +254,11 @@ mod tests {
     #[test]
     fn resume_shell_line_includes_cd_only_when_cwd_known() {
         assert_eq!(
-            resume_shell_line(&target(Tab::ClaudeCode, "abc", "/work/proj")),
+            resume_shell_line(&target(Platform::ClaudeCode, "abc", "/work/proj")),
             "cd '/work/proj' && exec 'claude' '--resume' 'abc'"
         );
         assert_eq!(
-            resume_shell_line(&target(Tab::Cursor, "abc", "")),
+            resume_shell_line(&target(Platform::Cursor, "abc", "")),
             "exec 'cursor-agent' '--resume=abc'"
         );
     }
