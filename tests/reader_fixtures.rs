@@ -6,8 +6,8 @@ use agent_usage_monitor::reader::UsageSource;
 use agent_usage_monitor::reader::claude::ClaudeReader;
 use agent_usage_monitor::reader::codex::CodexReader;
 use agent_usage_monitor::reader::cursor::CursorReader;
+use agent_usage_monitor::state::Platform;
 use agent_usage_monitor::state::resolve;
-use agent_usage_monitor::state::{Platform, Tab};
 use std::path::PathBuf;
 
 fn fixtures_root() -> PathBuf {
@@ -67,9 +67,12 @@ fn registry_creates_readers_for_all_fixture_paths() {
 }
 
 #[test]
-fn registry_covers_all_tabs() {
-    let tabs: Vec<_> = platforms::entries().iter().map(|e| e.tab).collect();
-    for tab in Tab::all() {
-        assert!(tabs.contains(tab), "missing registry entry for {tab:?}");
+fn registry_covers_all_platforms() {
+    let platforms: Vec<_> = platforms::entries().iter().map(|e| e.platform).collect();
+    for platform in Platform::all() {
+        assert!(
+            platforms.contains(platform),
+            "missing registry entry for {platform:?}"
+        );
     }
 }

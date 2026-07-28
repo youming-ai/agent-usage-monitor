@@ -343,8 +343,8 @@ impl ServerHandler for AumMcpServer {
                 let platforms: Vec<serde_json::Value> = crate::platforms::entries()
                     .iter()
                     .map(|entry| {
-                        let key = crate::stats::platform_canonical_key(entry.tab);
-                        let data_path = self.paths.path_for(entry.tab);
+                        let key = crate::stats::platform_canonical_key(entry.platform);
+                        let data_path = self.paths.path_for(entry.platform);
                         serde_json::json!({
                             "key": key,
                             "display_name": entry.log_name,
@@ -385,13 +385,13 @@ mod tests {
     use super::*;
     use crate::state::AgentPaths;
 
-    /// Build a synthetic AgentPaths whose every registered Tab points at
-    /// `root`. The tempdir exists but has no parseable data, so all 13
-    /// readers return 0 records.
+    /// Build synthetic paths whose every registered platform points at `root`.
+    /// The tempdir exists but has no parseable data, so all readers return 0
+    /// records.
     fn synthetic_paths(root: &std::path::Path) -> AgentPaths {
         let mut map = std::collections::HashMap::new();
         for entry in crate::platforms::entries() {
-            map.insert(entry.tab, root.to_path_buf());
+            map.insert(entry.platform, root.to_path_buf());
         }
         AgentPaths::new(map)
     }

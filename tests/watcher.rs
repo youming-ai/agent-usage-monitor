@@ -15,7 +15,7 @@ use agent_usage_monitor::watcher::{WatcherMessage, start_watchers};
 fn synthetic_paths(root: &std::path::Path) -> AgentPaths {
     let mut map = std::collections::HashMap::new();
     for entry in platforms::entries() {
-        map.insert(entry.tab, root.to_path_buf());
+        map.insert(entry.platform, root.to_path_buf());
     }
     AgentPaths::new(map)
 }

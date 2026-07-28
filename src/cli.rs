@@ -21,14 +21,14 @@ pub struct Cli {
     #[arg(long)]
     pub cursor_path: Option<PathBuf>,
 
-    /// Polling interval in seconds
-    #[arg(short, long)]
+    /// Fallback polling interval in seconds (minimum: 1)
+    #[arg(short, long, value_parser = clap::value_parser!(u64).range(1..))]
     pub refresh: Option<u64>,
 }
 
 #[derive(Args, Debug)]
 pub struct StatsArgs {
-    /// 仅输出指定平台 (逗号分隔, 支持 config_key / Tab variant / log_name)
+    /// 仅输出指定平台 (逗号分隔, 支持 config_key / platform variant / log_name)
     #[arg(long, value_delimiter = ',')]
     pub platform: Vec<String>,
 
@@ -93,4 +93,20 @@ pub enum ConfigAction {
 
     /// Reset configuration to defaults
     Reset,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_requires_at_least_one_second() {
+        assert!(Cli::try_parse_from(["aum", "--refresh", "0"]).is_err());
+        assert_eq!(
+            Cli::try_parse_from(["aum", "--refresh", "1"])
+                .unwrap()
+                .refresh,
+            Some(1)
+        );
+    }
 }

@@ -1,11 +1,11 @@
 //! File-system watcher for TUI reader tasks.
 //!
-//! Replaces the 1s `tokio::time::interval` polling in `main.rs` with
-//! `notify` events + 50ms debounce per platform. A 30s fallback poll
-//! runs alongside as a safety net for FS edge cases.
+//! Replaces fixed polling in `main.rs` with `notify` events + 50ms debounce
+//! per platform. A configurable fallback poll runs alongside as a safety net
+//! for FS edge cases.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,75 +22,24 @@ pub enum WatcherMessage {
     Event { platform: Platform, path: PathBuf },
 }
 
-/// One watcher per registered platform.
-///
-/// The inner `Debouncer` is wrapped in `Option` so the `Drop` impl can
-/// take ownership and call `stop()` (which joins the background thread)
-/// — the default `Debouncer::drop` only sets a stop flag without
-/// joining, which leaves FSEvents callbacks in flight on macOS.
-pub struct PlatformWatcher {
-    platform: Platform,
+/// The inner `Debouncer` is wrapped in `Option` so `Drop` can call `stop()`
+/// and join its background thread instead of leaving FSEvents callbacks in
+/// flight on macOS.
+struct PlatformWatcher {
     debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
 }
 
 impl PlatformWatcher {
-    pub fn platform(&self) -> Platform {
-        self.platform
-    }
-}
-
-impl Drop for PlatformWatcher {
-    fn drop(&mut self) {
-        if let Some(d) = self.debouncer.take() {
-            d.stop();
-        }
-    }
-}
-
-// Per-thread keep-alive for the mpsc sender. When all `PlatformWatcher`s
-thread_local! {
-    static KEEP_ALIVE: RefCell<Option<mpsc::Sender<WatcherMessage>>> =
-        const { RefCell::new(None) };
-}
-
-use std::cell::RefCell;
-
-pub fn start_watchers(
-    paths: &AgentPaths,
-) -> (Vec<PlatformWatcher>, mpsc::Receiver<WatcherMessage>) {
-    let (tx, rx) = mpsc::channel::<WatcherMessage>(64);
-    // Park one sender clone in thread-local storage so dropping every
-    // PlatformWatcher does not close the channel.
-    KEEP_ALIVE.with(|cell| {
-        *cell.borrow_mut() = Some(tx.clone());
-    });
-    // Cross-watcher dedup: when multiple platforms resolve to the same
-    // directory (e.g. tests, or a user pointing two readers at one path),
-    // collapse duplicate events for the same path within the debounce
-    // window so downstream consumers see one event per logical change.
-    let recent: Arc<Mutex<HashMap<PathBuf, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
-    let mut watchers = Vec::with_capacity(platforms::entries().len());
-
-    for entry in platforms::entries() {
-        let path = paths.path_for(entry.tab);
-        if !path.exists() {
-            continue;
-        }
-        // Every platform watches exactly its own resolved path (a directory
-        // for JSONL readers, the db file itself for SQLite ones) — no need to
-        // build a full reader (opening SQLite connections and all) just to
-        // ask it; `watch_dirs` used to come from `UsageSource::get_watch_directories`,
-        // which every impl just echoed back from this same `path`.
-        let watch_dirs = [path.clone()];
-
-        let tx = tx.clone();
-        let platform = entry.platform;
-        let recent = recent.clone();
+    fn new(
+        platform: Platform,
+        path: PathBuf,
+        tx: mpsc::Sender<WatcherMessage>,
+        recent: Arc<Mutex<HashMap<(Platform, PathBuf), Instant>>>,
+    ) -> Option<Self> {
         // Suppress FSEvents "watch started" events that fire during
         // initialization. The first real test event arrives after the
         // 100ms test sleep, so a 50ms warmup is safe.
         let created = Instant::now();
-
         let debouncer = new_debouncer(
             Duration::from_millis(50),
             None,
@@ -104,36 +53,12 @@ pub fn start_watchers(
                         for path in &event.paths {
                             let should_send = {
                                 let mut map = recent.lock().expect("dedup lock");
-                                // Prune stale entries opportunistically — well
-                                // beyond the 50ms dedup window below, so this
-                                // never affects dedup behavior, but keeps
-                                // `recent` from growing unbounded over a
-                                // long-running session touching many distinct
-                                // paths.
-                                map.retain(|_, last| {
-                                    now.duration_since(*last) < Duration::from_secs(5)
-                                });
-                                match map.get(path) {
-                                    Some(last)
-                                        if now.duration_since(*last)
-                                            < Duration::from_millis(50) =>
-                                    {
-                                        false
-                                    }
-                                    _ => {
-                                        map.insert(path.clone(), now);
-                                        true
-                                    }
-                                }
+                                should_send(&mut map, platform, path, now)
                             };
                             if should_send {
-                                // try_send, not blocking_send: this callback
-                                // runs on the OS's FSEvents thread. If the
-                                // receiver stalls and the 64-slot channel
-                                // fills up, blocking here would stall the OS
-                                // callback thread itself — drop/coalesce the
-                                // event instead (a 30s fallback poll exists
-                                // as a safety net for exactly this).
+                                // This callback runs on an OS watcher thread.
+                                // If the bounded channel is full, coalesce the
+                                // event; the configured fallback poll catches it.
                                 let _ = tx.try_send(WatcherMessage::Event {
                                     platform,
                                     path: path.clone(),
@@ -145,38 +70,86 @@ pub fn start_watchers(
             },
         );
         let mut debouncer = match debouncer {
-            Ok(d) => d,
+            Ok(debouncer) => debouncer,
             Err(e) => {
-                warn!(
-                    "Failed to create watcher for {:?}: {e}; skipping platform",
-                    platform
-                );
-                continue;
+                warn!("Failed to create watcher for {platform:?}: {e}");
+                return None;
             }
         };
 
-        for dir in &watch_dirs {
-            let candidate = dir.as_path();
-            let Some(watch_path) = candidate
-                .ancestors()
-                .find(|p| p.exists())
-                .map(|p| p.to_path_buf())
-            else {
-                warn!("No existing ancestor for {candidate:?}; skipping watch dir");
-                continue;
-            };
-            if let Err(e) = debouncer.watch(&watch_path, RecursiveMode::Recursive) {
-                warn!("Failed to watch {watch_path:?}: {e}; skipping watch dir");
-                continue;
-            }
+        if let Err(e) = debouncer.watch(&path, RecursiveMode::Recursive) {
+            warn!("Failed to watch {path:?}: {e}");
+            return None;
         }
 
-        watchers.push(PlatformWatcher {
-            platform,
+        Some(Self {
             debouncer: Some(debouncer),
-        });
+        })
     }
+}
 
+impl Drop for PlatformWatcher {
+    fn drop(&mut self) {
+        if let Some(d) = self.debouncer.take() {
+            d.stop();
+        }
+    }
+}
+
+/// Live watchers plus the sender state needed to add one when a platform's
+/// data directory appears after startup.
+pub struct PlatformWatchers {
+    watchers: HashMap<Platform, PlatformWatcher>,
+    tx: mpsc::Sender<WatcherMessage>,
+    recent: Arc<Mutex<HashMap<(Platform, PathBuf), Instant>>>,
+}
+
+impl PlatformWatchers {
+    /// Watch an existing platform path once. Failed registrations are not
+    /// retained, so the fallback loop can retry them later.
+    pub fn watch_platform(&mut self, platform: Platform, path: PathBuf) {
+        if self.watchers.contains_key(&platform) || !path.exists() {
+            return;
+        }
+        if let Some(watcher) =
+            PlatformWatcher::new(platform, path, self.tx.clone(), self.recent.clone())
+        {
+            self.watchers.insert(platform, watcher);
+        }
+    }
+}
+
+/// Return false only when this platform already emitted this exact path inside
+/// the debounce window. Different platforms sharing a directory must each
+/// receive a refresh request.
+fn should_send(
+    recent: &mut HashMap<(Platform, PathBuf), Instant>,
+    platform: Platform,
+    path: &Path,
+    now: Instant,
+) -> bool {
+    recent.retain(|_, last| now.duration_since(*last) < Duration::from_secs(5));
+    let key = (platform, path.to_path_buf());
+    if recent
+        .get(&key)
+        .is_some_and(|last| now.duration_since(*last) < Duration::from_millis(50))
+    {
+        return false;
+    }
+    recent.insert(key, now);
+    true
+}
+
+pub fn start_watchers(paths: &AgentPaths) -> (PlatformWatchers, mpsc::Receiver<WatcherMessage>) {
+    let (tx, rx) = mpsc::channel(64);
+    let mut watchers = PlatformWatchers {
+        watchers: HashMap::with_capacity(platforms::entries().len()),
+        tx,
+        recent: Arc::new(Mutex::new(HashMap::new())),
+    };
+    for entry in platforms::entries() {
+        watchers.watch_platform(entry.platform, paths.path_for(entry.platform));
+    }
     (watchers, rx)
 }
 
@@ -186,15 +159,34 @@ mod tests {
     use std::fs;
     use std::time::Duration;
 
-    /// Build a synthetic AgentPaths whose every registered Tab points at
-    /// `root`. This lets us exercise `start_watchers` without touching the
-    /// user's real data directories.
+    /// Build synthetic paths whose every registered platform points at `root`.
+    /// This lets us exercise `start_watchers` without touching user data.
     fn synthetic_paths(root: &std::path::Path) -> AgentPaths {
         let mut map = std::collections::HashMap::new();
         for entry in platforms::entries() {
-            map.insert(entry.tab, root.to_path_buf());
+            map.insert(entry.platform, root.to_path_buf());
         }
         AgentPaths::new(map)
+    }
+
+    #[test]
+    fn dedup_keeps_events_for_distinct_platforms() {
+        let path = PathBuf::from("/tmp/aum-shared-path");
+        let now = Instant::now();
+        let mut recent = HashMap::new();
+        assert!(should_send(&mut recent, Platform::ClaudeCode, &path, now));
+        assert!(!should_send(
+            &mut recent,
+            Platform::ClaudeCode,
+            &path,
+            now + Duration::from_millis(1)
+        ));
+        assert!(should_send(
+            &mut recent,
+            Platform::Codex,
+            &path,
+            now + Duration::from_millis(1)
+        ));
     }
 
     #[tokio::test]
@@ -203,7 +195,7 @@ mod tests {
             "/tmp/aum_test_definitely_does_not_exist_xyz",
         ));
         let (watchers, _rx) = start_watchers(&paths);
-        assert_eq!(watchers.len(), 0, "no path exists => no watchers");
+        assert_eq!(watchers.watchers.len(), 0, "no path exists => no watchers");
     }
 
     #[tokio::test]
@@ -211,7 +203,48 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = synthetic_paths(tmp.path());
         let (watchers, _rx) = start_watchers(&paths);
-        assert_eq!(watchers.len(), crate::platforms::entries().len());
+        assert_eq!(watchers.watchers.len(), crate::platforms::entries().len());
+    }
+
+    #[tokio::test]
+    async fn watch_platform_adds_a_path_created_after_startup() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let later = tmp.path().join("appears-later");
+        let mut paths = std::collections::HashMap::new();
+        for entry in platforms::entries() {
+            paths.insert(
+                entry.platform,
+                tmp.path()
+                    .join(format!("missing-{}", entry.platform.label())),
+            );
+        }
+        paths.insert(Platform::ClaudeCode, later.clone());
+        let paths = AgentPaths::new(paths);
+        let (mut watchers, mut rx) = start_watchers(&paths);
+        assert_eq!(watchers.watchers.len(), 0);
+
+        fs::create_dir_all(&later).expect("create later path");
+        watchers.watch_platform(Platform::ClaudeCode, later.clone());
+        assert_eq!(watchers.watchers.len(), 1);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let file = later.join("new.jsonl");
+        fs::write(&file, b"hello\n").expect("write file");
+
+        let saw_event = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(message) = rx.recv().await {
+                if matches!(
+                    message,
+                    WatcherMessage::Event { platform: Platform::ClaudeCode, path }
+                        if path.ends_with("new.jsonl")
+                ) {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+        assert!(saw_event, "newly registered platform must receive events");
     }
 
     #[tokio::test]
@@ -249,21 +282,23 @@ mod tests {
         }
 
         let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
-        let mut count = 0;
+        let mut counts = HashMap::new();
         loop {
             let now = tokio::time::Instant::now();
             if now >= deadline {
                 break;
             }
             match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(WatcherMessage::Event { .. })) => count += 1,
+                Ok(Some(WatcherMessage::Event { platform, .. })) => {
+                    *counts.entry(platform).or_insert(0) += 1;
+                }
                 Ok(None) => break,
                 Err(_) => continue,
             }
         }
         assert!(
-            count <= 3,
-            "5 writes should debounce to <= 3 events, got {count}"
+            counts.values().all(|&count| count <= 3),
+            "5 writes should debounce to <= 3 events per platform, got {counts:?}"
         );
     }
 
@@ -280,7 +315,7 @@ mod tests {
 
         let r = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await;
         assert!(
-            r.is_err(),
+            matches!(r, Ok(None) | Err(_)),
             "after dropping watchers, no file events should arrive"
         );
     }
