@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.1.0...v1.1.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* harden monitor refresh scheduling ([fcd2fb7](https://github.com/youming-ai/agent-usage-monitor/commit/fcd2fb77aef7e3796752656124a32862dabcc730))
+* harden monitor refresh scheduling ([e1bb38a](https://github.com/youming-ai/agent-usage-monitor/commit/e1bb38af215a8fbaa2725cb1af892634af1e6dd0))
+
 ## [1.1.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.0.0...v1.1.0) (2026-07-23)
 
 
