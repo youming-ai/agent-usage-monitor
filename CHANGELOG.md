@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.2](https://github.com/youming-ai/agent-usage-monitor/compare/v1.1.1...v1.1.2) (2026-07-29)
+
+
+### Refactors
+
+* **tui:** compact dashboard layout ([e1d6485](https://github.com/youming-ai/agent-usage-monitor/commit/e1d64851a77d8ea14ae1b7965c4006ee8f67c160))
+* **tui:** compact dashboard layout ([152f22c](https://github.com/youming-ai/agent-usage-monitor/commit/152f22cfbdb8807ec9aae05b3f632efb103f0829))
+
 ## [1.1.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.1.0...v1.1.1) (2026-07-28)
 
 
