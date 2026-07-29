@@ -27,7 +27,7 @@ pub fn session_table(entries: &[SessionEntry], focused: bool, accent: Color) -> 
         .style(Style::default().add_modifier(Modifier::BOLD));
 
     let title = if focused {
-        " sessions · ↑↓ select · enter resume · esc back "
+        " sessions · ↑↓ "
     } else {
         " sessions "
     };
@@ -52,7 +52,7 @@ pub fn session_table(entries: &[SessionEntry], focused: bool, accent: Color) -> 
     .block(
         Block::default()
             .title(title)
-            .borders(Borders::ALL)
+            .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(border)),
     )
 }

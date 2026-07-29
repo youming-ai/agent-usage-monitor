@@ -22,11 +22,12 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let active = state.active_tab;
     let accent = active.primary_color();
 
+    let quota_h = if active.has_quota_api() { 1 } else { 0 };
     let chunks = Layout::vertical([
-        Constraint::Length(2), // header: tabs + account, with bottom rule
-        Constraint::Length(2), // quota windows (one bar per line)
-        Constraint::Min(6),    // session table
-        Constraint::Length(1), // status line
+        Constraint::Length(2),       // header: tabs + account, with bottom rule
+        Constraint::Length(quota_h), // quota summary (single line)
+        Constraint::Min(6),          // session table
+        Constraint::Length(1),       // status line
     ])
     .split(frame.area());
 
@@ -53,14 +54,12 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     );
     frame.render_widget(tabs::account(email), header_cols[1]);
 
-    // Only Claude and Codex have quota API backends; everything else shows
-    // "no quota data" so users don't stare at a perpetually loading bar.
-    let quota_widget = if active.has_quota_api() {
-        quota_bar::quota_panel(active, quota)
-    } else {
-        quota_bar::no_quota_source()
-    };
-    frame.render_widget(quota_widget, chunks[1]);
+    // Only Claude and Codex have quota API backends; hide the quota row
+    // entirely for platforms that never report quota so the session table
+    // gets the extra line.
+    if active.has_quota_api() {
+        frame.render_widget(quota_bar::quota_panel(active, quota), chunks[1]);
+    }
 
     // Split the main area: the per-model table sized to its rows on top, with
     // the per-session usage table filling the remaining space below. Compute

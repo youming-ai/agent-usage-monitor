@@ -6,7 +6,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-const BAR_WIDTH: usize = 12;
+const BAR_WIDTH: usize = 6;
 
 /// Number of filled cells for a remaining fraction across `width` cells.
 fn filled_cells(remaining: f64, width: usize) -> usize {
@@ -24,13 +24,8 @@ fn status_glyph(remaining: Option<f64>) -> &'static str {
     }
 }
 
-/// Build one quota-window line: `✓ 5h ▓▓▓▓▓▓▓▓░░ 82%  resets 2h30m`.
-fn window_line(
-    accent: Color,
-    label: &str,
-    remaining: Option<f64>,
-    reset: Option<&str>,
-) -> Line<'static> {
+/// Build one compact quota-window segment: `✓ 5h ▓▓▓▓░░ 82%`.
+fn mini_window_spans(accent: Color, label: &str, remaining: Option<f64>) -> Vec<Span<'static>> {
     let filled = remaining.map(|r| filled_cells(r, BAR_WIDTH)).unwrap_or(0);
     let empty = BAR_WIDTH - filled;
 
@@ -38,22 +33,13 @@ fn window_line(
         .map(|r| format!("{}%", (r * 100.0).round() as u64))
         .unwrap_or_else(|| "--".to_string());
 
-    let mut spans = vec![
+    vec![
         Span::raw(format!(" {} ", status_glyph(remaining))),
         Span::raw(format!("{label:<3} ")),
         Span::styled("▓".repeat(filled), Style::default().fg(accent)),
         Span::styled("░".repeat(empty), Style::default().fg(Color::DarkGray)),
         Span::raw(format!(" {pct:>4}")),
-    ];
-
-    if let Some(r) = reset {
-        spans.push(Span::styled(
-            format!("  resets {r}"),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
-
-    Line::from(spans)
+    ]
 }
 
 /// Render the quota windows as one bar per line (replaces the old single
@@ -83,23 +69,19 @@ pub fn quota_panel(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'sta
                 ))]
             }
         }
-        Some(q) => q
-            .windows
-            .iter()
-            .map(|w| window_line(accent, &w.label, w.remaining_percent, w.reset_in.as_deref()))
-            .collect(),
+        Some(q) => {
+            let mut spans = Vec::new();
+            for (i, w) in q.windows.iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+                }
+                spans.extend(mini_window_spans(accent, &w.label, w.remaining_percent));
+            }
+            vec![Line::from(spans)]
+        }
     };
 
     Paragraph::new(lines)
-}
-
-/// Quota line for a tab that has no quota source at all (opencode today).
-/// Distinct from the `loading…` shown while a Claude/Codex quota is in flight.
-pub fn no_quota_source() -> Paragraph<'static> {
-    Paragraph::new(Line::from(Span::styled(
-        " no quota data",
-        Style::default().fg(Color::DarkGray),
-    )))
 }
 
 #[cfg(test)]

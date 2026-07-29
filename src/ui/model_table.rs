@@ -29,36 +29,33 @@ pub fn model_table(
     let rows: Vec<Row> = models
         .into_iter()
         .map(|s| {
+            let total_tokens = s.total_input + s.total_output + s.total_cache_read;
             Row::new(vec![
                 Cell::from(crate::state::resolve(s.model)),
-                Cell::from(format_tokens(s.total_input)),
-                Cell::from(format_tokens(s.total_output)),
-                Cell::from(format_tokens(s.total_cache_read)),
+                Cell::from(format_tokens(total_tokens)),
                 Cell::from(format!("${:.2}", s.total_cost)),
                 Cell::from(s.request_count.to_string()),
             ])
         })
         .collect();
 
-    let header = Row::new(vec!["MODEL", "INPUT", "OUTPUT", "CACHE", "COST", "#"])
+    let header = Row::new(vec!["MODEL", "TOKENS", "COST", "#"])
         .style(Style::default().add_modifier(Modifier::BOLD));
 
     Table::new(
         rows,
         [
-            Constraint::Percentage(30),
-            Constraint::Percentage(16),
-            Constraint::Percentage(16),
-            Constraint::Percentage(16),
-            Constraint::Percentage(14),
-            Constraint::Percentage(8),
+            Constraint::Percentage(42),
+            Constraint::Percentage(26),
+            Constraint::Percentage(20),
+            Constraint::Percentage(12),
         ],
     )
     .header(header)
     .block(
         Block::default()
             .title(format!(" {label} models ({total_calls}) "))
-            .borders(Borders::ALL)
+            .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(Color::DarkGray)),
     )
     .row_highlight_style(Style::default().bg(Color::DarkGray))
