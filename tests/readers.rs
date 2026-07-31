@@ -47,7 +47,7 @@ fn reused_reader_does_not_double_count_on_refresh() {
             .read()
             .unwrap()
             .platform(Platform::ClaudeCode)
-            .total_calls,
+            .window_calls,
         2
     );
 
@@ -62,7 +62,7 @@ fn reused_reader_does_not_double_count_on_refresh() {
             .read()
             .unwrap()
             .platform(Platform::ClaudeCode)
-            .total_calls,
+            .window_calls,
         2,
         "refresh re-added already-counted records"
     );

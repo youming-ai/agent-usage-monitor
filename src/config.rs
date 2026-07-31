@@ -12,6 +12,10 @@ pub struct Config {
     #[serde(default = "default_codex_path")]
     pub codex_path: PathBuf,
 
+    /// Path to Pi data directory (~/.pi/agent/sessions)
+    #[serde(default = "default_pi_path")]
+    pub pi_path: PathBuf,
+
     /// Path to Cursor CLI data directory (~/.cursor)
     #[serde(default = "default_cursor_path")]
     pub cursor_path: PathBuf,
@@ -20,7 +24,8 @@ pub struct Config {
     #[serde(default = "default_refresh")]
     pub refresh: u64,
 
-    /// Maximum number of records to keep in memory
+    /// Per-platform sliding window: how many of the most recent records the
+    /// TUI keeps, and therefore what its totals and tables cover.
     #[serde(default = "default_max_records")]
     pub max_records: usize,
 }
@@ -30,6 +35,7 @@ impl Default for Config {
         Self {
             claude_path: default_claude_path(),
             codex_path: default_codex_path(),
+            pi_path: default_pi_path(),
             cursor_path: default_cursor_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
@@ -51,6 +57,10 @@ fn default_codex_path() -> PathBuf {
     Platform::Codex.default_path()
 }
 
+fn default_pi_path() -> PathBuf {
+    Platform::Pi.default_path()
+}
+
 fn default_cursor_path() -> PathBuf {
     Platform::Cursor.default_path()
 }
@@ -59,8 +69,12 @@ fn default_refresh() -> u64 {
     5
 }
 
+/// The TUI's totals cover exactly this window, so it has to be large enough
+/// that the headline cost doesn't visibly shrink while you work. One assistant
+/// message is one record, so 100 (the old default) was minutes of use; 20k is
+/// weeks of it, at roughly 100 bytes per record.
 fn default_max_records() -> usize {
-    100
+    20_000
 }
 
 /// Get the path to the configuration file
@@ -110,7 +124,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.refresh, 5);
-        assert_eq!(config.max_records, 100);
+        assert_eq!(config.max_records, 20_000);
     }
 
     #[test]

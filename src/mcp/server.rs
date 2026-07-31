@@ -4,6 +4,7 @@
 #![allow(clippy::collapsible_if)]
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -31,6 +32,25 @@ mod resource_uris {
 pub struct AumMcpServer {
     tool_router: ToolRouter<Self>,
     paths: Arc<AgentPaths>,
+    snapshots: Arc<tokio::sync::Mutex<SnapshotCache>>,
+}
+
+const SNAPSHOT_TTL: Duration = Duration::from_secs(2);
+
+#[derive(Default)]
+struct SnapshotCache {
+    usage: Option<(Instant, Arc<stats::StatsReport>)>,
+    with_quota: Option<(Instant, Arc<stats::StatsReport>)>,
+}
+
+impl SnapshotCache {
+    fn slot(&mut self, include_quota: bool) -> &mut Option<(Instant, Arc<stats::StatsReport>)> {
+        if include_quota {
+            &mut self.with_quota
+        } else {
+            &mut self.usage
+        }
+    }
 }
 
 impl AumMcpServer {
@@ -38,18 +58,44 @@ impl AumMcpServer {
         Self {
             tool_router: Self::tool_router(),
             paths: Arc::new(paths),
+            snapshots: Arc::new(tokio::sync::Mutex::new(SnapshotCache::default())),
         }
     }
 
-    /// Drive a fresh collect() and return the StatsReport.
-    async fn collect(&self, include_quota: bool) -> Result<stats::StatsReport, McpError> {
+    /// Return a short-lived shared snapshot so a burst of related MCP tool
+    /// calls scans the on-disk history once rather than once per tool.
+    ///
+    /// The cache lock is never held across the collect: a slow `include_quota`
+    /// fetch (blocking HTTP) must not stall a plain usage call that would have
+    /// been an instant hit on the other slot. Two concurrent misses can both
+    /// collect; duplicating that work is cheaper than serialising every tool.
+    async fn collect(&self, include_quota: bool) -> Result<Arc<stats::StatsReport>, McpError> {
+        if let Some(fresh) = self.cached(include_quota).await {
+            return Ok(fresh);
+        }
+
         let opts = stats::CollectOptions {
             include_quota,
             filters: stats::Filters::default(),
         };
-        stats::collect(&self.paths, opts)
-            .await
-            .map_err(|e| McpError::internal_error(format!("collect failed: {e}"), None))
+        let report = Arc::new(
+            stats::collect(&self.paths, opts)
+                .await
+                .map_err(|e| McpError::internal_error(format!("collect failed: {e}"), None))?,
+        );
+
+        let mut snapshots = self.snapshots.lock().await;
+        *snapshots.slot(include_quota) = Some((Instant::now(), report.clone()));
+        Ok(report)
+    }
+
+    async fn cached(&self, include_quota: bool) -> Option<Arc<stats::StatsReport>> {
+        let mut snapshots = self.snapshots.lock().await;
+        snapshots
+            .slot(include_quota)
+            .as_ref()
+            .filter(|(created, _)| created.elapsed() < SNAPSHOT_TTL)
+            .map(|(_, report)| report.clone())
     }
 }
 
@@ -451,6 +497,15 @@ mod tests {
         // No assertions on content — quota fetch depends on local credentials
         // which may or may not exist in the test env.
         let _ = result.0;
+    }
+
+    #[tokio::test]
+    async fn related_calls_share_a_recent_usage_snapshot() {
+        let server = AumMcpServer::new(empty_paths());
+        let first = server.collect(false).await.unwrap();
+        let second = server.collect(false).await.unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     // Resource tests require constructing a `RequestContext`, which has no

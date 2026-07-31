@@ -1,5 +1,4 @@
-use super::QuotaInfo;
-use super::util::{read_email, signed_in};
+use super::util::read_email;
 use std::path::PathBuf;
 
 fn get_vscdb_paths() -> Vec<PathBuf> {
@@ -64,8 +63,7 @@ fn read_cursor_token() -> Option<String> {
     None
 }
 
-pub fn fetch_quota() -> Option<QuotaInfo> {
-    let email = read_cursor_token()
-        .map(|token| read_email(&token, None).unwrap_or_else(|| "Signed in".to_string()));
-    signed_in("Cursor CLI", email)
+pub fn fetch_account_email() -> Option<String> {
+    read_cursor_token()
+        .map(|token| read_email(&token, None).unwrap_or_else(|| "Signed in".to_string()))
 }

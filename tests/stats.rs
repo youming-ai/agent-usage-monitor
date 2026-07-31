@@ -3,6 +3,7 @@
 //! Spawn the compiled binary as a subprocess. Requires `cargo build` to have
 //! been run first (CI does this; locally it's a no-op if already built).
 
+use agent_usage_monitor::state::Platform;
 use std::process::Command;
 
 fn aum_bin() -> Command {
@@ -24,7 +25,11 @@ fn stats_default_produces_valid_json_with_all_platforms() {
     assert!(json.get("generated_at").is_some());
     assert!(json.get("totals").is_some());
     let platforms = json.get("platforms").unwrap().as_object().unwrap();
-    assert_eq!(platforms.len(), 3, "all 3 platforms should be present");
+    assert_eq!(
+        platforms.len(),
+        Platform::all().len(),
+        "every registered platform should be present"
+    );
 }
 
 #[test]

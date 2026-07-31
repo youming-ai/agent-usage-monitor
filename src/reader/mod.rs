@@ -1,9 +1,10 @@
 pub mod claude;
 pub mod codex;
 pub mod cursor;
+pub mod pi;
 pub mod pricing;
 
-use crate::state::{Platform, UsageRecord};
+use crate::state::UsageRecord;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
@@ -23,13 +24,13 @@ use std::path::{Path, PathBuf};
 ///
 /// Returns `None` at true EOF or on an incomplete trailing line (left as-is
 /// for the next poll to retry once it's been fully written).
-pub(crate) fn read_next_line(reader: &mut impl BufRead) -> Option<(String, u64)> {
+pub(crate) fn read_next_line(reader: &mut impl BufRead) -> std::io::Result<Option<(String, u64)>> {
     let mut buf = Vec::new();
-    let n = reader.read_until(b'\n', &mut buf).ok()?;
+    let n = reader.read_until(b'\n', &mut buf)?;
     if n == 0 || !buf.ends_with(b"\n") {
-        return None;
+        return Ok(None);
     }
-    Some((String::from_utf8_lossy(&buf).into_owned(), n as u64))
+    Ok(Some((String::from_utf8_lossy(&buf).into_owned(), n as u64)))
 }
 
 /// Read newline-terminated lines from `path` starting at `skip_bytes`,
@@ -53,33 +54,40 @@ pub(crate) fn read_lines_from_offset(
     path: &Path,
     skip_bytes: u64,
     mut on_line: impl FnMut(&str) -> Option<UsageRecord>,
-) -> (Vec<UsageRecord>, u64) {
+) -> ReaderResult<(Vec<UsageRecord>, u64)> {
     let file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return (Vec::new(), skip_bytes),
+        Ok(file) => file,
+        // Deleted between discovery and open — leave the cursor alone and let
+        // the next full scan prune it.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), skip_bytes)),
+        Err(e) => return Err(ReaderError::io(path, e)),
     };
 
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let file_len = file.metadata().map_err(|e| ReaderError::io(path, e))?.len();
     if skip_bytes > file_len {
         return read_lines_from_offset(path, 0, on_line);
     }
 
     let mut reader = BufReader::new(file);
-    if skip_bytes > 0 && reader.seek(SeekFrom::Start(skip_bytes)).is_err() {
-        return read_lines_from_offset(path, 0, on_line);
+    if skip_bytes > 0
+        && let Err(e) = reader.seek(SeekFrom::Start(skip_bytes))
+    {
+        return Err(ReaderError::io(path, e));
     }
 
     let mut records = Vec::new();
     let mut offset = skip_bytes;
 
-    while let Some((line, bytes)) = read_next_line(&mut reader) {
+    while let Some((line, bytes)) =
+        read_next_line(&mut reader).map_err(|e| ReaderError::io(path, e))?
+    {
         if let Some(rec) = on_line(line.trim_end_matches(['\r', '\n'])) {
             records.push(rec);
         }
         offset += bytes;
     }
 
-    (records, offset)
+    Ok((records, offset))
 }
 
 /// Shared incremental-scan driver: owns the per-file byte-offset map plus an
@@ -117,25 +125,48 @@ impl<S> FileScanner<S> {
     pub(crate) fn scan(
         &mut self,
         files: Vec<PathBuf>,
-        mut init: impl FnMut(&Path) -> S,
-        mut read_file: impl FnMut(&Path, u64, &mut S) -> (Vec<UsageRecord>, u64),
-    ) -> Vec<UsageRecord> {
-        let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
-        self.positions
-            .retain(|path, _| current_files.contains(path));
-        self.state.retain(|path, _| current_files.contains(path));
+        init: impl FnMut(&Path) -> S,
+        read_file: impl FnMut(&Path, u64, &mut S) -> ReaderResult<(Vec<UsageRecord>, u64)>,
+    ) -> ReaderResult<Vec<UsageRecord>> {
+        self.scan_files(files, true, init, read_file)
+    }
 
+    /// Scan only files named by a watcher event. Unlike [`Self::scan`], this
+    /// does not treat omitted files as deleted, so targeted refreshes preserve
+    /// every other file's cursor and parser state.
+    pub(crate) fn scan_changed(
+        &mut self,
+        files: Vec<PathBuf>,
+        init: impl FnMut(&Path) -> S,
+        read_file: impl FnMut(&Path, u64, &mut S) -> ReaderResult<(Vec<UsageRecord>, u64)>,
+    ) -> ReaderResult<Vec<UsageRecord>> {
+        self.scan_files(files, false, init, read_file)
+    }
+
+    fn scan_files(
+        &mut self,
+        files: Vec<PathBuf>,
+        prune_missing: bool,
+        mut init: impl FnMut(&Path) -> S,
+        mut read_file: impl FnMut(&Path, u64, &mut S) -> ReaderResult<(Vec<UsageRecord>, u64)>,
+    ) -> ReaderResult<Vec<UsageRecord>> {
+        if prune_missing {
+            let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
+            self.positions
+                .retain(|path, _| current_files.contains(path));
+            self.state.retain(|path, _| current_files.contains(path));
+        }
         let mut records = Vec::new();
         for file in files {
             let offset = self.positions.get(&file).copied().unwrap_or(0);
             let mut st = self.state.remove(&file).unwrap_or_else(|| init(&file));
-            let (entries, bytes_read) = read_file(&file, offset, &mut st);
+            let (entries, bytes_read) = read_file(&file, offset, &mut st)?;
             self.positions.insert(file.clone(), bytes_read);
             self.state.insert(file, st);
             records.extend(entries);
         }
         records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        records
+        Ok(records)
     }
 }
 
@@ -188,19 +219,61 @@ pub(crate) fn session_label(dir: &str, id: &str) -> String {
 /// Walk `dir` recursively, pushing files for which `keep(path)` returns true.
 /// The two readers (claude/codex) used to ship near-identical copies of this
 /// loop, differing only in the file filter — collapsed here behind a closure.
-pub(crate) fn find_recursive(dir: &Path, files: &mut Vec<PathBuf>, keep: &dyn Fn(&Path) -> bool) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+pub(crate) fn find_recursive(
+    dir: &Path,
+    files: &mut Vec<PathBuf>,
+    keep: &dyn Fn(&Path) -> bool,
+) -> ReaderResult<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        // Agents create and remove session directories while we walk, so a
+        // vanished directory is normal and must not fail the whole scan.
+        // Anything else (permissions, I/O) is worth surfacing.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(ReaderError::io(dir, e)),
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(ReaderError::io(dir, e)),
+        };
         let path = entry.path();
         if path.is_dir() {
-            find_recursive(&path, files, keep);
+            find_recursive(&path, files, keep)?;
         } else if keep(&path) {
             files.push(path);
         }
     }
+    Ok(())
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReaderError {
+    message: String,
+}
+
+impl ReaderError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn io(path: &Path, error: std::io::Error) -> Self {
+        Self::new(format!("{}: {error}", path.display()))
+    }
+}
+
+impl std::fmt::Display for ReaderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ReaderError {}
+
+pub type ReaderResult<T> = Result<T, ReaderError>;
 
 /// A source of usage records, abstracting over the backing store (JSONL files
 /// for Claude/Codex, SQLite for opencode). `main.rs` drives every source the
@@ -208,9 +281,15 @@ pub(crate) fn find_recursive(dir: &Path, files: &mut Vec<PathBuf>, keep: &dyn Fn
 /// watches each platform's own resolved path directly (see `watcher.rs`) —
 /// it does not go through this trait.
 pub trait UsageSource: Send {
-    fn platform(&self) -> Platform;
-    fn scan_all(&mut self) -> Vec<UsageRecord>;
-    fn poll_delta(&mut self) -> Vec<UsageRecord>;
+    fn scan_all(&mut self) -> ReaderResult<Vec<UsageRecord>>;
+    fn poll_delta(&mut self) -> ReaderResult<Vec<UsageRecord>>;
+
+    /// Targeted incremental refresh for paths supplied by the filesystem
+    /// watcher. Sources that cannot safely narrow their work retain the full
+    /// `poll_delta` behaviour.
+    fn poll_changed(&mut self, _paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
+        self.poll_delta()
+    }
 }
 
 #[cfg(test)]

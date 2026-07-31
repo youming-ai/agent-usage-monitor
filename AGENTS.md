@@ -1,17 +1,17 @@
 # Repository Guidelines
 
 ## Project Overview
-`agent-usage-monitor` (`aum`) is a single Rust binary that provides a terminal user interface (TUI) dashboard and a command-line interface (CLI) to track local AI agent usage, costs, and API quotas. It currently monitors three developer agent tools: Claude Code, Codex, and Cursor CLI.
+`agent-usage-monitor` (`aum`) is a single Rust binary that provides a terminal user interface (TUI) dashboard and a command-line interface (CLI) to track local AI agent usage, costs, and API quotas. It currently monitors four developer agent tools: Claude Code, Codex, Pi, and Cursor CLI.
 
 ## Architecture & Data Flow
-- **Data Ingestion**: A dual-track system uses a file system watcher (`src/watcher.rs` based on the `notify` crate) with 50ms debouncing, alongside the configurable fallback timer interval (5 seconds by default). Logs from various platforms are abstracted via the `UsageSource` trait, supporting JSONL log files and SQLite databases (Cursor's `store.db`).
-- **State Management**: The global state `AppState` is wrapped in `Arc<RwLock<AppState>>` for safe multi-threaded sharing. It maintains a fixed-size `PlatformState` array indexed by the platform enum's value. To keep memory usage extremely low under massive logs, a thread-safe string interner (`ThreadedRodeo` from the `lasso` crate) converts repetitive model names and session IDs into lightweight `Spur` tokens (Copy types).
+- **Data Ingestion**: A dual-track system uses a file system watcher (`src/watcher.rs` based on the `notify` crate) with 50ms debouncing, alongside the configurable fallback timer interval (5 seconds by default). Watcher paths drive targeted reader refreshes; fallback ticks perform full discovery. Logs from various platforms are abstracted via the fallible `UsageSource` trait, supporting JSONL log files and SQLite databases (Cursor's `store.db`).
+- **State Management**: The global state `AppState` is wrapped in `Arc<RwLock<AppState>>` for safe multi-threaded sharing. It maintains a fixed-size `PlatformState` array indexed by the platform enum's value. Repetitive model and session strings use `ThreadedRodeo`; unique record identities use fixed-size hashes instead (interning them would retain every source string for the process lifetime). Records are bounded by the configured sliding window; the dedup identity set deliberately is not, so re-reading one file can never displace another file's records.
 - **Platform Registry**: All platform-specific metadata, CLI parameters, default data paths, and reader initializations are managed centrally in `src/platforms.rs` (`REGISTRY`). Adding a platform follows the Open-Closed Principle—adding a single entry to `REGISTRY` without touching `main.rs`.
 - **TUI & UI Rendering**: The TUI runs on its own thread, utilizing `std::sync::RwLock`'s `try_read()` method to fetch state from `AppState`. If a lock conflict occurs, the frame is skipped to prevent any interface lag.
 - **Data Flow**:
   1. Log file modified -> `PlatformWatcher` detects change and notifies main loop via `WatcherMessage::Event` over a `tokio::sync::mpsc` channel.
   2. Main loop schedules reader tasks on `tokio::task::spawn_blocking`.
-  3. The reader locks a `Mutex` on its persistent instance, polls only new log lines since the last byte offset or row ID cursor, and parses `UsageRecord`s.
+  3. The reader locks a `Mutex` on its persistent instance, uses the watcher path when available, polls only new log lines since the last byte offset or row ID cursor, and parses `UsageRecord`s.
   4. Global write lock (`state.write()`) is acquired; new records are merged and old records outside the sliding window are evicted.
   5. UI redraws every 250ms (Tick).
 

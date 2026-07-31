@@ -4,7 +4,6 @@ use agent_usage_monitor::event::{AppEvent, EventLoop};
 use agent_usage_monitor::launcher;
 use agent_usage_monitor::mcp;
 use agent_usage_monitor::platforms;
-use agent_usage_monitor::quota;
 use agent_usage_monitor::readers::{self, PlatformReaders};
 use agent_usage_monitor::state::{AppState, Platform};
 use agent_usage_monitor::stats;
@@ -132,8 +131,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             loop {
                 tokio::select! {
-                    Some(WatcherMessage::Event { platform, .. }) = watcher_rx.recv() => {
-                        refreshers.request(platform);
+                    Some(WatcherMessage::Event { platform, path }) = watcher_rx.recv() => {
+                        refreshers.request_changed(platform, path);
                     }
                     _ = fallback.tick() => {
                         // Pick up paths that appeared after launch, then give
@@ -173,20 +172,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     // Quota fetcher: each fetch runs in spawn_blocking so the API call (HTTP
-    // via ureq) does not block the tokio runtime. Fetchers are registered in
-    // `quota::FETCHERS` — adding a new quota source no longer requires
-    // changing main.rs.
+    // via ureq) does not block the tokio runtime. Quota and account capabilities
+    // are registered alongside each platform in `platforms::REGISTRY`.
     let quota_state = app_state.clone();
     let quota_handle = task::spawn(async move {
         // Initial fetch — batch in one spawn_blocking to avoid concurrent
         // token-spawns at startup.
         {
             let qs = quota_state.clone();
-            let results: Vec<(Platform, Option<quota::QuotaInfo>)> = task::spawn_blocking(|| {
-                quota::FETCHERS
+            let (results, accounts) = task::spawn_blocking(|| {
+                let quotas = platforms::entries()
                     .iter()
-                    .map(|&(platform, fetch)| (platform, fetch()))
-                    .collect()
+                    .filter_map(|entry| entry.quota_fetcher.map(|fetch| (entry.platform, fetch())))
+                    .collect::<Vec<_>>();
+                let accounts = platforms::entries()
+                    .iter()
+                    .filter_map(|entry| {
+                        entry.account_fetcher.map(|fetch| (entry.platform, fetch()))
+                    })
+                    .collect::<Vec<_>>();
+                (quotas, accounts)
             })
             .await
             .unwrap_or_default();
@@ -201,6 +206,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     warn!("Failed to fetch {:?} quota", platform);
                 }
             }
+            for (platform, email) in accounts {
+                if let Ok(mut state) = qs.write() {
+                    state.platform_mut(platform).account_email = email;
+                }
+            }
         }
 
         // Refresh every 2 minutes — each platform independently.
@@ -208,7 +218,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
             interval.tick().await;
 
-            for &(p, fetch) in quota::FETCHERS {
+            for entry in platforms::entries() {
+                let p = entry.platform;
+                let Some(fetch) = entry.quota_fetcher else {
+                    continue;
+                };
                 let stale = quota_state
                     .try_read()
                     .map(|state| {
@@ -227,6 +241,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     {
                         s.platform_mut(p).quota = Some(q);
                     }
+                }
+            }
+
+            for entry in platforms::entries() {
+                let Some(fetch) = entry.account_fetcher else {
+                    continue;
+                };
+                let platform = entry.platform;
+                let email = task::spawn_blocking(fetch).await.unwrap_or_default();
+                if let Ok(mut state) = quota_state.write() {
+                    state.platform_mut(platform).account_email = email;
                 }
             }
         }

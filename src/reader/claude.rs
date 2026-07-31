@@ -1,11 +1,11 @@
-use crate::state::{Platform, UsageRecord};
+use crate::state::UsageRecord;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::PathBuf;
 
 use super::FileScanner;
-use super::UsageSource;
 use super::find_recursive;
+use super::{ReaderResult, UsageSource};
 
 /// Per-file running state: the conversation title, carried across lines and
 /// polls. Claude logs the title on its own `ai-title` lines interspersed with
@@ -17,7 +17,7 @@ struct ClaudeState {
 }
 
 pub struct ClaudeReader {
-    pub(crate) data_dir: PathBuf,
+    data_dir: PathBuf,
     scanner: FileScanner<ClaudeState>,
 }
 
@@ -29,19 +29,45 @@ impl ClaudeReader {
         }
     }
 
-    fn find_files(&self) -> Vec<PathBuf> {
+    fn find_files(&self) -> ReaderResult<Vec<PathBuf>> {
         let mut files = Vec::new();
         if self.data_dir.exists() {
             find_recursive(&self.data_dir, &mut files, &|p| {
                 p.extension().map(|e| e == "jsonl").unwrap_or(false)
-            });
+            })?;
         }
-        files
+        Ok(files)
     }
 
-    fn scan(&mut self) -> Vec<UsageRecord> {
-        let files = self.find_files();
+    fn scan(&mut self) -> ReaderResult<Vec<UsageRecord>> {
+        let files = self.find_files()?;
         self.scanner.scan(
+            files,
+            |_| ClaudeState::default(),
+            |file, offset, st| {
+                crate::reader::read_lines_from_offset(file, offset, |line| {
+                    parse_claude_line(line, st)
+                })
+            },
+        )
+    }
+
+    fn scan_changed(&mut self, paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
+        let mut files = Vec::new();
+        for path in paths {
+            if !path.is_file()
+                || !path.starts_with(&self.data_dir)
+                || path
+                    .extension()
+                    .is_none_or(|extension| extension != "jsonl")
+            {
+                return self.scan();
+            }
+            files.push(path.clone());
+        }
+        files.sort_unstable();
+        files.dedup();
+        self.scanner.scan_changed(
             files,
             |_| ClaudeState::default(),
             |file, offset, st| {
@@ -54,17 +80,17 @@ impl ClaudeReader {
 }
 
 impl UsageSource for ClaudeReader {
-    fn platform(&self) -> Platform {
-        Platform::ClaudeCode
-    }
-
-    fn scan_all(&mut self) -> Vec<UsageRecord> {
+    fn scan_all(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         self.scanner.reset();
         self.scan()
     }
 
-    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+    fn poll_delta(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         self.scan()
+    }
+
+    fn poll_changed(&mut self, paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
+        self.scan_changed(paths)
     }
 }
 
@@ -145,13 +171,12 @@ fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Option<UsageRecord> {
 
     Some(UsageRecord {
         timestamp,
-        platform: Platform::ClaudeCode,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session),
         session_id: crate::state::intern(session_id),
         cwd: crate::state::intern(cwd),
         title: crate::state::intern(&st.title),
-        id: crate::state::intern(record_id),
+        id: crate::state::record_id(record_id),
         input_tokens,
         output_tokens,
         cache_read_tokens: cache_read,
@@ -198,7 +223,7 @@ mod tests {
         );
         write_file(dir.path(), "a.jsonl", &content);
         let mut reader = ClaudeReader::new(dir.path().to_path_buf());
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(crate::state::resolve(records[0].title), "Fix the login bug");
     }
@@ -209,7 +234,7 @@ mod tests {
         write_file(dir.path(), "a.jsonl", &sample_jsonl());
 
         let mut reader = ClaudeReader::new(dir.path().to_path_buf());
-        let initial = reader.scan_all();
+        let initial = reader.scan_all().unwrap();
         assert_eq!(
             initial.len(),
             2,
@@ -217,7 +242,7 @@ mod tests {
         );
 
         // No new lines were written, so a subsequent poll must yield nothing.
-        let delta = reader.poll_delta();
+        let delta = reader.poll_delta().unwrap();
         assert!(
             delta.is_empty(),
             "poll_delta re-emitted {} already-seen records",
@@ -231,7 +256,7 @@ mod tests {
         let path = write_file(dir.path(), "a.jsonl", &sample_jsonl());
 
         let mut reader = ClaudeReader::new(dir.path().to_path_buf());
-        assert_eq!(reader.scan_all().len(), 2);
+        assert_eq!(reader.scan_all().unwrap().len(), 2);
 
         // Append two more newline-terminated lines: one non-record, one record.
         let appended = format!(
@@ -242,7 +267,7 @@ mod tests {
         let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
         f.write_all(appended.as_bytes()).unwrap();
 
-        let delta = reader.poll_delta();
+        let delta = reader.poll_delta().unwrap();
         assert_eq!(
             delta.len(),
             1,
@@ -260,7 +285,7 @@ mod tests {
         write_file(dir.path(), "a.jsonl", &format!("{line}\n"));
 
         let mut reader = ClaudeReader::new(dir.path().to_path_buf());
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(
             records[0].cost_usd, 0.05,
@@ -292,12 +317,22 @@ mod tests {
         .unwrap();
 
         let mut reader = ClaudeReader::new(dir.path().to_path_buf());
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         assert_eq!(
             records.len(),
             1,
             "the valid record after the bad-UTF8 line must still be read"
         );
         assert_eq!(records[0].input_tokens, 100);
+    }
+
+    #[test]
+    fn scan_reports_directory_read_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_directory = dir.path().join("claude-data");
+        fs::write(&not_a_directory, b"not a directory").unwrap();
+        let mut reader = ClaudeReader::new(not_a_directory);
+
+        assert!(reader.scan_all().is_err());
     }
 }

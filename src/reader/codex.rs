@@ -1,12 +1,12 @@
 use crate::reader::pricing;
-use crate::state::{Platform, UsageRecord};
+use crate::state::UsageRecord;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use super::FileScanner;
-use super::UsageSource;
 use super::find_recursive;
+use super::{ReaderResult, UsageSource};
 
 /// Per-file running state. A rollout file declares its model and working
 /// directory in events at the top, which are skipped on later polls — so this
@@ -42,7 +42,7 @@ impl CodexReader {
         }
     }
 
-    fn find_files(&self) -> Vec<PathBuf> {
+    fn find_files(&self) -> ReaderResult<Vec<PathBuf>> {
         let mut files = Vec::new();
         if self.sessions_dir.exists() {
             find_recursive(&self.sessions_dir, &mut files, &|p| {
@@ -50,14 +50,40 @@ impl CodexReader {
                     .and_then(|n| n.to_str())
                     .map(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
                     .unwrap_or(false)
-            });
+            })?;
         }
-        files
+        Ok(files)
     }
 
-    fn scan(&mut self) -> Vec<UsageRecord> {
-        let files = self.find_files();
+    fn scan(&mut self) -> ReaderResult<Vec<UsageRecord>> {
+        let files = self.find_files()?;
         self.scanner.scan(
+            files,
+            |file| FileState {
+                model: "unknown".to_string(),
+                dir: "codex".to_string(),
+                cwd: String::new(),
+                sid: extract_codex_project(file),
+            },
+            read_codex_from_offset,
+        )
+    }
+
+    fn scan_changed(&mut self, paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
+        let mut files = Vec::new();
+        for path in paths {
+            let is_rollout = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"));
+            if !path.is_file() || !path.starts_with(&self.sessions_dir) || !is_rollout {
+                return self.scan();
+            }
+            files.push(path.clone());
+        }
+        files.sort_unstable();
+        files.dedup();
+        self.scanner.scan_changed(
             files,
             |file| FileState {
                 model: "unknown".to_string(),
@@ -71,17 +97,17 @@ impl CodexReader {
 }
 
 impl UsageSource for CodexReader {
-    fn platform(&self) -> Platform {
-        Platform::Codex
-    }
-
-    fn scan_all(&mut self) -> Vec<UsageRecord> {
+    fn scan_all(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         self.scanner.reset();
         self.scan()
     }
 
-    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+    fn poll_delta(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         self.scan()
+    }
+
+    fn poll_changed(&mut self, paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
+        self.scan_changed(paths)
     }
 }
 
@@ -89,7 +115,7 @@ fn read_codex_from_offset(
     path: &Path,
     skip_bytes: u64,
     st: &mut FileState,
-) -> (Vec<UsageRecord>, u64) {
+) -> ReaderResult<(Vec<UsageRecord>, u64)> {
     crate::reader::read_lines_from_offset(path, skip_bytes, |line| parse_codex_line(line, st))
 }
 
@@ -210,14 +236,13 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
 
     Some(UsageRecord {
         timestamp,
-        platform: Platform::Codex,
         model: crate::state::intern(&st.model),
         session: crate::state::intern(&st.session()),
         session_id: crate::state::intern(&st.sid),
         cwd: crate::state::intern(&st.cwd),
         // Codex rollout files don't record a conversation title.
         title: crate::state::intern(""),
-        id: crate::state::intern(&record_id),
+        id: crate::state::record_id(&record_id),
         input_tokens: delta_input,
         output_tokens: delta_output,
         cache_read_tokens: delta_cached,
@@ -287,7 +312,7 @@ mod tests {
             ],
         );
         let mut reader = reader_for(&sessions);
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         assert_eq!(records.len(), 1);
         // The real id and working dir must be threaded through for resume.
         assert_eq!(crate::state::resolve(records[0].session_id), "sess-42");
@@ -315,7 +340,7 @@ mod tests {
         );
 
         let mut reader = reader_for(&sessions);
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         // With a null last_token_usage there is no usable per-event delta, so
         // no records should be emitted (not 60k worth of phantom deltas).
         let total_input: u64 = records.iter().map(|r| r.input_tokens).sum();
@@ -340,9 +365,9 @@ mod tests {
         );
 
         let mut reader = reader_for(&sessions);
-        assert_eq!(reader.scan_all().len(), 1);
+        assert_eq!(reader.scan_all().unwrap().len(), 1);
         assert!(
-            reader.poll_delta().is_empty(),
+            reader.poll_delta().unwrap().is_empty(),
             "unchanged file re-emitted records"
         );
     }
@@ -362,7 +387,7 @@ mod tests {
         );
 
         let mut reader = reader_for(&sessions);
-        assert!(reader.scan_all().is_empty(), "no token_count yet");
+        assert!(reader.scan_all().unwrap().is_empty(), "no token_count yet");
 
         // A token_count is appended to file A only; its turn_context line was
         // already consumed, so the model must still resolve to file A's model.
@@ -370,7 +395,7 @@ mod tests {
         f.write_all(format!("{}\n", token_count("2026-05-29T10:05:00Z", 200, 80)).as_bytes())
             .unwrap();
 
-        let delta = reader.poll_delta();
+        let delta = reader.poll_delta().unwrap();
         assert_eq!(delta.len(), 1);
         assert_eq!(
             crate::state::resolve(delta[0].model),

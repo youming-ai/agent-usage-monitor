@@ -4,28 +4,8 @@
 //! `format_duration_short`; the JWT helpers were only in `codex.rs` but live
 //! here too so future OAuth work has a single place to extend.
 
-use super::{QuotaError, QuotaInfo};
+use super::QuotaError;
 use serde_json::Value;
-use std::time::Instant;
-
-/// Build the `QuotaInfo` shape shared by every platform whose "quota" is just
-/// a local-credentials presence check (no real usage API): signed in with an
-/// email (or the generic "Signed in" placeholder), or `NoCredentials` when
-/// none were found.
-pub(crate) fn signed_in(tool_name: &str, email: Option<String>) -> Option<QuotaInfo> {
-    Some(QuotaInfo {
-        tool_name: tool_name.to_string(),
-        account_id: None,
-        windows: vec![],
-        fetched_at: Instant::now(),
-        error: if email.is_none() {
-            Some(QuotaError::NoCredentials)
-        } else {
-            None
-        },
-        email,
-    })
-}
 
 /// Extract `email` from a JWT payload, falling back to an email already read
 /// from the credentials file. Shared by the four platforms (Copilot, Grok,
