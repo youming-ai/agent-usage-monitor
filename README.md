@@ -30,6 +30,7 @@ aum stats         # print JSON usage report (no TUI)
 |------|---------|-------------|
 | `--claude-path` | `~/.claude/projects` | Claude Code data directory |
 | `--codex-path` | `~/.codex` | Codex data directory |
+| `--pi-path` | `~/.pi/agent/sessions` | Pi data directory |
 | `--cursor-path` | `~/.cursor` | Cursor CLI data directory |
 | `-r, --refresh` | `5` | Fallback poll interval, in seconds |
 
@@ -89,6 +90,7 @@ Configuration is stored in `~/.config/aum/config.toml` (or platform equivalent).
 
 - `claude_path` - Path to Claude Code data directory
 - `codex_path` - Path to Codex data directory
+- `pi_path` - Path to Pi data directory
 - `cursor_path` - Path to Cursor CLI data directory
 - `refresh` - Fallback polling interval in seconds (minimum: 1)
 - `max_records` - Per-platform sliding-window size (default: 20000) used by all

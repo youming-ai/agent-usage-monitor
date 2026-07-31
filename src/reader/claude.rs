@@ -17,7 +17,7 @@ struct ClaudeState {
 }
 
 pub struct ClaudeReader {
-    pub(crate) data_dir: PathBuf,
+    data_dir: PathBuf,
     scanner: FileScanner<ClaudeState>,
 }
 
