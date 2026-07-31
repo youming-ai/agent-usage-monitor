@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.2.0...v1.2.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **ui:** show quota reset time again ([699fc3e](https://github.com/youming-ai/agent-usage-monitor/commit/699fc3ea327b2e272c9a305ef4034c01f6c8589d))
+* **ui:** show quota reset time again ([8530232](https://github.com/youming-ai/agent-usage-monitor/commit/85302323c8146b70d54969798a6912adb7d155f4))
+
 ## [1.2.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.1.2...v1.2.0) (2026-07-31)
 
 
