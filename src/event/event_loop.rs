@@ -17,7 +17,9 @@ impl EventLoop {
         let tx_clone = tx.clone();
         let tx_tick = tx.clone();
 
-        tokio::spawn(async move {
+        // Crossterm's poll/read calls are blocking terminal I/O. Keep them on
+        // a dedicated OS thread rather than occupying a Tokio worker.
+        std::thread::spawn(move || {
             let mut last_tick = Instant::now();
             loop {
                 let timeout = tick_rate

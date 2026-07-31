@@ -22,7 +22,8 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let active = state.active_tab;
     let accent = active.primary_color();
 
-    let quota_h = if active.has_quota_api() { 1 } else { 0 };
+    let has_quota = crate::platforms::entry_for_platform(active).has_quota();
+    let quota_h = if has_quota { 1 } else { 0 };
     let chunks = Layout::vertical([
         Constraint::Length(2),       // header: tabs + account, with bottom rule
         Constraint::Length(quota_h), // quota summary (single line)
@@ -44,7 +45,9 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let header_inner = header_block.inner(chunks[0]);
     frame.render_widget(header_block, chunks[0]);
 
-    let email = quota.and_then(|q| q.email.as_deref());
+    let email = quota
+        .and_then(|q| q.email.as_deref())
+        .or(p.account_email.as_deref());
     let acct_w = email.map(|e| e.chars().count() as u16 + 4).unwrap_or(15);
     let header_cols =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(acct_w)]).split(header_inner);
@@ -57,7 +60,7 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     // Only Claude and Codex have quota API backends; hide the quota row
     // entirely for platforms that never report quota so the session table
     // gets the extra line.
-    if active.has_quota_api() {
+    if has_quota {
         frame.render_widget(quota_bar::quota_panel(active, quota), chunks[1]);
     }
 
@@ -89,7 +92,10 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
         &mut table_state,
     );
 
-    frame.render_widget(status_bar::status_bar(total_calls, total_cost), chunks[3]);
+    frame.render_widget(
+        status_bar::status_bar(total_calls, total_cost, p.reader_error.as_deref()),
+        chunks[3],
+    );
 }
 
 #[cfg(test)]
@@ -154,10 +160,10 @@ mod tests {
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
             session: crate::state::intern(session),
             session_id: crate::state::intern(session),
-            id: crate::state::intern(&format!("{session}:{model}:{input}:{output}")),
+            id: crate::state::record_id(&format!("{session}:{model}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,
-            ..crate::state::test_record(Platform::ClaudeCode, model)
+            ..crate::state::test_record(model)
         };
         claude.records = vec![
             mk("ollama-monitor a3f2c1d8", "claude-opus-4", 1200, 340),
@@ -166,8 +172,8 @@ mod tests {
             mk("my-web-app 1c2d3e4f", "claude-opus-4", 5000, 600),
         ]
         .into();
-        claude.total_calls = 42;
-        claude.total_cost = 12.34;
+        claude.window_calls = 42;
+        claude.window_cost = 12.34;
         s
     }
 
@@ -198,9 +204,9 @@ mod tests {
         let mk = |session: &str| UsageRecord {
             session: crate::state::intern(session),
             session_id: crate::state::intern(session),
-            id: crate::state::intern(session),
+            id: crate::state::record_id(session),
             input_tokens: 100,
-            ..crate::state::test_record(Platform::ClaudeCode, "claude-opus-4")
+            ..crate::state::test_record("claude-opus-4")
         };
         // 30 sessions — far more than a short panel can show at once.
         let records: Vec<_> = (0..30).map(|i| mk(&format!("sess-{i:02}"))).collect();
@@ -214,5 +220,21 @@ mod tests {
             out.contains("sess-29"),
             "selection past the fold must scroll into view:\n{out}"
         );
+    }
+
+    #[test]
+    fn cursor_account_does_not_create_a_quota_row() {
+        let mut state = AppState::new();
+        state.active_tab = Platform::Cursor;
+        state.available_tabs = vec![Platform::Cursor];
+        state.platform_mut(Platform::Cursor).account_email = Some("cursor@example.com".to_string());
+
+        let out = dump(80, 12, state);
+        assert!(
+            out.contains("cursor@example.com"),
+            "account should render in header:\n{out}"
+        );
+        assert!(!out.contains("loading"));
+        assert!(!out.contains("no quota data"));
     }
 }

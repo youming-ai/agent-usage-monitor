@@ -3,23 +3,14 @@ pub mod codex;
 pub mod cursor;
 pub(crate) mod util;
 
-use crate::state::Platform;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const CACHE_TTL: Duration = Duration::from_secs(120);
 
 /// A quota fetcher: a bare fn with no state to capture.
-type Fetcher = fn() -> Option<QuotaInfo>;
-
-/// All registered quota fetchers. Adding a new quota source only requires
-/// adding a row here. Fn pointers (not `Box<dyn>`) since every fetcher is a
-/// bare `fn() -> Option<QuotaInfo>` with no state to capture.
-pub static FETCHERS: &[(Platform, Fetcher)] = &[
-    (Platform::ClaudeCode, claude::fetch_quota),
-    (Platform::Codex, codex::fetch_quota),
-    (Platform::Cursor, cursor::fetch_quota),
-];
+pub type Fetcher = fn() -> Option<QuotaInfo>;
+pub type AccountFetcher = fn() -> Option<String>;
 
 /// Reason a quota fetch failed. Surfaced verbatim in the UI and used to decide
 /// whether the cached result should be re-tried sooner than the regular TTL.

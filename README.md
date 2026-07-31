@@ -1,6 +1,6 @@
 # Agent Usage Monitor
 
-Real-time terminal dashboard for **Claude Code**, **Codex** & **Cursor CLI** usage — quota windows, token usage, and cost, read straight from local log files. No API keys required. The command is `aum`.
+Real-time terminal dashboard for **Claude Code**, **Codex**, **Pi** & **Cursor CLI** usage — quota windows, token usage, and cost, read straight from local log files. No API keys required. The command is `aum`.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -91,12 +91,15 @@ Configuration is stored in `~/.config/aum/config.toml` (or platform equivalent).
 - `codex_path` - Path to Codex data directory
 - `cursor_path` - Path to Cursor CLI data directory
 - `refresh` - Fallback polling interval in seconds (minimum: 1)
-- `max_records` - Maximum number of records to keep in memory
+- `max_records` - Per-platform sliding-window size (default: 20000) used by all
+  TUI totals, model rows, and session rows. Lower it and the headline totals
+  cover proportionally less history; `aum stats` is unaffected, it always reads
+  the full logs
 
 Example:
 ```bash
 aum config set refresh 2
-aum config set max_records 200
+aum config set max_records 50000
 aum config set cursor_path ~/.cursor
 ```
 
@@ -106,7 +109,9 @@ The TUI uses `notify` (FSEvents on macOS, inotify on Linux, ReadDirectoryChanges
 on Windows) to react to file changes immediately, instead of polling on a timer.
 A 50 ms per-platform debounce coalesces bursts of writes; the configured fallback
 poll (5 s by default) ensures the display stays current even if a FS event is
-dropped. Paths created after startup are discovered by that poll and then watched.
+dropped. Watcher events pass the changed path to the reader so normal refreshes
+only open affected files; the fallback poll performs full discovery. Paths created
+after startup are discovered by that poll and then watched.
 
 Network filesystems (NFS, SMB) are not officially supported by `notify`; the
 configured fallback poll still works there.
@@ -202,8 +207,8 @@ Each agent tab uses the same layout; only the accent color and data source chang
 ```
 
 - **Quota bars** — one per window (Claude & Codex only); the fill shows remaining usage, with a status glyph (`✓` ≥50%, `⚠` ≥20%, `✗` <20%) and reset time.
-- **models** — per-model totals: tokens, cost, and request count.
-- **sessions** — per-conversation usage (tokens, requests), labelled `<dir> <id>` so multiple sessions in one project stay distinct.
+- **models** — per-model totals for the configured sliding window: tokens, cost, and request count.
+- **sessions** — per-conversation usage in the same window (tokens, requests), labelled `<dir> <id>` so multiple sessions in one project stay distinct.
 
 Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue, Cursor cyan); everything else stays default or dimmed. These are defined in `src/state/app_state.rs` (`Platform::primary_color`).
 
@@ -213,13 +218,16 @@ Each platform uses an accent color matched to its official CLI theme or brand pa
 
 - **Claude Code** — `~/.claude/projects/**/*.jsonl`
 - **Codex** — `~/.codex/sessions/**/rollout-*.jsonl`
+- **Pi** — `~/.pi/agent/sessions/**/*.jsonl`
 - **Cursor CLI** — `~/.cursor/projects/**/agent-transcripts/**/*.jsonl`, `~/.cursor/chats/**/store.db`, and `~/.config/cursor/chats/**/store.db`
 
 Quota percentages come from the official endpoints, authenticated with your existing local credentials (Claude: macOS Keychain or `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`). Cost is computed from built-in pricing tables for Anthropic & OpenAI models; unknown models show `$0.00`.
 
 ### Adding a new agent
 
-Platform wiring lives in `src/platforms.rs` (`RegistryEntry`). A new agent needs one registry row (path keys, reader factory) instead of scattered changes across `main.rs` and config handlers.
+Platform wiring lives in `src/platforms.rs` (`RegistryEntry`). A registry row
+contains its path keys, reader factory, resume command, and optional quota/account
+fetchers, keeping runtime orchestration free of platform-specific match arms.
 
 ### Tests
 

@@ -7,6 +7,7 @@ use lasso::{Spur, ThreadedRodeo};
 use std::sync::OnceLock;
 
 pub type InternedString = Spur;
+pub type RecordId = u64;
 pub static INTERNER: OnceLock<ThreadedRodeo> = OnceLock::new();
 
 pub fn get_interner() -> &'static ThreadedRodeo {
@@ -19,6 +20,20 @@ pub fn intern(s: &str) -> InternedString {
 
 pub fn resolve(key: InternedString) -> &'static str {
     get_interner().resolve(&key)
+}
+
+/// Stable, fixed-size identity for one source record.
+///
+/// Record ids are intentionally not interned: unlike model/session names they
+/// are almost always unique, so interning them retained the full source string
+/// (occasionally an entire JSON line) for the lifetime of the process. FNV-1a
+/// keeps the state-side identity compact and deterministic across processes.
+pub fn record_id(value: &str) -> RecordId {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    value.as_bytes().iter().fold(OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(PRIME)
+    })
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -80,19 +95,21 @@ impl AgentPaths {
 pub enum Platform {
     ClaudeCode,
     Codex,
+    Pi,
     Cursor,
 }
 
 impl Platform {
     /// Number of platform variants — used to size the fixed array in `AppState`.
-    pub const COUNT: usize = 3;
+    pub const COUNT: usize = 4;
 
     /// Zero-based index for array access.
     pub const fn index(self) -> usize {
         match self {
             Self::ClaudeCode => 0,
             Self::Codex => 1,
-            Self::Cursor => 2,
+            Self::Pi => 2,
+            Self::Cursor => 3,
         }
     }
 
@@ -116,6 +133,7 @@ impl Platform {
         match self {
             Self::ClaudeCode => "CLAUDE",
             Self::Codex => "CODEX",
+            Self::Pi => "PI",
             Self::Cursor => "CURSOR",
         }
     }
@@ -126,16 +144,13 @@ impl Platform {
         match self {
             Self::ClaudeCode => ratatui::style::Color::Rgb(217, 119, 87),
             Self::Codex => ratatui::style::Color::Rgb(59, 130, 246),
+            Self::Pi => ratatui::style::Color::Rgb(138, 190, 183),
             Self::Cursor => ratatui::style::Color::Rgb(136, 192, 208),
         }
     }
 
-    pub const fn has_quota_api(self) -> bool {
-        matches!(self, Self::ClaudeCode | Self::Codex | Self::Cursor)
-    }
-
     pub fn all() -> &'static [Self] {
-        &[Self::ClaudeCode, Self::Codex, Self::Cursor]
+        &[Self::ClaudeCode, Self::Codex, Self::Pi, Self::Cursor]
     }
 
     pub fn default_path(self) -> std::path::PathBuf {
@@ -143,6 +158,7 @@ impl Platform {
         match self {
             Self::ClaudeCode => home.join(".claude/projects"),
             Self::Codex => home.join(".codex"),
+            Self::Pi => home.join(".pi/agent/sessions"),
             Self::Cursor => home.join(".cursor"),
         }
     }
@@ -169,8 +185,6 @@ pub type Tab = Platform;
 #[derive(Debug, Clone)]
 pub struct UsageRecord {
     pub timestamp: DateTime<Utc>,
-    #[allow(dead_code)]
-    pub platform: Platform,
     pub model: InternedString,
     pub session: InternedString,
     /// Full session/conversation id used to resume the agent CLI (Claude
@@ -190,7 +204,7 @@ pub struct UsageRecord {
     /// build this from the strongest identifier their source data carries —
     /// a message/event id, a database primary key, or (when nothing better
     /// exists) a hash of the record's own content. See `AppState::add_records`.
-    pub id: InternedString,
+    pub id: RecordId,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
@@ -245,19 +259,27 @@ pub struct ResumeSelection {
 pub struct PlatformState {
     pub records: VecDeque<UsageRecord>,
     pub sessions: HashMap<InternedString, SessionSummary>,
-    pub total_calls: usize,
-    pub total_cost: f64,
+    /// Totals for the same bounded record window represented by `records`,
+    /// `sessions`, and the TUI tables.
+    pub window_calls: usize,
+    pub window_cost: f64,
     pub quota: Option<QuotaInfo>,
+    pub account_email: Option<String>,
     pub max_records: usize,
+    /// Last reader failure for this platform. Cleared by the next successful
+    /// scan, including a successful scan that produces no new records.
+    pub reader_error: Option<String>,
     /// Ids of every record ever ingested for this platform, so a reader
-    /// re-emitting the same record (e.g. after a truncation-triggered
-    /// re-read from byte 0) doesn't double-count it.
-    // ponytail: grows for the process lifetime rather than tracking only the
-    // bounded `records` window — bounding it would let a record evicted from
-    // `records` be double-counted if the same file is re-read later. A Spur
-    // is 4 bytes, so even a long-running session ingesting millions of
-    // records stays well under the ceiling where this would matter.
-    seen_ids: HashSet<InternedString>,
+    /// re-emitting the same record (e.g. after a truncation-triggered re-read
+    /// from byte 0) doesn't disturb the window.
+    // ponytail: deliberately NOT bounded to the `records` window. Bounding it
+    // lets a re-read of one file re-add records already evicted from the
+    // window, which displaces *other* files' recent records — and those never
+    // come back, because their own read cursors are already past them. A
+    // RecordId is 8 bytes, so millions of records stay far below the ceiling
+    // where this would matter; shrink it by hashing into a Bloom filter only
+    // if that ever stops being true.
+    seen_ids: HashSet<RecordId>,
 }
 
 impl PlatformState {
@@ -275,8 +297,8 @@ impl PlatformState {
             self.quota.as_ref(),
             &self.sessions,
             &self.records,
-            self.total_calls,
-            self.total_cost,
+            self.window_calls,
+            self.window_cost,
         )
     }
 
@@ -362,10 +384,12 @@ impl AppState {
         let make = || PlatformState {
             records: VecDeque::with_capacity(max_records),
             sessions: HashMap::new(),
-            total_calls: 0,
-            total_cost: 0.0,
+            window_calls: 0,
+            window_cost: 0.0,
             quota: None,
+            account_email: None,
             max_records,
+            reader_error: None,
             seen_ids: HashSet::new(),
         };
         Self {
@@ -475,6 +499,8 @@ impl AppState {
         self.selected_key = None;
     }
 
+    /// Small window, for tests and `Default` only — the running app always
+    /// passes the configured `max_records` to [`Self::with_capacity`].
     pub fn new() -> Self {
         Self::with_capacity(100)
     }
@@ -499,22 +525,33 @@ impl AppState {
             if p.records.len() >= p.max_records
                 && let Some(old) = p.records.pop_front()
             {
+                p.window_calls = p.window_calls.saturating_sub(1);
+                p.window_cost = (p.window_cost - old.cost_usd).max(0.0);
                 reverse_model_aggregate(&mut p.sessions, &old);
             }
-            p.total_cost += r.cost_usd;
-            p.total_calls += 1;
+            p.window_cost += r.cost_usd;
+            p.window_calls += 1;
             upsert_model_aggregate(&mut p.sessions, &r);
             p.records.push_back(r);
         }
+    }
+
+    pub fn mark_reader_success(&mut self, platform: Platform) {
+        self.platform_mut(platform).reader_error = None;
+    }
+
+    pub fn mark_reader_error(&mut self, platform: Platform, error: impl Into<String>) {
+        self.platform_mut(platform).reader_error = Some(error.into());
     }
 
     pub fn clear_tab(&mut self, tab: Tab) {
         let p = self.platform_mut(tab);
         p.records.clear();
         p.sessions.clear();
-        p.total_calls = 0;
-        p.total_cost = 0.0;
+        p.window_calls = 0;
+        p.window_cost = 0.0;
         p.seen_ids.clear();
+        p.reader_error = None;
     }
 
     pub fn detect_available_tabs(&mut self, paths: &AgentPaths) {
@@ -584,18 +621,17 @@ impl Default for AppState {
 /// Shared test-record builder — the single place that lists every
 /// `UsageRecord` field, so adding a field updates only this function instead
 /// of every test module. Callers override the few fields they care about via
-/// struct-update syntax: `UsageRecord { id: intern("x"), ..test_record(p, m) }`.
+/// struct-update syntax: `UsageRecord { id: record_id("x"), ..test_record(m) }`.
 #[cfg(test)]
-pub(crate) fn test_record(platform: Platform, model: &str) -> UsageRecord {
+pub(crate) fn test_record(model: &str) -> UsageRecord {
     UsageRecord {
         timestamp: Utc::now(),
-        platform,
         model: intern(model),
         session: intern("test"),
         session_id: intern("test-sid"),
         cwd: intern("/tmp/test"),
         title: intern(""),
-        id: intern("test-id"),
+        id: record_id("test-id"),
         input_tokens: 0,
         output_tokens: 0,
         cache_read_tokens: 0,
@@ -608,27 +644,20 @@ pub(crate) fn test_record(platform: Platform, model: &str) -> UsageRecord {
 mod tests {
     use super::*;
 
-    fn rec(platform: Platform, model: &str, input: u64, output: u64, cost: f64) -> UsageRecord {
+    fn rec(model: &str, input: u64, output: u64, cost: f64) -> UsageRecord {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        rec_with_id(platform, model, input, output, cost, &format!("auto-{id}"))
+        rec_with_id(model, input, output, cost, &format!("auto-{id}"))
     }
 
-    fn rec_with_id(
-        platform: Platform,
-        model: &str,
-        input: u64,
-        output: u64,
-        cost: f64,
-        id: &str,
-    ) -> UsageRecord {
+    fn rec_with_id(model: &str, input: u64, output: u64, cost: f64, id: &str) -> UsageRecord {
         UsageRecord {
-            id: intern(id),
+            id: record_id(id),
             input_tokens: input,
             output_tokens: output,
             cost_usd: cost,
-            ..test_record(platform, model)
+            ..test_record(model)
         }
     }
 
@@ -663,9 +692,9 @@ mod tests {
             session_id: intern(sid),
             cwd: intern(cwd),
             title: intern(title),
-            id: intern(id),
+            id: record_id(id),
             input_tokens: tokens,
-            ..test_record(Platform::ClaudeCode, "opus-4")
+            ..test_record("opus-4")
         }
     }
 
@@ -782,16 +811,10 @@ mod tests {
     #[test]
     fn add_records_dispatches_by_platform() {
         let mut s = AppState::with_capacity(10);
-        s.add_records(
-            Platform::ClaudeCode,
-            vec![rec(Platform::ClaudeCode, "opus-4", 100, 50, 1.0)],
-        );
-        s.add_records(
-            Platform::Codex,
-            vec![rec(Platform::Codex, "gpt-5", 200, 80, 2.0)],
-        );
-        assert_eq!(s.platforms[claude_idx()].total_calls, 1);
-        assert_eq!(s.platforms[codex_idx()].total_calls, 1);
+        s.add_records(Platform::ClaudeCode, vec![rec("opus-4", 100, 50, 1.0)]);
+        s.add_records(Platform::Codex, vec![rec("gpt-5", 200, 80, 2.0)]);
+        assert_eq!(s.platforms[claude_idx()].window_calls, 1);
+        assert_eq!(s.platforms[codex_idx()].window_calls, 1);
         assert!(
             s.platforms[claude_idx()]
                 .sessions
@@ -810,9 +833,9 @@ mod tests {
         s.add_records(
             Platform::ClaudeCode,
             vec![
-                rec(Platform::ClaudeCode, "opus-4", 100, 50, 1.0),
-                rec(Platform::ClaudeCode, "opus-4", 200, 80, 2.0),
-                rec(Platform::ClaudeCode, "opus-4", 300, 90, 3.0),
+                rec("opus-4", 100, 50, 1.0),
+                rec("opus-4", 200, 80, 2.0),
+                rec("opus-4", 300, 90, 3.0),
             ],
         );
         let m = s.platforms[claude_idx()]
@@ -823,21 +846,47 @@ mod tests {
         assert_eq!(m.total_output, 170);
         assert_eq!(m.total_cost, 5.0);
         assert_eq!(m.request_count, 2);
-        assert_eq!(s.platforms[claude_idx()].total_cost, 6.0);
-        assert_eq!(s.platforms[claude_idx()].total_calls, 3);
+        assert_eq!(s.platforms[claude_idx()].window_cost, 5.0);
+        assert_eq!(s.platforms[claude_idx()].window_calls, 2);
+    }
+
+    /// A reader that re-reads one file from byte 0 (truncation, or a store.db
+    /// replaced at the same path) replays that file's whole history. Those
+    /// records must be recognised as already-seen: re-adding them would evict
+    /// *other* files' recent records, which never return because their own
+    /// read cursors have long since passed them.
+    #[test]
+    fn replaying_one_files_history_does_not_displace_another_files_records() {
+        let mut s = AppState::with_capacity(3);
+        let file_a = || {
+            vec![
+                rec_with_id("opus-4", 10, 5, 1.0, "a1"),
+                rec_with_id("opus-4", 10, 5, 1.0, "a2"),
+                rec_with_id("opus-4", 10, 5, 1.0, "a3"),
+            ]
+        };
+        s.add_records(Platform::ClaudeCode, file_a());
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![rec_with_id("sonnet-4", 10, 5, 9.0, "b1")],
+        );
+
+        s.add_records(Platform::ClaudeCode, file_a());
+
+        let p = &s.platforms[claude_idx()];
+        assert!(
+            p.records.iter().any(|r| r.id == record_id("b1")),
+            "file B's record was displaced by file A's replay"
+        );
+        assert_eq!(p.window_calls, 3);
+        assert_eq!(p.window_cost, 11.0);
     }
 
     #[test]
     fn evictions_drop_models_at_zero_count() {
         let mut s = AppState::with_capacity(1);
-        s.add_records(
-            Platform::ClaudeCode,
-            vec![rec(Platform::ClaudeCode, "opus-4", 100, 50, 1.0)],
-        );
-        s.add_records(
-            Platform::ClaudeCode,
-            vec![rec(Platform::ClaudeCode, "sonnet-4", 200, 80, 2.0)],
-        );
+        s.add_records(Platform::ClaudeCode, vec![rec("opus-4", 100, 50, 1.0)]);
+        s.add_records(Platform::ClaudeCode, vec![rec("sonnet-4", 200, 80, 2.0)]);
         let c = &s.platforms[claude_idx()];
         assert!(!c.sessions.contains_key(&intern("opus-4")));
         assert!(c.sessions.contains_key(&intern("sonnet-4")));
@@ -853,6 +902,7 @@ mod tests {
         let paths = AgentPaths::new(HashMap::from([
             (Platform::ClaudeCode, claude),
             (Platform::Codex, missing.join("codex")),
+            (Platform::Pi, missing.join("pi")),
             (Platform::Cursor, missing.join("cursor")),
         ]));
 
@@ -866,15 +916,15 @@ mod tests {
         // Simulates a reader re-delivering the same record after a file
         // truncation forced it to re-read from byte 0 (see FileScanner).
         let mut s = AppState::with_capacity(10);
-        let r = rec_with_id(Platform::ClaudeCode, "opus-4", 100, 50, 1.0, "same-id");
+        let r = rec_with_id("opus-4", 100, 50, 1.0, "same-id");
         s.add_records(Platform::ClaudeCode, vec![r.clone()]);
         s.add_records(Platform::ClaudeCode, vec![r]);
         assert_eq!(
-            s.platforms[claude_idx()].total_calls,
+            s.platforms[claude_idx()].window_calls,
             1,
             "re-emitted record with the same id must not be double-counted"
         );
-        assert_eq!(s.platforms[claude_idx()].total_cost, 1.0);
+        assert_eq!(s.platforms[claude_idx()].window_cost, 1.0);
     }
 
     #[test]
@@ -882,15 +932,15 @@ mod tests {
         // Two genuinely distinct records (different ids) that happen to share
         // every other field must both survive — dedup must not collapse them.
         let mut s = AppState::with_capacity(10);
-        let a = rec_with_id(Platform::ClaudeCode, "opus-4", 100, 50, 1.0, "req-a");
-        let b = rec_with_id(Platform::ClaudeCode, "opus-4", 100, 50, 1.0, "req-b");
+        let a = rec_with_id("opus-4", 100, 50, 1.0, "req-a");
+        let b = rec_with_id("opus-4", 100, 50, 1.0, "req-b");
         s.add_records(Platform::ClaudeCode, vec![a, b]);
         assert_eq!(
-            s.platforms[claude_idx()].total_calls,
+            s.platforms[claude_idx()].window_calls,
             2,
             "two distinct records must both be counted even with identical content"
         );
-        assert_eq!(s.platforms[claude_idx()].total_cost, 2.0);
+        assert_eq!(s.platforms[claude_idx()].window_cost, 2.0);
     }
 
     #[test]
@@ -910,7 +960,7 @@ mod tests {
                 request_count: 2,
             },
         );
-        let r = rec(Platform::ClaudeCode, "opus-4", 0, 0, 1.5);
+        let r = rec("opus-4", 0, 0, 1.5);
         reverse_model_aggregate(&mut map, &r);
         assert_eq!(map.get(&intern("opus-4")).unwrap().total_cost, 0.0);
     }
@@ -934,5 +984,11 @@ mod tests {
         let spur = intern(s);
         let resolved = resolve(spur);
         assert_eq!(resolved, s);
+    }
+
+    #[test]
+    fn record_ids_are_stable_and_distinguish_source_values() {
+        assert_eq!(record_id("message-1"), record_id("message-1"));
+        assert_ne!(record_id("message-1"), record_id("message-2"));
     }
 }

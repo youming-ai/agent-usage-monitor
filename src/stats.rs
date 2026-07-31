@@ -330,27 +330,52 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
         let mut reader = entry.build_reader(path.clone());
         let records = tokio::task::spawn_blocking(move || reader.scan_all())
             .await
-            .unwrap_or_default();
+            .context("reader task failed")?
+            .with_context(|| format!("failed to read {}", path.display()))?;
         entries.push((key, entry.platform, path, records));
     }
 
     // Quota：仅在 --include-quota 时拉取。fetch() 是阻塞 HTTP，调完后取时间戳
     // 作为 fetched_at 写入 QuotaView（Instant 无法转 RFC3339，必须用 DateTime<Utc>）。
     let quota_views: Option<HashMap<Platform, QuotaView>> = if opts.include_quota {
-        let q = tokio::task::spawn_blocking(|| {
-            crate::quota::FETCHERS
+        // Platforms without a usage API still report who is signed in; they'd
+        // otherwise vanish from `--json` entirely.
+        let (quotas, accounts) = tokio::task::spawn_blocking(|| {
+            let entries = crate::platforms::entries();
+            let quotas = entries
                 .iter()
-                .map(|&(platform, fetch)| (platform, fetch()))
-                .collect::<Vec<_>>()
+                .filter_map(|entry| entry.quota_fetcher.map(|fetch| (entry.platform, fetch())))
+                .collect::<Vec<_>>();
+            let accounts = entries
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .account_fetcher
+                        .map(|fetch| (entry.platform, entry.log_name, fetch()))
+                })
+                .collect::<Vec<_>>();
+            (quotas, accounts)
         })
         .await
         .unwrap_or_default();
         let now = Utc::now();
-        Some(
-            q.into_iter()
-                .filter_map(|(p, q)| q.map(|qi| (p, QuotaView::from_info(qi, now))))
-                .collect(),
-        )
+        let fetched_at = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let mut views: HashMap<Platform, QuotaView> = quotas
+            .into_iter()
+            .filter_map(|(p, q)| q.map(|qi| (p, QuotaView::from_info(qi, now))))
+            .collect();
+        for (platform, tool_name, email) in accounts {
+            views.entry(platform).or_insert_with(|| QuotaView {
+                tool_name: tool_name.to_string(),
+                error: email
+                    .is_none()
+                    .then(|| crate::quota::QuotaError::NoCredentials.display()),
+                email,
+                windows: vec![],
+                fetched_at: fetched_at.clone(),
+            });
+        }
+        Some(views)
     } else {
         None
     };
@@ -392,7 +417,6 @@ pub fn write_json<W: Write>(report: &StatsReport, pretty: bool, out: W) -> Resul
 mod tests {
     use super::*;
     use crate::quota::QuotaError;
-    use crate::state::Platform;
     use chrono::TimeZone;
 
     fn rec(
@@ -407,11 +431,11 @@ mod tests {
             timestamp: Utc.with_ymd_and_hms(2026, 6, day, 12, 0, 0).unwrap(),
             session: crate::state::intern(session),
             session_id: crate::state::intern(session),
-            id: crate::state::intern(&format!("{session}:{day}:{input}:{output}")),
+            id: crate::state::record_id(&format!("{session}:{day}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,
             cost_usd: cost,
-            ..crate::state::test_record(Platform::ClaudeCode, model)
+            ..crate::state::test_record(model)
         }
     }
 

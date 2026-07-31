@@ -8,14 +8,15 @@
 //! double-counted every record on every tick. Keeping one reader alive per
 //! platform is the fix; the shared `Mutex` also protects direct callers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use tokio::{sync::mpsc, task};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::platforms;
-use crate::reader::UsageSource;
+use crate::reader::{ReaderError, ReaderResult, UsageSource};
 use crate::state::{AgentPaths, AppState, Platform};
 
 /// A reader shared between the reader task's per-platform blocking jobs. The
@@ -83,7 +84,17 @@ impl PlatformReaders {
 /// appended data since the reader's last cursor.
 pub struct ReaderRefreshers {
     state: Arc<RwLock<AppState>>,
-    senders: HashMap<Platform, mpsc::Sender<()>>,
+    senders: HashMap<Platform, RefreshTrigger>,
+}
+
+struct RefreshTrigger {
+    tx: mpsc::Sender<()>,
+    pending: Arc<Mutex<PendingRefresh>>,
+}
+
+enum PendingRefresh {
+    Full,
+    Paths(HashSet<PathBuf>),
 }
 
 impl ReaderRefreshers {
@@ -102,24 +113,54 @@ impl ReaderRefreshers {
 
         let (tx, mut rx) = mpsc::channel(1);
         let state = self.state.clone();
+        let pending = Arc::new(Mutex::new(PendingRefresh::Paths(HashSet::new())));
+        let worker_pending = pending.clone();
         task::spawn(async move {
             while rx.recv().await.is_some() {
+                let request = worker_pending
+                    .lock()
+                    .map(|mut pending| {
+                        std::mem::replace(&mut *pending, PendingRefresh::Paths(HashSet::new()))
+                    })
+                    .unwrap_or(PendingRefresh::Full);
                 let reader = reader.clone();
                 let state = state.clone();
-                let _ = task::spawn_blocking(move || {
-                    poll_reader_into(&reader, &state, platform);
+                let _ = task::spawn_blocking(move || match request {
+                    PendingRefresh::Full => {
+                        poll_reader_into(&reader, &state, platform);
+                    }
+                    PendingRefresh::Paths(paths) => {
+                        let paths: Vec<_> = paths.into_iter().collect();
+                        poll_changed_reader_into(&reader, &state, platform, &paths);
+                    }
                 })
                 .await;
             }
         });
-        self.senders.insert(platform, tx);
+        self.senders
+            .insert(platform, RefreshTrigger { tx, pending });
     }
 
     /// Request an incremental poll. A full queue already represents a pending
     /// poll, so dropping another event cannot lose appended records.
     pub fn request(&self, platform: Platform) {
-        if let Some(tx) = self.senders.get(&platform) {
-            let _ = tx.try_send(());
+        if let Some(trigger) = self.senders.get(&platform) {
+            if let Ok(mut pending) = trigger.pending.lock() {
+                *pending = PendingRefresh::Full;
+            }
+            let _ = trigger.tx.try_send(());
+        }
+    }
+
+    /// Request a watcher-driven refresh narrowed to one changed path.
+    pub fn request_changed(&self, platform: Platform, path: PathBuf) {
+        if let Some(trigger) = self.senders.get(&platform) {
+            if let Ok(mut pending) = trigger.pending.lock()
+                && let PendingRefresh::Paths(paths) = &mut *pending
+            {
+                paths.insert(path);
+            }
+            let _ = trigger.tx.try_send(());
         }
     }
 }
@@ -131,11 +172,11 @@ pub fn scan_reader_into(
     state: &Arc<RwLock<AppState>>,
     platform: Platform,
 ) -> usize {
-    let records = match reader.lock() {
+    let result = match reader.lock() {
         Ok(mut r) => r.scan_all(),
-        Err(_) => return 0,
+        Err(_) => Err(ReaderError::new("reader lock poisoned")),
     };
-    merge(records, state, platform)
+    apply_result(result, state, platform)
 }
 
 /// Incremental refresh: read only records appended since the last poll and
@@ -146,18 +187,46 @@ pub fn poll_reader_into(
     state: &Arc<RwLock<AppState>>,
     platform: Platform,
 ) -> usize {
-    let records = match reader.lock() {
+    let result = match reader.lock() {
         Ok(mut r) => r.poll_delta(),
-        Err(_) => return 0,
+        Err(_) => Err(ReaderError::new("reader lock poisoned")),
     };
-    merge(records, state, platform)
+    apply_result(result, state, platform)
 }
 
-fn merge(
-    records: Vec<crate::state::UsageRecord>,
+pub fn poll_changed_reader_into(
+    reader: &SharedReader,
+    state: &Arc<RwLock<AppState>>,
+    platform: Platform,
+    paths: &[PathBuf],
+) -> usize {
+    let result = match reader.lock() {
+        Ok(mut reader) => reader.poll_changed(paths),
+        Err(_) => Err(ReaderError::new("reader lock poisoned")),
+    };
+    apply_result(result, state, platform)
+}
+
+fn apply_result(
+    result: ReaderResult<Vec<crate::state::UsageRecord>>,
     state: &Arc<RwLock<AppState>>,
     platform: Platform,
 ) -> usize {
+    let records = match result {
+        Ok(records) => {
+            if let Ok(mut s) = state.write() {
+                s.mark_reader_success(platform);
+            }
+            records
+        }
+        Err(error) => {
+            warn!("{platform:?} reader failed: {error}");
+            if let Ok(mut s) = state.write() {
+                s.mark_reader_error(platform, error.to_string());
+            }
+            return 0;
+        }
+    };
     let n = records.len();
     if n == 0 {
         return 0;
@@ -184,22 +253,51 @@ mod tests {
         release: Option<std_mpsc::Receiver<()>>,
     }
 
+    struct FailingSource;
+    struct HintSource {
+        paths: mpsc::UnboundedSender<Vec<PathBuf>>,
+    }
+
+    impl UsageSource for FailingSource {
+        fn scan_all(&mut self) -> ReaderResult<Vec<crate::state::UsageRecord>> {
+            Err(ReaderError::new("fixture read failure"))
+        }
+
+        fn poll_delta(&mut self) -> ReaderResult<Vec<crate::state::UsageRecord>> {
+            Err(ReaderError::new("fixture read failure"))
+        }
+    }
+
+    impl UsageSource for HintSource {
+        fn scan_all(&mut self) -> ReaderResult<Vec<crate::state::UsageRecord>> {
+            Ok(Vec::new())
+        }
+
+        fn poll_delta(&mut self) -> ReaderResult<Vec<crate::state::UsageRecord>> {
+            Ok(Vec::new())
+        }
+
+        fn poll_changed(
+            &mut self,
+            paths: &[PathBuf],
+        ) -> ReaderResult<Vec<crate::state::UsageRecord>> {
+            let _ = self.paths.send(paths.to_vec());
+            Ok(Vec::new())
+        }
+    }
+
     impl UsageSource for BlockingSource {
-        fn platform(&self) -> Platform {
-            Platform::ClaudeCode
+        fn scan_all(&mut self) -> ReaderResult<Vec<crate::state::UsageRecord>> {
+            Ok(Vec::new())
         }
 
-        fn scan_all(&mut self) -> Vec<crate::state::UsageRecord> {
-            Vec::new()
-        }
-
-        fn poll_delta(&mut self) -> Vec<crate::state::UsageRecord> {
+        fn poll_delta(&mut self) -> ReaderResult<Vec<crate::state::UsageRecord>> {
             let poll = self.polls.fetch_add(1, Ordering::SeqCst) + 1;
             let _ = self.started.send(poll);
             if let Some(release) = self.release.take() {
                 release.recv().unwrap();
             }
-            Vec::new()
+            Ok(Vec::new())
         }
     }
 
@@ -244,5 +342,39 @@ mod tests {
             "extra queued refreshes must be coalesced"
         );
         assert_eq!(polls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn reader_failures_are_visible_in_platform_state() {
+        let state = Arc::new(RwLock::new(AppState::new()));
+        let reader: SharedReader = Arc::new(Mutex::new(Box::new(FailingSource)));
+
+        assert_eq!(scan_reader_into(&reader, &state, Platform::ClaudeCode), 0);
+        assert_eq!(
+            state
+                .read()
+                .unwrap()
+                .platform(Platform::ClaudeCode)
+                .reader_error
+                .as_deref(),
+            Some("fixture read failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn watcher_paths_reach_the_reader() {
+        let (paths_tx, mut paths_rx) = mpsc::unbounded_channel();
+        let reader: SharedReader = Arc::new(Mutex::new(Box::new(HintSource { paths: paths_tx })));
+        let mut refreshers = ReaderRefreshers::new(Arc::new(RwLock::new(AppState::new())));
+        refreshers.add(Platform::ClaudeCode, reader);
+
+        let changed = PathBuf::from("/tmp/session.jsonl");
+        refreshers.request_changed(Platform::ClaudeCode, changed.clone());
+
+        let received = tokio::time::timeout(Duration::from_secs(1), paths_rx.recv())
+            .await
+            .expect("targeted poll should run")
+            .expect("worker should stay alive");
+        assert_eq!(received, vec![changed]);
     }
 }

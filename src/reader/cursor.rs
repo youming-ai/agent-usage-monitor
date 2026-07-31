@@ -1,6 +1,9 @@
 use crate::reader::pricing;
-use crate::reader::{UsageSource, find_recursive, is_under_dir_named, is_uuid, session_label};
-use crate::state::{Platform, UsageRecord};
+use crate::reader::{
+    ReaderError, ReaderResult, UsageSource, find_recursive, is_under_dir_named, is_uuid,
+    session_label,
+};
+use crate::state::UsageRecord;
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
@@ -10,6 +13,12 @@ use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 const CHARS_PER_TOKEN: f64 = 4.0;
+const MAX_PENDING_STORE_ROWS: usize = 256;
+/// How long a usage-less bubble keeps being re-checked before being written
+/// off. Wall-clock, not a poll count: polls are watcher-driven (every store.db
+/// WAL write, debounced at 50 ms), so a counter would expire in under a second
+/// during an active turn — long before a streaming reply's token counts land.
+const STORE_ROW_RETRY_WINDOW: chrono::Duration = chrono::Duration::minutes(10);
 
 /// Tracks turn assembly while scanning Composer 2 JSONL transcripts.
 #[derive(Clone, Default)]
@@ -42,8 +51,16 @@ pub struct CursorReader {
     extra_chats_dir: PathBuf,
     transcript_positions: HashMap<PathBuf, u64>,
     transcript_state: HashMap<PathBuf, TranscriptTurnState>,
-    store_seen_keys: HashMap<PathBuf, HashSet<String>>,
+    store_cursors: HashMap<PathBuf, StoreCursor>,
     conversation_models: HashMap<String, String>,
+}
+
+#[derive(Default)]
+struct StoreCursor {
+    identity: Option<(u64, u64)>,
+    last_rowid: i64,
+    /// Rowid -> when to stop waiting for its token counts to be filled in.
+    pending_rowids: HashMap<i64, chrono::DateTime<Utc>>,
 }
 
 impl CursorReader {
@@ -59,67 +76,71 @@ impl CursorReader {
             extra_chats_dir,
             transcript_positions: HashMap::new(),
             transcript_state: HashMap::new(),
-            store_seen_keys: HashMap::new(),
+            store_cursors: HashMap::new(),
             conversation_models: HashMap::new(),
         }
     }
 
-    fn reload_conversation_models(&mut self) {
+    fn reload_conversation_models(&mut self) -> ReaderResult<()> {
         let db_path = self.data_dir.join("ai-tracking/ai-code-tracking.db");
-        let Ok(conn) = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
-            return;
-        };
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT conversationId, model FROM conversation_summaries WHERE model IS NOT NULL",
-        ) else {
-            return;
-        };
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        });
-        if let Ok(rows) = rows {
-            for row in rows.flatten() {
-                self.conversation_models.insert(row.0, row.1);
-            }
+        if !db_path.exists() {
+            return Ok(());
         }
+        let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| ReaderError::new(format!("{}: {e}", db_path.display())))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT conversationId, model FROM conversation_summaries WHERE model IS NOT NULL",
+            )
+            .map_err(|e| ReaderError::new(format!("{}: {e}", db_path.display())))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| ReaderError::new(format!("{}: {e}", db_path.display())))?;
+        for row in rows {
+            let (conversation, model) =
+                row.map_err(|e| ReaderError::new(format!("{}: {e}", db_path.display())))?;
+            self.conversation_models.insert(conversation, model);
+        }
+        Ok(())
     }
 
-    fn find_transcript_files(&self) -> Vec<PathBuf> {
+    fn find_transcript_files(&self) -> ReaderResult<Vec<PathBuf>> {
         let mut files = Vec::new();
         let projects = self.data_dir.join("projects");
         if projects.exists() {
             find_recursive(&projects, &mut files, &|p| {
                 p.extension().map(|e| e == "jsonl").unwrap_or(false)
                     && is_under_dir_named(p, "agent-transcripts")
-            });
+            })?;
         }
-        files
+        Ok(files)
     }
 
-    fn find_store_db_files(&self) -> Vec<PathBuf> {
+    fn find_store_db_files(&self) -> ReaderResult<Vec<PathBuf>> {
         let mut files = Vec::new();
         for root in [self.data_dir.join("chats"), self.extra_chats_dir.clone()] {
             if root.exists() {
                 find_recursive(&root, &mut files, &|p| {
                     p.file_name().is_some_and(|n| n == "store.db")
-                });
+                })?;
             }
         }
-        files
+        Ok(files)
     }
 
-    fn scan_all_inner(&mut self, from_start: bool) -> Vec<UsageRecord> {
-        self.reload_conversation_models();
+    fn scan_all_inner(&mut self, from_start: bool) -> ReaderResult<Vec<UsageRecord>> {
+        self.reload_conversation_models()?;
 
         if from_start {
             self.transcript_positions.clear();
             self.transcript_state.clear();
-            self.store_seen_keys.clear();
+            self.store_cursors.clear();
         }
 
-        let transcript_files = self.find_transcript_files();
-        let store_files = self.find_store_db_files();
+        let transcript_files = self.find_transcript_files()?;
+        let store_files = self.find_store_db_files()?;
         let current_transcripts: HashSet<PathBuf> = transcript_files.iter().cloned().collect();
         let current_stores: HashSet<PathBuf> = store_files.iter().cloned().collect();
 
@@ -127,8 +148,7 @@ impl CursorReader {
             .retain(|p, _| current_transcripts.contains(p));
         self.transcript_state
             .retain(|p, _| current_transcripts.contains(p));
-        self.store_seen_keys
-            .retain(|p, _| current_stores.contains(p));
+        self.store_cursors.retain(|p, _| current_stores.contains(p));
 
         let mut records = Vec::new();
         for file in transcript_files {
@@ -142,7 +162,7 @@ impl CursorReader {
                 .get(&file)
                 .cloned()
                 .unwrap_or_else(|| transcript_meta_for(&file, &self.conversation_models));
-            let (entries, bytes_read) = read_transcript_from_offset(&file, offset, &mut st);
+            let (entries, bytes_read) = read_transcript_from_offset(&file, offset, &mut st)?;
             let mut entries = entries;
 
             if offset == 0 {
@@ -177,80 +197,214 @@ impl CursorReader {
         }
 
         for file in store_files {
-            records.extend(self.read_store_delta(&file));
+            records.extend(self.read_store_delta(&file)?);
         }
 
         records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        records
+        Ok(records)
     }
 
-    fn read_store_delta(&mut self, path: &Path) -> Vec<UsageRecord> {
-        let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-            Ok(c) => c,
-            Err(_) => return Vec::new(),
-        };
+    fn scan_changed_paths(&mut self, paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
+        self.reload_conversation_models()?;
+
+        let mut transcripts = Vec::new();
+        let mut stores = Vec::new();
+        for changed in paths {
+            if changed.is_file()
+                && changed
+                    .extension()
+                    .is_some_and(|extension| extension == "jsonl")
+                && is_under_dir_named(changed, "agent-transcripts")
+            {
+                transcripts.push(changed.clone());
+                continue;
+            }
+
+            let name = changed.file_name().and_then(|name| name.to_str());
+            if matches!(name, Some("store.db")) {
+                stores.push(changed.clone());
+                continue;
+            }
+            if matches!(name, Some("store.db-wal" | "store.db-shm"))
+                && let Some(parent) = changed.parent()
+            {
+                let store = parent.join("store.db");
+                if store.is_file() {
+                    stores.push(store);
+                    continue;
+                }
+            }
+
+            // Directory changes, removals, and database/model metadata changes
+            // require discovery and stale-cursor pruning.
+            return self.scan_all_inner(false);
+        }
+
+        transcripts.sort_unstable();
+        transcripts.dedup();
+        stores.sort_unstable();
+        stores.dedup();
+
+        let mut records = Vec::new();
+        for file in transcripts {
+            let offset = self.transcript_positions.get(&file).copied().unwrap_or(0);
+            let mut state = self
+                .transcript_state
+                .get(&file)
+                .cloned()
+                .unwrap_or_else(|| transcript_meta_for(&file, &self.conversation_models));
+            let (entries, bytes_read) = read_transcript_from_offset(&file, offset, &mut state)?;
+            self.transcript_positions.insert(file.clone(), bytes_read);
+            self.transcript_state.insert(file, state);
+            records.extend(entries);
+        }
+        for file in stores {
+            records.extend(self.read_store_delta(&file)?);
+        }
+        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        Ok(records)
+    }
+
+    fn read_store_delta(&mut self, path: &Path) -> ReaderResult<Vec<UsageRecord>> {
+        if !path.exists() {
+            // Removed between discovery and open; a full scan prunes the cursor.
+            return Ok(Vec::new());
+        }
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| ReaderError::new(format!("{}: {e}", path.display())))?;
         let table_exists: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='blobs')",
                 [],
                 |row| row.get(0),
             )
-            .unwrap_or(false);
+            .map_err(|e| ReaderError::new(format!("{}: {e}", path.display())))?;
         if !table_exists {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
-        // Always scan from rowid 0 — dedup is handled by `store_seen_keys`
-        // (HashSet), which survives store.db replacement/rotation (unlike a
-        // rowid resume cursor, which was the root cause of silent data loss
-        // after store.db recreation: a fresh db's rowids restart at 1, so a
+        let identity = store_identity(path)?;
+        let cursor = self.store_cursors.entry(path.to_path_buf()).or_default();
+        if cursor.identity.is_some_and(|current| current != identity) {
+            cursor.last_rowid = 0;
+            cursor.pending_rowids.clear();
+        }
+        cursor.identity = Some(identity);
+
         let session_id = extract_store_session_id(path);
         let project = extract_store_project(path);
         let cwd = decode_cursor_project_cwd(&project.raw);
         let session = session_label(&project.display, &session_id);
-
-        let mut stmt = match conn
-            .prepare("SELECT rowid, key, value FROM blobs WHERE rowid > 0 ORDER BY rowid")
-        {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        });
-        let Ok(rows) = rows else {
-            return Vec::new();
-        };
-
-        let seen = self.store_seen_keys.entry(path.to_path_buf()).or_default();
         let mut records = Vec::new();
 
-        for row in rows.flatten() {
-            let (_rowid, key, value) = row;
-            if let Some(rec) = parse_store_blob(&value, &key, &session, &session_id, &cwd, seen) {
-                records.push(rec);
+        // Rows without usage may be filled in place later. Retry only those
+        // exceptional rowids; completed rows advance through a true cursor.
+        let pending: Vec<_> = cursor.pending_rowids.keys().copied().collect();
+        for rowid in pending {
+            let row = conn.query_row(
+                "SELECT key, value FROM blobs WHERE rowid = ?1",
+                [rowid],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            );
+            match row {
+                Ok((key, value)) => {
+                    if let Some(record) =
+                        parse_store_blob(&value, &key, &session, &session_id, &cwd)
+                    {
+                        cursor.pending_rowids.remove(&rowid);
+                        records.push(record);
+                    } else if !store_blob_may_gain_usage(&value) {
+                        cursor.pending_rowids.remove(&rowid);
+                    } else if cursor
+                        .pending_rowids
+                        .get(&rowid)
+                        .is_some_and(|deadline| Utc::now() > *deadline)
+                    {
+                        // A bubble gains its token counts when the turn
+                        // finishes. Rows that never do (empty or abandoned
+                        // bubbles) must stop being re-queried, or every poll
+                        // pays for them forever.
+                        cursor.pending_rowids.remove(&rowid);
+                    }
+                }
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    cursor.pending_rowids.remove(&rowid);
+                }
+                Err(error) => {
+                    return Err(ReaderError::new(format!("{}: {error}", path.display())));
+                }
             }
         }
 
-        records
+        let mut stmt = conn
+            .prepare("SELECT rowid, key, value FROM blobs WHERE rowid > ?1 ORDER BY rowid")
+            .map_err(|e| ReaderError::new(format!("{}: {e}", path.display())))?;
+        let rows = stmt
+            .query_map([cursor.last_rowid], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| ReaderError::new(format!("{}: {e}", path.display())))?;
+
+        for row in rows {
+            let row = row.map_err(|e| ReaderError::new(format!("{}: {e}", path.display())))?;
+            let (rowid, key, value) = row;
+            cursor.last_rowid = cursor.last_rowid.max(rowid);
+            if let Some(rec) = parse_store_blob(&value, &key, &session, &session_id, &cwd) {
+                records.push(rec);
+            } else if store_blob_may_gain_usage(&value) {
+                cursor
+                    .pending_rowids
+                    .insert(rowid, Utc::now() + STORE_ROW_RETRY_WINDOW);
+                // ponytail: hard ceiling — past this many in-flight rows the
+                // oldest is dropped and its usage, if it ever arrives, is lost.
+                // The retry window normally drains the set long before this;
+                // raise the cap if a real store.db is ever seen to exceed it.
+                if cursor.pending_rowids.len() > MAX_PENDING_STORE_ROWS
+                    && let Some(oldest) = cursor.pending_rowids.keys().min().copied()
+                {
+                    cursor.pending_rowids.remove(&oldest);
+                }
+            }
+        }
+
+        Ok(records)
     }
 }
 
-impl UsageSource for CursorReader {
-    fn platform(&self) -> Platform {
-        Platform::Cursor
-    }
+#[cfg(unix)]
+fn store_identity(path: &Path) -> ReaderResult<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).map_err(|e| ReaderError::io(path, e))?;
+    Ok((metadata.dev(), metadata.ino()))
+}
 
-    fn scan_all(&mut self) -> Vec<UsageRecord> {
+#[cfg(not(unix))]
+fn store_identity(path: &Path) -> ReaderResult<(u64, u64)> {
+    // Creation time only — never fall back to the modification time, which
+    // changes on every write and would reset the rowid cursor each poll.
+    let created = std::fs::metadata(path)
+        .and_then(|metadata| metadata.created())
+        .map_err(|e| ReaderError::io(path, e))?
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    Ok((created.as_secs(), u64::from(created.subsec_nanos())))
+}
+
+impl UsageSource for CursorReader {
+    fn scan_all(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         self.scan_all_inner(true)
     }
 
-    fn poll_delta(&mut self) -> Vec<UsageRecord> {
+    fn poll_delta(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         self.scan_all_inner(false)
+    }
+
+    fn poll_changed(&mut self, paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
+        self.scan_changed_paths(paths)
     }
 }
 
@@ -399,13 +553,15 @@ fn read_transcript_from_offset(
     path: &Path,
     skip_bytes: u64,
     st: &mut TranscriptTurnState,
-) -> (Vec<UsageRecord>, u64) {
+) -> ReaderResult<(Vec<UsageRecord>, u64)> {
     let file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return (Vec::new(), skip_bytes),
+        Ok(file) => file,
+        // Deleted between discovery and open — see `read_lines_from_offset`.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), skip_bytes)),
+        Err(e) => return Err(ReaderError::io(path, e)),
     };
 
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let file_len = file.metadata().map_err(|e| ReaderError::io(path, e))?.len();
     if skip_bytes > file_len {
         // File was truncated/rewritten. The in-progress turn's counters
         // (counted_assistant_chars, input_counted, ...) are stale baselines
@@ -418,14 +574,18 @@ fn read_transcript_from_offset(
     }
 
     let mut reader = BufReader::new(file);
-    if skip_bytes > 0 && reader.seek(SeekFrom::Start(skip_bytes)).is_err() {
-        return read_transcript_from_offset(path, 0, st);
+    if skip_bytes > 0
+        && let Err(e) = reader.seek(SeekFrom::Start(skip_bytes))
+    {
+        return Err(ReaderError::io(path, e));
     }
 
     let mut records = Vec::new();
     let mut offset = skip_bytes;
 
-    while let Some((line, bytes)) = crate::reader::read_next_line(&mut reader) {
+    while let Some((line, bytes)) =
+        crate::reader::read_next_line(&mut reader).map_err(|e| ReaderError::io(path, e))?
+    {
         if let Some(rec) = parse_transcript_line(line.trim_end_matches(['\r', '\n']), st) {
             records.push(rec);
         }
@@ -436,7 +596,7 @@ fn read_transcript_from_offset(
         records.push(rec);
     }
 
-    (records, offset)
+    Ok((records, offset))
 }
 
 fn parse_transcript_line(line: &str, st: &mut TranscriptTurnState) -> Option<UsageRecord> {
@@ -513,14 +673,13 @@ fn flush_transcript_progress(st: &mut TranscriptTurnState) -> Option<UsageRecord
 
     Some(UsageRecord {
         timestamp: ts,
-        platform: Platform::Cursor,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session_label(&st.project, &st.conversation_id)),
         session_id: crate::state::intern(&st.conversation_id),
         // Cursor's "project" is a display label, not a filesystem path.
         cwd: crate::state::intern(&st.cwd),
         title: crate::state::intern(""),
-        id: crate::state::intern(&record_id),
+        id: crate::state::record_id(&record_id),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: 0,
@@ -547,7 +706,6 @@ fn parse_store_blob(
     session: &str,
     session_id: &str,
     cwd: &str,
-    seen: &mut HashSet<String>,
 ) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(value).ok()?;
 
@@ -560,11 +718,8 @@ fn parse_store_blob(
     // bubbles that happened to share a createdAt+token-count collapse into one.
     if let Some(rec) = parse_bubble_usage(&v, session) {
         let dedup = format!("bubble:{session_id}:{key}");
-        if !seen.insert(dedup.clone()) {
-            return None;
-        }
         let mut rec = rec;
-        rec.id = crate::state::intern(&dedup);
+        rec.id = crate::state::record_id(&dedup);
         rec.session_id = crate::state::intern(session_id);
         rec.cwd = crate::state::intern(cwd);
         return Some(rec);
@@ -577,9 +732,6 @@ fn parse_store_blob(
         }
         let id = v.get("id").and_then(|i| i.as_str()).unwrap_or(key);
         let dedup = format!("msg:{session_id}:{id}");
-        if !seen.insert(dedup.clone()) {
-            return None;
-        }
         let output = estimate_tokens(content_char_count(Some(&v)));
         if output == 0 {
             return None;
@@ -610,13 +762,12 @@ fn parse_store_blob(
             .unwrap_or_else(Utc::now);
         return Some(UsageRecord {
             timestamp,
-            platform: Platform::Cursor,
             model: crate::state::intern(&model),
             session: crate::state::intern(session),
             session_id: crate::state::intern(session_id),
             cwd: crate::state::intern(cwd),
             title: crate::state::intern(""),
-            id: crate::state::intern(&dedup),
+            id: crate::state::record_id(&dedup),
             input_tokens: 0,
             output_tokens: output,
             cache_read_tokens: 0,
@@ -626,6 +777,16 @@ fn parse_store_blob(
     }
 
     None
+}
+
+/// Whether a currently non-billable blob is one of the two mutable shapes
+/// Cursor may fill in place later. Unrelated blobs never enter the retry set.
+fn store_blob_may_gain_usage(value: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(value) else {
+        return false;
+    };
+    value.get("type").and_then(|kind| kind.as_i64()) == Some(0)
+        || value.get("role").and_then(|role| role.as_str()) == Some("assistant")
 }
 
 fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
@@ -680,7 +841,6 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
 
     Some(UsageRecord {
         timestamp,
-        platform: Platform::Cursor,
         model: crate::state::intern(&model),
         session: crate::state::intern(session),
         // Both overwritten by the caller (`parse_store_blob`): `id` with the
@@ -689,7 +849,7 @@ fn parse_bubble_usage(v: &Value, session: &str) -> Option<UsageRecord> {
         session_id: crate::state::intern(""),
         cwd: crate::state::intern(""),
         title: crate::state::intern(""),
-        id: crate::state::intern(""),
+        id: crate::state::record_id(""),
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: 0,
@@ -794,11 +954,10 @@ mod tests {
         );
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         assert_eq!(records.len(), 1);
         assert!(records[0].input_tokens > 0);
         assert!(records[0].output_tokens > 0);
-        assert_eq!(records[0].platform, Platform::Cursor);
         assert_eq!(
             crate::state::resolve(records[0].session),
             "myproject a3f2c1d8"
@@ -819,7 +978,7 @@ mod tests {
         );
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].input_tokens, 120);
         assert_eq!(records[0].output_tokens, 45);
@@ -840,8 +999,8 @@ mod tests {
         );
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());
-        assert_eq!(reader.scan_all().len(), 1);
-        assert!(reader.poll_delta().is_empty());
+        assert_eq!(reader.scan_all().unwrap().len(), 1);
+        assert!(reader.poll_delta().unwrap().is_empty());
 
         let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(
@@ -855,7 +1014,7 @@ mod tests {
         )
         .unwrap();
 
-        let delta = reader.poll_delta();
+        let delta = reader.poll_delta().unwrap();
         assert_eq!(delta.len(), 1);
         assert!(delta[0].output_tokens > 0);
     }
@@ -863,8 +1022,8 @@ mod tests {
     #[test]
     fn missing_directory_yields_empty() {
         let mut reader = CursorReader::new(PathBuf::from("/nonexistent/cursor"));
-        assert!(reader.scan_all().is_empty());
-        assert!(reader.poll_delta().is_empty());
+        assert!(reader.scan_all().unwrap().is_empty());
+        assert!(reader.poll_delta().unwrap().is_empty());
     }
 
     #[test]
@@ -882,7 +1041,7 @@ mod tests {
         );
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());
-        assert_eq!(reader.scan_all().len(), 1);
+        assert_eq!(reader.scan_all().unwrap().len(), 1);
 
         // Simulate Cursor replacing/rotating the store.db file (fresh DB, rowids restart at 1)
         // Delete then recreate at the *same* path. The in-memory last_rowid remains high (1).
@@ -902,7 +1061,7 @@ mod tests {
 
         // With the bug, last_rowid=1 and new rowid=1 => WHERE rowid > 1 yields nothing.
         // poll_delta (or any subsequent) should still surface the new record.
-        let delta = reader.poll_delta();
+        let delta = reader.poll_delta().unwrap();
         assert_eq!(
             delta.len(),
             1,
@@ -935,7 +1094,7 @@ mod tests {
         );
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         assert_eq!(records.len(), 1);
         // The ts from the line was captured (via parse_from_rfc3339) and used in finalize
         // before reset. For real Cursor data lacking the field, the offset==0 mtime override
@@ -967,7 +1126,7 @@ mod tests {
         );
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         assert_eq!(records.len(), 1);
         assert!(
             records[0].timestamp.to_rfc3339().starts_with(&past[..10]),
@@ -993,7 +1152,7 @@ mod tests {
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());
         assert!(
-            reader.scan_all().is_empty(),
+            reader.scan_all().unwrap().is_empty(),
             "no assistant content yet, nothing to bill"
         );
 
@@ -1006,7 +1165,7 @@ mod tests {
             )
             .unwrap();
         }
-        let first = reader.poll_delta();
+        let first = reader.poll_delta().unwrap();
         assert_eq!(first.len(), 1, "first chunk should be billed immediately");
         let first_output = first[0].output_tokens;
         assert!(first_output > 0);
@@ -1022,7 +1181,7 @@ mod tests {
             )
             .unwrap();
         }
-        let second = reader.poll_delta();
+        let second = reader.poll_delta().unwrap();
         assert_eq!(
             second.len(),
             1,
@@ -1049,8 +1208,8 @@ mod tests {
         );
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());
-        assert_eq!(reader.scan_all().len(), 1);
-        assert!(reader.poll_delta().is_empty());
+        assert_eq!(reader.scan_all().unwrap().len(), 1);
+        assert!(reader.poll_delta().unwrap().is_empty());
 
         // Update the SAME row (same `key`) in place with grown token counts —
         // this is what Cursor does as a bubble streams in.
@@ -1064,10 +1223,89 @@ mod tests {
         // The reader re-scans store.db from rowid 0 on every poll by design
         // (see read_store_delta); the local `seen` key must still recognize
         // this as the same row and suppress it.
-        let delta = reader.poll_delta();
+        let delta = reader.poll_delta().unwrap();
         assert!(
             delta.is_empty(),
             "in-place update of the same bubble key must not double-count, got {delta:?}"
+        );
+    }
+
+    #[test]
+    fn store_db_bubble_billed_once_its_token_counts_arrive_then_stops_being_retried() {
+        // A bubble is inserted before its token counts exist, so the rowid
+        // cursor would skip it forever. It's held as pending and re-checked —
+        // but only for a bounded number of polls, so bubbles that never get
+        // counts (empty or abandoned turns) can't accumulate.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = write_store_db(
+            dir.path(),
+            "abc123",
+            "sess-uuid-3",
+            &[(
+                "bubble1",
+                r#"{"type":0,"createdAt":1780625874436,"modelInfo":{"modelName":"claude-sonnet-4-5"},"text":""}"#,
+            )],
+        );
+
+        let mut reader = CursorReader::new(dir.path().to_path_buf());
+        assert!(
+            reader.scan_all().unwrap().is_empty(),
+            "no token counts yet, nothing to bill"
+        );
+
+        let fill = |value: &str| {
+            Connection::open(&db_path)
+                .unwrap()
+                .execute("UPDATE blobs SET value = ?1 WHERE key = 'bubble1'", [value])
+                .unwrap();
+        };
+
+        fill(
+            r#"{"type":0,"createdAt":1780625874436,"tokenCount":{"inputTokens":10,"outputTokens":5},"modelInfo":{"modelName":"claude-sonnet-4-5"},"text":"done"}"#,
+        );
+        assert_eq!(
+            reader.poll_delta().unwrap().len(),
+            1,
+            "counts filled in after insert must still be billed"
+        );
+        assert!(
+            reader.poll_delta().unwrap().is_empty(),
+            "a billed bubble must not be re-emitted"
+        );
+
+        // A second bubble with no counts yet. Polls are watcher-driven and can
+        // fire many times a second, so a burst of them must NOT exhaust the
+        // row's patience — only elapsed wall-clock time may.
+        Connection::open(&db_path)
+            .unwrap()
+            .execute(
+                "INSERT INTO blobs (key, value) VALUES ('bubble2', ?1)",
+                [r#"{"type":0,"createdAt":1780625874999,"modelInfo":{"modelName":"claude-sonnet-4-5"},"text":""}"#],
+            )
+            .unwrap();
+        for _ in 0..50 {
+            assert!(reader.poll_delta().unwrap().is_empty());
+        }
+        assert_eq!(
+            reader.store_cursors[&db_path].pending_rowids.len(),
+            1,
+            "rapid polls must not expire a bubble still waiting for its counts"
+        );
+
+        // Once the retry window has actually elapsed, stop re-querying it.
+        for deadline in reader
+            .store_cursors
+            .get_mut(&db_path)
+            .unwrap()
+            .pending_rowids
+            .values_mut()
+        {
+            *deadline = Utc::now() - chrono::Duration::seconds(1);
+        }
+        assert!(reader.poll_delta().unwrap().is_empty());
+        assert!(
+            reader.store_cursors[&db_path].pending_rowids.is_empty(),
+            "a bubble that never gains usage must stop being retried"
         );
     }
 
@@ -1095,7 +1333,7 @@ mod tests {
         );
 
         let mut reader = CursorReader::new(dir.path().to_path_buf());
-        let records = reader.scan_all();
+        let records = reader.scan_all().unwrap();
         assert_eq!(
             records.len(),
             2,
