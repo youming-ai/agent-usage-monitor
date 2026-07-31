@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.1.2...v1.2.0) (2026-07-31)
+
+
+### Features
+
+* restore Pi usage support ([2423c1c](https://github.com/youming-ai/agent-usage-monitor/commit/2423c1c34abc4c2561bacac8418ed1adf3a93c62))
+* restore Pi usage support ([bef3e19](https://github.com/youming-ai/agent-usage-monitor/commit/bef3e19689d290523fb58faed0e606d5b9d111b1))
+
+
+### Bug Fixes
+
+* harden Pi record identity and session labels ([8d0fa8c](https://github.com/youming-ai/agent-usage-monitor/commit/8d0fa8cf7cdce1fa0e5138da9b0dd69b5a243af6))
+
 ## [1.1.2](https://github.com/youming-ai/agent-usage-monitor/compare/v1.1.1...v1.1.2) (2026-07-29)
 
 
