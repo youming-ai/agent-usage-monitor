@@ -87,6 +87,31 @@ pub struct DateBucket {
     pub models: BTreeMap<crate::state::InternedString, u64>,
 }
 
+#[derive(Serialize, Default, Clone)]
+pub struct ToolOpsView {
+    pub files_read: u64,
+    pub files_edited: u64,
+    pub files_added: u64,
+    pub files_deleted: u64,
+    pub terminal_commands: u64,
+    pub lines_read: u64,
+    pub lines_edited: u64,
+}
+
+impl From<crate::state::ToolOps> for ToolOpsView {
+    fn from(o: crate::state::ToolOps) -> Self {
+        Self {
+            files_read: o.files_read,
+            files_edited: o.files_edited,
+            files_added: o.files_added,
+            files_deleted: o.files_deleted,
+            terminal_commands: o.terminal_commands,
+            lines_read: o.lines_read,
+            lines_edited: o.lines_edited,
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct PlatformReport {
     pub platform_key: String,
@@ -96,6 +121,7 @@ pub struct PlatformReport {
     pub models: BTreeMap<String, ModelSummary>,
     pub sessions: Vec<SessionSummaryView>,
     pub dates: BTreeMap<crate::state::CompactDate, DateBucket>,
+    pub tool_ops: ToolOpsView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quota: Option<QuotaView>,
 }
@@ -211,6 +237,24 @@ pub fn build_platform_report(
     quota: Option<QuotaView>,
     platform_key: String,
 ) -> PlatformReport {
+    build_platform_report_with_ops(
+        path,
+        available,
+        records,
+        quota,
+        platform_key,
+        ToolOpsView::default(),
+    )
+}
+
+pub fn build_platform_report_with_ops(
+    path: &Path,
+    available: bool,
+    records: Vec<UsageRecord>,
+    quota: Option<QuotaView>,
+    platform_key: String,
+    tool_ops: ToolOpsView,
+) -> PlatformReport {
     let mut totals = PlatformTotals::default();
     let mut models: BTreeMap<crate::state::InternedString, ModelSummary> = BTreeMap::new();
     struct SessionAcc {
@@ -311,6 +355,7 @@ pub fn build_platform_report(
         models: serialized_models,
         sessions: serialized_sessions,
         dates,
+        tool_ops,
         quota,
     }
 }
@@ -320,7 +365,7 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
     use std::collections::HashMap;
 
     // 第一遍：scan_all 收集记录（顺序，task::spawn_blocking 包 I/O）
-    let mut entries: Vec<(String, Platform, PathBuf, Vec<UsageRecord>)> = Vec::new();
+    let mut entries: Vec<(String, Platform, PathBuf, Vec<UsageRecord>, ToolOpsView)> = Vec::new();
     for entry in platforms::entries() {
         let key = platform_canonical_key(entry.platform);
         if !opts.filters.matches_platform(&key) {
@@ -328,11 +373,21 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
         }
         let path = paths.path_for(entry.platform);
         let mut reader = entry.build_reader(path.clone());
-        let records = tokio::task::spawn_blocking(move || reader.scan_all())
-            .await
-            .context("reader task failed")?
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        entries.push((key, entry.platform, path, records));
+        let (records, tool_ops) = tokio::task::spawn_blocking(move || {
+            let records = reader.scan_all();
+            let ops = reader.take_tool_ops_delta();
+            (records, ops)
+        })
+        .await
+        .context("reader task failed")?;
+        let records = records.with_context(|| format!("failed to read {}", path.display()))?;
+        entries.push((
+            key,
+            entry.platform,
+            path,
+            records,
+            ToolOpsView::from(tool_ops),
+        ));
     }
 
     // Quota：仅在 --include-quota 时拉取。fetch() 是阻塞 HTTP，调完后取时间戳
@@ -386,14 +441,21 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
         platforms: BTreeMap::new(),
         totals: Totals::default(),
     };
-    for (key, platform, path, records) in entries {
+    for (key, platform, path, records, tool_ops) in entries {
         let filtered: Vec<UsageRecord> = records
             .into_iter()
             .filter(|r| opts.filters.matches_date(r.timestamp))
             .collect();
         let available = path.exists();
         let quota = quota_views.as_ref().and_then(|m| m.get(&platform).cloned());
-        let pr = build_platform_report(&path, available, filtered, quota, key.clone());
+        let pr = build_platform_report_with_ops(
+            &path,
+            available,
+            filtered,
+            quota,
+            key.clone(),
+            tool_ops,
+        );
         if pr.available {
             report.totals.platforms_with_data += 1;
         }
@@ -430,7 +492,6 @@ mod tests {
         UsageRecord {
             timestamp: Utc.with_ymd_and_hms(2026, 6, day, 12, 0, 0).unwrap(),
             session: crate::state::intern(session),
-            session_id: crate::state::intern(session),
             id: crate::state::record_id(&format!("{session}:{day}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,
@@ -659,6 +720,7 @@ mod tests {
                 models: BTreeMap::new(),
                 sessions: vec![],
                 dates: BTreeMap::new(),
+                tool_ops: ToolOpsView::default(),
                 quota: None,
             },
         );

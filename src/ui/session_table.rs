@@ -1,58 +1,50 @@
-use super::util::format_tokens;
-use crate::state::SessionEntry;
+use super::util::format_age;
+use crate::state::{SessionTotals, resolve};
 use ratatui::{
     layout::Constraint,
-    style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Cell, Row, Table},
+    style::{Modifier, Style},
+    widgets::{Cell, Row, Table},
 };
 
-/// Per-session usage table. `entries` is already sorted (highest usage first).
-/// The selected row is highlighted via the Table's `row_highlight_style` and
-/// scrolled into view by the caller's `TableState` — brighter when the panel
-/// has keyboard focus. The border and title also change when focused so it's
-/// clear the arrow keys now drive the list rather than the tabs.
-pub fn session_table(entries: &[SessionEntry], focused: bool, accent: Color) -> Table<'static> {
+/// Top sessions by cost. Columns: SESSION · TITLE · COST · AGE.
+pub fn session_table(entries: &[&SessionTotals]) -> Table<'static> {
     let rows: Vec<Row> = entries
         .iter()
         .map(|e| {
+            let title = resolve(e.title);
+            let title = if title.is_empty() { "—" } else { title };
+            let title = truncate(title, 28);
             Row::new(vec![
-                Cell::from(e.label),
-                Cell::from(format_tokens(e.tokens)),
-                Cell::from(e.requests.to_string()),
+                Cell::from(truncate(resolve(e.session), 22)),
+                Cell::from(title),
+                Cell::from(format!("${:.2}", e.cost_usd)),
+                Cell::from(format_age(e.last_ts)),
             ])
         })
         .collect();
 
-    let header = Row::new(vec!["SESSION", "TOKENS", "REQUESTS"])
+    let header = Row::new(vec!["SESSION", "TITLE", "COST", "AGE"])
         .style(Style::default().add_modifier(Modifier::BOLD));
-
-    let title = if focused {
-        " sessions · ↑↓ "
-    } else {
-        " sessions "
-    };
-    let border = if focused { accent } else { Color::DarkGray };
-    let highlight = if focused {
-        Style::default().fg(Color::Black).bg(accent)
-    } else {
-        // Remembered-but-unfocused selection: visible, but clearly not active.
-        Style::default().add_modifier(Modifier::REVERSED | Modifier::DIM)
-    };
 
     Table::new(
         rows,
         [
-            Constraint::Percentage(56),
-            Constraint::Percentage(22),
-            Constraint::Percentage(22),
+            Constraint::Percentage(32),
+            Constraint::Percentage(40),
+            Constraint::Percentage(14),
+            Constraint::Percentage(14),
         ],
     )
     .header(header)
-    .row_highlight_style(highlight)
-    .block(
-        Block::default()
-            .title(title)
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(border)),
-    )
+}
+
+fn truncate(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_string();
+    }
+    let take = max_chars.saturating_sub(1);
+    let mut out: String = s.chars().take(take).collect();
+    out.push('…');
+    out
 }

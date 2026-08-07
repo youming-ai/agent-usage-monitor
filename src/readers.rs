@@ -3,7 +3,7 @@
 //! Built **once** at startup and reused across every FS event and fallback
 //! tick. An earlier revision rebuilt a reader per event
 //! (`entry.build_reader(path)` inside the loop), which discarded each reader's
-//! incremental state — byte offsets, SQLite cursors, dedup sets. With that
+//! incremental state — byte offsets, dedup sets. With that
 //! state gone, `poll_delta` degenerated into a full re-scan from zero and
 //! double-counted every record on every tick. Keeping one reader alive per
 //! platform is the fix; the shared `Mutex` also protects direct callers.
@@ -56,7 +56,7 @@ impl PlatformReaders {
                 continue;
             }
             let path = paths.path_for(entry.platform);
-            if !path.exists() {
+            if !entry.is_available_at(&path) {
                 continue;
             }
             self.readers.insert(
@@ -172,11 +172,18 @@ pub fn scan_reader_into(
     state: &Arc<RwLock<AppState>>,
     platform: Platform,
 ) -> usize {
-    let result = match reader.lock() {
-        Ok(mut r) => r.scan_all(),
-        Err(_) => Err(ReaderError::new("reader lock poisoned")),
+    let (result, tool_ops) = match reader.lock() {
+        Ok(mut r) => {
+            let result = r.scan_all();
+            let ops = r.take_tool_ops_delta();
+            (result, ops)
+        }
+        Err(_) => (
+            Err(ReaderError::new("reader lock poisoned")),
+            crate::state::ToolOps::default(),
+        ),
     };
-    apply_result(result, state, platform)
+    apply_result(result, tool_ops, state, platform)
 }
 
 /// Incremental refresh: read only records appended since the last poll and
@@ -187,11 +194,18 @@ pub fn poll_reader_into(
     state: &Arc<RwLock<AppState>>,
     platform: Platform,
 ) -> usize {
-    let result = match reader.lock() {
-        Ok(mut r) => r.poll_delta(),
-        Err(_) => Err(ReaderError::new("reader lock poisoned")),
+    let (result, tool_ops) = match reader.lock() {
+        Ok(mut r) => {
+            let result = r.poll_delta();
+            let ops = r.take_tool_ops_delta();
+            (result, ops)
+        }
+        Err(_) => (
+            Err(ReaderError::new("reader lock poisoned")),
+            crate::state::ToolOps::default(),
+        ),
     };
-    apply_result(result, state, platform)
+    apply_result(result, tool_ops, state, platform)
 }
 
 pub fn poll_changed_reader_into(
@@ -200,15 +214,23 @@ pub fn poll_changed_reader_into(
     platform: Platform,
     paths: &[PathBuf],
 ) -> usize {
-    let result = match reader.lock() {
-        Ok(mut reader) => reader.poll_changed(paths),
-        Err(_) => Err(ReaderError::new("reader lock poisoned")),
+    let (result, tool_ops) = match reader.lock() {
+        Ok(mut r) => {
+            let result = r.poll_changed(paths);
+            let ops = r.take_tool_ops_delta();
+            (result, ops)
+        }
+        Err(_) => (
+            Err(ReaderError::new("reader lock poisoned")),
+            crate::state::ToolOps::default(),
+        ),
     };
-    apply_result(result, state, platform)
+    apply_result(result, tool_ops, state, platform)
 }
 
 fn apply_result(
     result: ReaderResult<Vec<crate::state::UsageRecord>>,
+    tool_ops: crate::state::ToolOps,
     state: &Arc<RwLock<AppState>>,
     platform: Platform,
 ) -> usize {
@@ -228,12 +250,14 @@ fn apply_result(
         }
     };
     let n = records.len();
-    if n == 0 {
-        return 0;
+    if n > 0 {
+        info!("{:?}: Found {} new records", platform, n);
     }
-    info!("{:?}: Found {} new records", platform, n);
     if let Ok(mut s) = state.write() {
-        s.add_records(platform, records);
+        if n > 0 {
+            s.add_records(platform, records);
+        }
+        s.add_tool_ops(platform, tool_ops);
     }
     n
 }

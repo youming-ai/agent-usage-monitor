@@ -1,44 +1,91 @@
+mod heatmap;
 mod model_table;
 mod quota_bar;
 mod session_table;
-mod status_bar;
-mod tabs;
 mod util;
 
-use crate::state::AppState;
+use crate::state::{AppState, Platform};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout},
-    style::Style,
-    widgets::{Block, Borders},
+    layout::{Alignment, Constraint, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
 };
 use std::sync::{Arc, RwLock};
+
+const SESSION_TOP_N: usize = 5;
 
 pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let state = match app_state.try_read() {
         Ok(state) => state,
         Err(_) => return,
     };
-    let active = state.active_tab;
-    let accent = active.primary_color();
 
-    let has_quota = crate::platforms::entry_for_platform(active).has_quota();
-    let quota_h = if has_quota { 1 } else { 0 };
+    // Every platform whose data directory exists, stacked top to bottom in
+    // registry order. Sections split the screen equally; a section whose
+    // model rows exceed its share clips at the bottom (rows are sorted by
+    // cost, so the most relevant stay visible).
+    let available = &state.available_platforms;
+    if available.is_empty() {
+        frame.render_widget(
+            Paragraph::new(" no agent data found — check `aum config show` for data paths ")
+                .style(Style::default().fg(Color::DarkGray)),
+            frame.area(),
+        );
+        return;
+    }
+
+    let constraints: Vec<Constraint> = available
+        .iter()
+        .map(|_| Constraint::Ratio(1, available.len() as u32))
+        .collect();
+    let chunks = Layout::vertical(constraints).split(frame.area());
+    for (i, &platform) in available.iter().enumerate() {
+        render_platform(frame, chunks[i], platform, &state);
+    }
+}
+
+fn render_platform(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    platform: Platform,
+    state: &AppState,
+) {
+    let p = state.platform(platform);
+    let (quota, models, _, _) = p.refs();
+    let accent = platform.primary_color();
+
+    let has_quota = crate::platforms::entry_for_platform(platform).has_quota();
+    let h = area.height;
+
+    // Priority under tight height: header > quota > models > heatmap > sessions.
+    // Drop sessions first, then shrink heatmap to a 1-row strip, then drop it.
+    let quota_h: u16 = if has_quota && h >= 4 { 1 } else { 0 };
+    let header_h: u16 = if h >= 2 { 2 } else { 1 };
+    let remain_after_header = h.saturating_sub(header_h + quota_h);
+
+    let (heatmap_h, sessions_h) = if remain_after_header >= 14 {
+        (7u16, 6u16) // full 7-row graph + top-N sessions
+    } else if remain_after_header >= 10 {
+        (7, 0)
+    } else if remain_after_header >= 5 {
+        (1, 0) // strip
+    } else {
+        (0, 0)
+    };
+
     let chunks = Layout::vertical([
-        Constraint::Length(2),       // header: tabs + account, with bottom rule
-        Constraint::Length(quota_h), // quota summary (single line)
-        Constraint::Min(6),          // session table
-        Constraint::Length(1),       // status line
+        Constraint::Length(header_h),
+        Constraint::Length(quota_h),
+        Constraint::Length(heatmap_h),
+        Constraint::Min(1),
+        Constraint::Length(sessions_h),
     ])
-    .split(frame.area());
+    .split(area);
 
-    // Active-tab data — single array lookup instead of a 13-way match.
-    let p = state.platform(active);
-    let (quota, sessions, _records, total_calls, total_cost) = p.refs();
-    let entries = p.session_entries();
-
-    // Header: a bottom rule in the accent color, with tabs left and the
-    // account right-aligned on the row above it.
+    // Header row: accent underline, platform label on the left, account
+    // identity right-aligned. Per-model tokens/cost live in the table below.
     let header_block = Block::default()
         .borders(Borders::BOTTOM)
         .border_style(Style::default().fg(accent));
@@ -51,58 +98,60 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let acct_w = email.map(|e| e.chars().count() as u16 + 4).unwrap_or(15);
     let header_cols =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(acct_w)]).split(header_inner);
-    frame.render_widget(
-        tabs::tab_line(active, &state.available_tabs),
-        header_cols[0],
-    );
-    frame.render_widget(tabs::account(email), header_cols[1]);
 
-    // Only Claude and Codex have quota API backends; hide the quota row
-    // entirely for platforms that never report quota so the session table
-    // gets the extra line.
-    if has_quota {
-        frame.render_widget(quota_bar::quota_panel(active, quota), chunks[1]);
+    let mut spans = vec![Span::styled(
+        format!(" {} ", platform.label()),
+        Style::default().fg(accent).add_modifier(Modifier::BOLD),
+    )];
+    if let Some(error) = p.reader_error.as_deref() {
+        spans.push(Span::styled(
+            format!(" · reader error: {error}"),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), header_cols[0]);
+
+    let account_line = match email {
+        Some(e) => Line::from(Span::raw(format!("✓ {e} "))),
+        None => Line::from(Span::styled(
+            "not signed in ",
+            Style::default().fg(Color::DarkGray),
+        )),
+    };
+    frame.render_widget(
+        Paragraph::new(account_line).alignment(Alignment::Right),
+        header_cols[1],
+    );
+
+    if quota_h > 0 {
+        frame.render_widget(quota_bar::quota_panel(platform, quota), chunks[1]);
     }
 
-    // Split the main area: the per-model table sized to its rows on top, with
-    // the per-session usage table filling the remaining space below. Compute
-    // the upper bound with `.min().max(3)` rather than `clamp(3, upper)`: on a
-    // very short terminal `upper` drops below 3, and `clamp` panics when
-    // min > max (the layout tolerates an over-tall length, a panic doesn't).
-    let models_h = (sessions.len() as u16 + 3)
-        .min(chunks[2].height.saturating_sub(3))
-        .max(3);
-    let main =
-        Layout::vertical([Constraint::Length(models_h), Constraint::Min(3)]).split(chunks[2]);
-    frame.render_widget(
-        model_table::model_table(active, sessions, total_calls),
-        main[0],
-    );
-    // Derive the selected row index each render (selection is tracked by the
-    // stable per-row key, so a live re-sort can't strand the highlight on the
-    // wrong row). TableState scrolls it into view even when the list overflows.
-    let selected_idx = state
-        .selected_key
-        .and_then(|key| entries.iter().position(|e| e.key == key));
-    let mut table_state = ratatui::widgets::TableState::default();
-    table_state.select(selected_idx);
-    frame.render_stateful_widget(
-        session_table::session_table(&entries, state.sessions_focused, accent),
-        main[1],
-        &mut table_state,
-    );
+    if heatmap_h >= 7 {
+        let weeks = chunks[2].width.saturating_sub(2).min(26);
+        frame.render_widget(heatmap::contribution_heatmap(&p.daily, weeks), chunks[2]);
+    } else if heatmap_h == 1 {
+        frame.render_widget(
+            heatmap::contribution_strip(&p.daily, chunks[2].width),
+            chunks[2],
+        );
+    }
 
-    frame.render_widget(
-        status_bar::status_bar(total_calls, total_cost, p.reader_error.as_deref()),
-        chunks[3],
-    );
+    frame.render_widget(model_table::model_table(models, platform), chunks[3]);
+
+    if sessions_h > 0 {
+        let top = p.top_sessions(SESSION_TOP_N);
+        if !top.is_empty() {
+            frame.render_widget(session_table::session_table(&top), chunks[4]);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::quota::{QuotaInfo, QuotaWindow};
-    use crate::state::{Platform, SessionSummary, Tab, UsageRecord};
+    use crate::state::{CompactDate, DayTotals, UsageRecord};
     use ratatui::{Terminal, backend::TestBackend};
     use std::time::Instant;
 
@@ -123,7 +172,8 @@ mod tests {
 
     fn sample_state() -> AppState {
         let mut s = AppState::new();
-        let claude = s.platform_mut(Tab::ClaudeCode);
+        s.set_available_platforms(Platform::all().iter().copied());
+        let claude = s.platform_mut(Platform::ClaudeCode);
         claude.quota = Some(QuotaInfo {
             tool_name: "Claude Code".into(),
             email: Some("you@mail.com".into()),
@@ -145,96 +195,94 @@ mod tests {
             fetched_at: Instant::now(),
             error: None,
         });
-        claude.sessions = vec![SessionSummary {
-            model: crate::state::intern("claude-opus-4"),
-            total_input: 1_200_000,
-            total_output: 340_000,
-            total_cache_read: 8_100_000,
-            total_cache_creation: 0,
-            total_cost: 12.34,
-            request_count: 42,
-        }]
-        .into_iter()
-        .map(|m| (m.model, m))
-        .collect();
+        let add_model = |state: &mut AppState, p: Platform, model: &str, cost: f64, calls: u64| {
+            let ps = state.platform_mut(p);
+            let m = crate::state::intern(model);
+            ps.models.insert(
+                m,
+                crate::state::ModelTotals {
+                    model: m,
+                    total_input: 1_200_000,
+                    total_output: 340_000,
+                    total_cache_read: 8_100_000,
+                    total_cache_creation: 0,
+                    total_reasoning: 0,
+                    total_cost: cost,
+                    request_count: calls,
+                },
+            );
+        };
+        add_model(&mut s, Platform::ClaudeCode, "claude-opus-4", 12.34, 42);
+        add_model(&mut s, Platform::Codex, "gpt-5.4", 3.21, 17);
+
+        // Seed daily so the heatmap has non-empty cells.
+        let today = CompactDate::from_datetime(chrono::Utc::now());
+        s.platform_mut(Platform::ClaudeCode).daily.insert(
+            today,
+            DayTotals {
+                cost_usd: 12.34,
+                tokens: 9_600_000,
+                calls: 42,
+            },
+        );
+
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
             session: crate::state::intern(session),
-            session_id: crate::state::intern(session),
             id: crate::state::record_id(&format!("{session}:{model}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,
+            session_title: crate::state::intern("demo title"),
+            project: crate::state::intern("demo"),
             ..crate::state::test_record(model)
         };
-        claude.records = vec![
-            mk("ollama-monitor a3f2c1d8", "claude-opus-4", 1200, 340),
-            mk("ollama-monitor a3f2c1d8", "claude-opus-4", 8400, 512),
-            mk("ollama-monitor 9b4e7f02", "claude-sonnet-4", 2100, 180),
-            mk("my-web-app 1c2d3e4f", "claude-opus-4", 5000, 600),
-        ]
-        .into();
-        claude.window_calls = 42;
-        claude.window_cost = 12.34;
+        // Use add_records so session aggregates populate.
+        s.add_records(
+            Platform::ClaudeCode,
+            vec![
+                mk("ollama-monitor a3f2c1d8", "claude-opus-4", 1200, 340),
+                mk("my-web-app 1c2d3e4f", "claude-opus-4", 5000, 600),
+            ],
+        );
         s
     }
 
     #[test]
-    fn renders_without_panicking() {
-        let out = dump(80, 18, sample_state());
+    fn renders_all_platform_sections_stacked() {
+        let out = dump(80, 40, sample_state());
         println!("\n{out}");
-        assert!(out.contains("CLAUDE"));
-        assert!(out.contains("82%"));
+        let claude = out.find("CLAUDE").unwrap();
+        let codex = out.find("CODEX").unwrap();
+        assert!(claude < codex);
+        assert!(!out.contains("CURSOR"));
+        assert!(!out.contains("GROK"));
+        assert!(out.contains("82%"), "claude quota window");
         assert!(out.contains("claude-opus-4"));
-        assert!(out.contains("ollama-monitor"));
-        assert!(out.contains("sessions"));
-        assert!(out.contains("42 calls"));
+        assert!(out.contains("gpt-5.4"));
+        assert!(out.contains("you@mail.com"));
+        assert!(!out.contains(" calls"), "header must not show call totals");
+        assert!(
+            out.contains("$12.34") || out.contains("12.34"),
+            "cost visible"
+        );
+        // Split columns
+        assert!(out.contains("IN"));
+        assert!(out.contains("OUT"));
+        assert!(out.contains("CACHE"));
     }
 
     #[test]
     fn renders_on_a_very_short_terminal_without_panicking() {
-        // Height 5 makes the main area's height < 6, which used to drive the
-        // models-height clamp's upper bound below its lower bound and panic.
         for h in 3..=7 {
             let _ = dump(80, h, sample_state());
         }
     }
 
     #[test]
-    fn selected_session_below_the_fold_is_scrolled_into_view() {
-        let mut s = AppState::with_capacity(100);
-        let mk = |session: &str| UsageRecord {
-            session: crate::state::intern(session),
-            session_id: crate::state::intern(session),
-            id: crate::state::record_id(session),
-            input_tokens: 100,
-            ..crate::state::test_record("claude-opus-4")
-        };
-        // 30 sessions — far more than a short panel can show at once.
-        let records: Vec<_> = (0..30).map(|i| mk(&format!("sess-{i:02}"))).collect();
-        s.add_records(Platform::ClaudeCode, records);
-        // Select and focus the last row (all equal usage → sorted by label).
-        s.selected_key = Some(crate::state::intern("sess-29"));
-        s.sessions_focused = true;
-
-        let out = dump(80, 16, s);
+    fn renders_hint_when_no_platform_is_available() {
+        let out = dump(80, 8, AppState::new());
         assert!(
-            out.contains("sess-29"),
-            "selection past the fold must scroll into view:\n{out}"
+            out.contains("no agent data found"),
+            "missing all platforms must show a hint:\n{out}"
         );
-    }
-
-    #[test]
-    fn cursor_account_does_not_create_a_quota_row() {
-        let mut state = AppState::new();
-        state.active_tab = Platform::Cursor;
-        state.available_tabs = vec![Platform::Cursor];
-        state.platform_mut(Platform::Cursor).account_email = Some("cursor@example.com".to_string());
-
-        let out = dump(80, 12, state);
-        assert!(
-            out.contains("cursor@example.com"),
-            "account should render in header:\n{out}"
-        );
-        assert!(!out.contains("loading"));
-        assert!(!out.contains("no quota data"));
     }
 }

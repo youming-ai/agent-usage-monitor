@@ -7,21 +7,6 @@
 use super::QuotaError;
 use serde_json::Value;
 
-/// Extract `email` from a JWT payload, falling back to an email already read
-/// from the credentials file. Shared by the four platforms (Copilot, Grok,
-/// Factory, Antigravity) whose token is a JWT and whose local credentials
-/// file may also carry an email/user field directly.
-pub(crate) fn read_email(token: &str, file_email: Option<String>) -> Option<String> {
-    decode_jwt_payload(token)
-        .and_then(|payload| {
-            payload
-                .get("email")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-        })
-        .or(file_email)
-}
-
 /// Classify a quota API's `error` field into a `QuotaError`, but only when
 /// the caller has no windows to show — a stray `error` key alongside valid
 /// windows must NOT hide real quota (the UI renders the error arm before the

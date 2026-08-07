@@ -1,10 +1,8 @@
 pub mod claude;
 pub mod codex;
-pub mod cursor;
-pub mod pi;
 pub mod pricing;
 
-use crate::state::UsageRecord;
+use crate::state::{ToolOps, UsageRecord};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
@@ -43,8 +41,7 @@ pub(crate) fn read_next_line(reader: &mut impl BufRead) -> std::io::Result<Optio
 /// or rewritten since the offset was recorded), re-reads from byte 0 instead
 /// — callers that need to reset per-file parse state when that happens
 /// (e.g. a truncation-triggered rescan invalidating a running token-count
-/// baseline) must detect it themselves before calling this (see cursor.rs,
-/// grok.rs) since this function has no hook for that.
+/// baseline) must detect it themselves before calling this (see codex/claude readers) since this function has no hook for that.
 ///
 /// Every reader that tails a single JSONL/log file used to carry its own
 /// copy of this open -> check-truncation -> seek -> read-loop block,
@@ -180,28 +177,6 @@ pub(crate) fn basename(path: &str) -> String {
         .to_string()
 }
 
-/// True when `path` has an ancestor directory named `name`.
-pub(crate) fn is_under_dir_named(path: &Path, name: &str) -> bool {
-    path.ancestors()
-        .any(|a| a.file_name().is_some_and(|n| n == name))
-}
-
-/// True when `stem` matches `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
-pub(crate) fn is_uuid(stem: &str) -> bool {
-    if stem.len() != 36 {
-        return false;
-    }
-    let bytes = stem.as_bytes();
-    const DASHES: [usize; 4] = [8, 13, 18, 23];
-    bytes.iter().enumerate().all(|(i, &b)| {
-        if DASHES.contains(&i) {
-            b == b'-'
-        } else {
-            b.is_ascii_hexdigit()
-        }
-    })
-}
-
 /// Label for a single conversation: working-dir basename plus a short id
 /// suffix so multiple sessions in the same directory stay distinct.
 pub(crate) fn session_label(dir: &str, id: &str) -> String {
@@ -289,6 +264,44 @@ pub trait UsageSource: Send {
     /// `poll_delta` behaviour.
     fn poll_changed(&mut self, _paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
         self.poll_delta()
+    }
+
+    /// Drain tool/file-operation counts observed since the last take.
+    /// Default empty — readers that parse tool events override this.
+    fn take_tool_ops_delta(&mut self) -> ToolOps {
+        ToolOps::default()
+    }
+}
+
+/// Classify a tool name into read / edit / add / delete / terminal / other.
+pub(crate) fn classify_tool_name(name: &str) -> Option<&'static str> {
+    let lower = name.to_ascii_lowercase();
+    let n = lower.rsplit_once("__").map(|(_, s)| s).unwrap_or(&lower);
+    let n = n.rsplit('.').next().unwrap_or(n);
+    match n {
+        "read" | "read_file" | "readfile" | "cat" | "view" | "grep" | "glob" | "list_dir"
+        | "listdir" | "semanticsearch" | "web_search" | "webfetch" | "web_fetch" | "open_page" => {
+            Some("read")
+        }
+        "delete" | "delete_file" | "removefile" => Some("delete"),
+        "write" | "write_file" | "writefile" | "create_file" | "createfile" => Some("add"),
+        "edit" | "search_replace" | "strreplace" | "multiedit" | "apply_patch" | "applypatch"
+        | "notebookedit" | "edit_file" => Some("edit"),
+        "bash" | "shell" | "run_terminal_command" | "run_command" | "terminal" | "execute" => {
+            Some("terminal")
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn note_tool(ops: &mut ToolOps, name: &str) {
+    match classify_tool_name(name) {
+        Some("read") => ops.files_read += 1,
+        Some("edit") => ops.files_edited += 1,
+        Some("add") => ops.files_added += 1,
+        Some("delete") => ops.files_deleted += 1,
+        Some("terminal") => ops.terminal_commands += 1,
+        _ => {}
     }
 }
 

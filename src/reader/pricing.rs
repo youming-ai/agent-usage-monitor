@@ -116,79 +116,6 @@ const KIMI_PRICING: &[PricingEntry] = &[
     },
 ];
 
-const CURSOR_PRICING: &[PricingEntry] = &[
-    PricingEntry {
-        pattern: "cursor-auto",
-        input: 1.25,
-        output: 6.00,
-        cache_read: 0.25,
-        cache_creation: 1.25,
-    },
-    PricingEntry {
-        pattern: "composer-2.5",
-        input: 1.25,
-        output: 6.00,
-        cache_read: 0.25,
-        cache_creation: 1.25,
-    },
-    PricingEntry {
-        pattern: "composer-1",
-        input: 1.25,
-        output: 6.00,
-        cache_read: 0.25,
-        cache_creation: 1.25,
-    },
-    PricingEntry {
-        pattern: "claude-4.6-sonnet",
-        input: 3.0,
-        output: 15.0,
-        cache_read: 0.30,
-        cache_creation: 3.0,
-    },
-    PricingEntry {
-        pattern: "claude-opus-4",
-        input: 15.0,
-        output: 75.0,
-        cache_read: 1.50,
-        cache_creation: 15.0,
-    },
-    PricingEntry {
-        pattern: "claude-sonnet-4",
-        input: 3.0,
-        output: 15.0,
-        cache_read: 0.30,
-        cache_creation: 3.0,
-    },
-    PricingEntry {
-        pattern: "gpt-5.5",
-        input: 1.25,
-        output: 5.00,
-        cache_read: 0.125,
-        cache_creation: 1.25,
-    },
-    PricingEntry {
-        pattern: "gpt-5.3-codex",
-        input: 2.50,
-        output: 10.0,
-        cache_read: 0.25,
-        cache_creation: 2.50,
-    },
-    PricingEntry {
-        pattern: "gemini-3",
-        input: 1.25,
-        output: 5.00,
-        cache_read: 0.125,
-        cache_creation: 1.25,
-    },
-    PricingEntry {
-        pattern: "grok-build",
-        input: 0.60,
-        output: 3.00,
-        cache_read: 0.06,
-        cache_creation: 0.60,
-    },
-];
-
 const GITHUB_PRICING: &[PricingEntry] = &[
     PricingEntry {
         pattern: "gpt-4.1",
@@ -356,7 +283,6 @@ pub fn calculate_cost(
     let entry = find_price(model, ANTHROPIC_PRICING)
         .or_else(|| find_price(model, KIMI_PRICING))
         .or_else(|| find_price(model, OPENAI_PRICING))
-        .or_else(|| find_price(model, CURSOR_PRICING))
         .or_else(|| find_price(model, GITHUB_PRICING))
         .or_else(|| find_price(model, GOOGLE_PRICING));
 

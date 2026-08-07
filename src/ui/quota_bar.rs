@@ -1,5 +1,5 @@
 use crate::quota::QuotaInfo;
-use crate::state::Tab;
+use crate::state::Platform;
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -58,8 +58,8 @@ fn mini_window_spans(
 
 /// Render the quota windows as one bar per line (replaces the old single
 /// gauge). The active platform color is the single accent used for the bars.
-pub fn quota_panel(active_tab: Tab, quota: Option<&QuotaInfo>) -> Paragraph<'static> {
-    let accent = active_tab.primary_color();
+pub fn quota_panel(platform: Platform, quota: Option<&QuotaInfo>) -> Paragraph<'static> {
+    let accent = platform.primary_color();
 
     let lines: Vec<Line> = match quota {
         None => vec![Line::from(Span::styled(

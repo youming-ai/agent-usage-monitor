@@ -1,7 +1,6 @@
 pub mod cli;
 pub mod config;
 pub mod event;
-pub mod launcher;
 pub mod mcp;
 pub mod platforms;
 pub mod quota;

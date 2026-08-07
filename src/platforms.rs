@@ -4,18 +4,9 @@ use crate::quota;
 use crate::reader::UsageSource;
 use crate::reader::claude::ClaudeReader;
 use crate::reader::codex::CodexReader;
-use crate::reader::cursor::CursorReader;
-use crate::reader::pi::PiReader;
 use crate::state::{AgentPaths, Platform};
-use std::path::PathBuf;
-
-/// Platform-specific process invocation for resuming a session. The launcher
-/// supplies the working directory and terminal-window policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResumeCommand {
-    pub(crate) program: &'static str,
-    pub(crate) args: Vec<String>,
-}
+use ratatui::style::Color;
+use std::path::{Path, PathBuf};
 
 /// Metadata and wiring for one supported agent platform. New platforms add a
 /// single `RegistryEntry` here instead of touching `main.rs` match arms.
@@ -23,15 +14,16 @@ pub struct RegistryEntry {
     pub platform: Platform,
     pub config_key: &'static str,
     pub log_name: &'static str,
+    pub label: &'static str,
+    pub primary_color: Color,
+    default_path_suffix: &'static str,
+    is_available: fn(&Path) -> bool,
     config_path: fn(&Config) -> PathBuf,
     cli_path: fn(&Cli) -> Option<PathBuf>,
     set_config_path: fn(&mut Config, PathBuf),
     create_reader: fn(PathBuf) -> Box<dyn UsageSource>,
     pub quota_fetcher: Option<quota::Fetcher>,
     pub account_fetcher: Option<quota::AccountFetcher>,
-    /// Builds the platform-specific command to resume a session by id. The
-    /// launcher runs it in the selected session's working directory.
-    resume: fn(&str) -> ResumeCommand,
 }
 
 static REGISTRY: &[RegistryEntry] = &[
@@ -39,66 +31,31 @@ static REGISTRY: &[RegistryEntry] = &[
         platform: Platform::ClaudeCode,
         config_key: "claude_path",
         log_name: "Claude Code",
+        label: "CLAUDE",
+        primary_color: Color::Rgb(217, 119, 87),
+        default_path_suffix: ".claude/projects",
+        is_available: Path::exists,
         config_path: |c| c.claude_path.clone(),
         cli_path: |cli| cli.claude_path.clone(),
         set_config_path: |c, p| c.claude_path = p,
         create_reader: |p| Box::new(ClaudeReader::new(p)),
         quota_fetcher: Some(quota::claude::fetch_quota),
         account_fetcher: None,
-        resume: |id| ResumeCommand {
-            program: "claude",
-            args: vec!["--resume".into(), id.into()],
-        },
     },
     RegistryEntry {
         platform: Platform::Codex,
         config_key: "codex_path",
         log_name: "Codex",
+        label: "CODEX",
+        primary_color: Color::Rgb(59, 130, 246),
+        default_path_suffix: ".codex",
+        is_available: Path::exists,
         config_path: |c| c.codex_path.clone(),
         cli_path: |cli| cli.codex_path.clone(),
         set_config_path: |c, p| c.codex_path = p,
         create_reader: |p| Box::new(CodexReader::new(p)),
         quota_fetcher: Some(quota::codex::fetch_quota),
         account_fetcher: None,
-        resume: |id| ResumeCommand {
-            program: "codex",
-            args: vec!["resume".into(), id.into()],
-        },
-    },
-    RegistryEntry {
-        platform: Platform::Pi,
-        config_key: "pi_path",
-        log_name: "Pi",
-        config_path: |c| c.pi_path.clone(),
-        cli_path: |cli| cli.pi_path.clone(),
-        set_config_path: |c, p| c.pi_path = p,
-        create_reader: |p| Box::new(PiReader::new(p)),
-        quota_fetcher: None,
-        account_fetcher: None,
-        // ponytail: pi's --resume opens a picker; passing a session id
-        // directly may not be supported in the current CLI — verify and
-        // adjust if the real flag differs.
-        resume: |id| ResumeCommand {
-            program: "pi",
-            args: vec!["--resume".into(), id.into()],
-        },
-    },
-    RegistryEntry {
-        platform: Platform::Cursor,
-        config_key: "cursor_path",
-        log_name: "Cursor CLI",
-        config_path: |c| c.cursor_path.clone(),
-        cli_path: |cli| cli.cursor_path.clone(),
-        set_config_path: |c, p| c.cursor_path = p,
-        create_reader: |p| Box::new(CursorReader::new(p)),
-        quota_fetcher: None,
-        account_fetcher: Some(quota::cursor::fetch_account_email),
-        // ponytail: best-effort — cursor-agent's resume flag is unverified
-        // against a live binary; adjust here if the real flag differs.
-        resume: |id| ResumeCommand {
-            program: "cursor-agent",
-            args: vec![format!("--resume={id}")],
-        },
     },
 ];
 
@@ -125,9 +82,14 @@ impl RegistryEntry {
         self.quota_fetcher.is_some()
     }
 
-    /// Platform-specific command to resume `session_id`.
-    pub(crate) fn resume_command(&self, session_id: &str) -> ResumeCommand {
-        (self.resume)(session_id)
+    pub fn default_path(&self) -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(self.default_path_suffix)
+    }
+
+    pub fn is_available_at(&self, path: &Path) -> bool {
+        (self.is_available)(path)
     }
 }
 
@@ -210,49 +172,19 @@ mod tests {
     }
 
     #[test]
-    fn quota_and_account_capabilities_are_distinct() {
-        let cursor = entry_for_platform(Platform::Cursor);
-        assert!(!cursor.has_quota());
-        assert!(cursor.account_fetcher.is_some());
-
+    fn both_platforms_have_quota() {
         for platform in [Platform::ClaudeCode, Platform::Codex] {
             let entry = entry_for_platform(platform);
             assert!(entry.has_quota());
             assert!(entry.account_fetcher.is_none());
         }
-
-        // Pi has no quota or account API.
-        let pi = entry_for_platform(Platform::Pi);
-        assert!(!pi.has_quota());
-        assert!(pi.account_fetcher.is_none());
     }
 
     #[test]
     fn apply_config_key_sets_path() {
         let mut config = Config::default();
-        apply_config_key(&mut config, "cursor_path", "/tmp/cursor").unwrap();
-        assert_eq!(config.cursor_path, PathBuf::from("/tmp/cursor"));
-        apply_config_key(&mut config, "pi_path", "/tmp/pi").unwrap();
-        assert_eq!(config.pi_path, PathBuf::from("/tmp/pi"));
-    }
-
-    #[test]
-    fn resume_commands_match_each_cli() {
-        let claude = entry_for_platform(Platform::ClaudeCode).resume_command("SID");
-        assert_eq!(claude.program, "claude");
-        assert_eq!(claude.args, vec!["--resume", "SID"]);
-
-        let codex = entry_for_platform(Platform::Codex).resume_command("SID");
-        assert_eq!(codex.program, "codex");
-        assert_eq!(codex.args, vec!["resume", "SID"]);
-
-        let pi = entry_for_platform(Platform::Pi).resume_command("SID");
-        assert_eq!(pi.program, "pi");
-        assert_eq!(pi.args, vec!["--resume", "SID"]);
-
-        let cursor = entry_for_platform(Platform::Cursor).resume_command("SID");
-        assert_eq!(cursor.program, "cursor-agent");
-        assert_eq!(cursor.args, vec!["--resume=SID"]);
+        apply_config_key(&mut config, "codex_path", "/tmp/codex").unwrap();
+        assert_eq!(config.codex_path, PathBuf::from("/tmp/codex"));
     }
 
     #[test]
@@ -260,6 +192,8 @@ mod tests {
         let mut config = Config::default();
         assert!(apply_config_key(&mut config, "nope", "x").is_err());
         assert!(apply_config_key(&mut config, "refresh", "0").is_err());
+        assert!(apply_config_key(&mut config, "cursor_path", "/tmp/x").is_err());
+        assert!(apply_config_key(&mut config, "grok_path", "/tmp/x").is_err());
     }
 
     #[test]
@@ -269,8 +203,6 @@ mod tests {
             command: None,
             claude_path: Some(PathBuf::from("/cli/claude")),
             codex_path: None,
-            pi_path: None,
-            cursor_path: None,
             refresh: None,
         };
         let paths = resolve_paths(&cli, &config);
@@ -279,6 +211,5 @@ mod tests {
             PathBuf::from("/cli/claude")
         );
         assert_eq!(paths.path_for(Platform::Codex), config.codex_path);
-        assert_eq!(paths.path_for(Platform::Pi), config.pi_path);
     }
 }

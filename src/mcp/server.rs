@@ -236,13 +236,29 @@ impl AumMcpServer {
 
     #[tool(
         name = "get_file_operations",
-        description = "Get file operation statistics (returns 0 in spec 2; reader-side data not yet collected)."
+        description = "Get file/tool operation counts aggregated from local agent logs (reads, edits, terminals)."
     )]
     async fn get_file_operations(
         &self,
-        _req: Parameters<GetFileOpsRequest>,
+        Parameters(req): Parameters<GetFileOpsRequest>,
     ) -> Result<Json<FileOpsResponse>, String> {
-        Ok(Json(FileOpsResponse::default()))
+        let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let mut out = FileOpsResponse::default();
+        for (key, pr) in &report.platforms {
+            if let Some(a) = &req.analyzer
+                && key != a
+            {
+                continue;
+            }
+            out.files_read += pr.tool_ops.files_read;
+            out.files_edited += pr.tool_ops.files_edited;
+            out.files_added += pr.tool_ops.files_added;
+            out.files_deleted += pr.tool_ops.files_deleted;
+            out.terminal_commands += pr.tool_ops.terminal_commands;
+            out.lines_read += pr.tool_ops.lines_read;
+            out.lines_edited += pr.tool_ops.lines_edited;
+        }
+        Ok(Json(out))
     }
 
     #[tool(name = "get_session_stats", description = "Get per-session summary.")]
@@ -278,7 +294,7 @@ impl AumMcpServer {
 
     #[tool(
         name = "get_quota",
-        description = "Get live quota for Claude Code and Codex."
+        description = "Get live quota (Claude Code, Codex) and account identity for all platforms."
     )]
     async fn get_quota(&self) -> Result<Json<QuotaResponse>, String> {
         let report = self.collect(true).await.map_err(|e| e.to_string())?;
@@ -321,7 +337,8 @@ impl ServerHandler for AumMcpServer {
             instructions: Some(
                 "aum is a usage monitor for AI coding agents. Use get_daily_stats, \
                  get_model_usage, get_cost_breakdown, get_file_operations, get_session_stats \
-                 for usage queries. get_quota returns live quota for Claude Code and Codex."
+                 for usage queries. get_quota returns live quota for Claude Code and Codex \
+                 for Claude Code and Codex."
                     .to_string(),
             ),
         }
