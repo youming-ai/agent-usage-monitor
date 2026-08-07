@@ -1,4 +1,5 @@
 mod heatmap;
+mod overview;
 mod quota_bar;
 mod util;
 
@@ -18,8 +19,6 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
         Err(_) => return,
     };
 
-    // Every platform whose data directory exists, stacked top to bottom in
-    // registry order. Each section is header + optional quota + heatmap.
     let available = &state.available_platforms;
     if available.is_empty() {
         frame.render_widget(
@@ -53,23 +52,29 @@ fn render_platform(
     let has_quota = crate::platforms::entry_for_platform(platform).has_quota();
     let h = area.height;
 
-    let quota_h: u16 = if has_quota && h >= 4 { 1 } else { 0 };
     let header_h: u16 = if h >= 2 { 2 } else { 1 };
+    let quota_h: u16 = if has_quota && h >= 4 { 1 } else { 0 };
     let remain = h.saturating_sub(header_h + quota_h);
 
-    // Full 7-row graph when room; otherwise a 1-row strip; drop if tiny.
-    let heatmap_h: u16 = if remain >= 8 {
-        8 // month/gutter room + 7 day rows (widget clips to height)
-    } else if remain >= 1 {
-        remain.clamp(1, 7)
-    } else {
-        0
-    };
+    // Prefer full heatmap (9) + overview (6); drop overview, then shrink heatmap.
+    let (heatmap_h, overview_h) =
+        if remain >= heatmap::HEATMAP_FULL_HEIGHT + overview::OVERVIEW_LINES {
+            (heatmap::HEATMAP_FULL_HEIGHT, overview::OVERVIEW_LINES)
+        } else if remain >= heatmap::HEATMAP_FULL_HEIGHT {
+            (heatmap::HEATMAP_FULL_HEIGHT, 0)
+        } else if remain >= 8 {
+            (remain.saturating_sub(0).min(9), 0)
+        } else if remain >= 1 {
+            (remain.clamp(1, 7), 0)
+        } else {
+            (0, 0)
+        };
 
     let chunks = Layout::vertical([
         Constraint::Length(header_h),
         Constraint::Length(quota_h),
-        Constraint::Min(heatmap_h.max(1)),
+        Constraint::Length(heatmap_h),
+        Constraint::Min(overview_h),
     ])
     .split(area);
 
@@ -116,14 +121,22 @@ fn render_platform(
     }
 
     let heat_area = chunks[2];
-    if heat_area.height >= 7 {
-        let weeks = heat_area.width.saturating_sub(2).min(52);
-        frame.render_widget(heatmap::contribution_heatmap(&p.daily, weeks), heat_area);
-    } else if heat_area.height >= 1 && heat_area.width > 0 {
+    if heat_area.height >= heatmap::HEATMAP_FULL_HEIGHT.saturating_sub(1) && heat_area.width > 4 {
+        let weeks = heat_area.width.saturating_sub(4).min(52);
         frame.render_widget(
-            heatmap::contribution_strip(&p.daily, heat_area.width),
+            heatmap::contribution_heatmap(&p.daily, weeks, accent),
             heat_area,
         );
+    } else if heat_area.height >= 1 && heat_area.width > 0 {
+        frame.render_widget(
+            heatmap::contribution_strip(&p.daily, heat_area.width, accent),
+            heat_area,
+        );
+    }
+
+    if overview_h > 0 && chunks[3].height >= 3 {
+        let stats = overview::OverviewStats::from_platform(p);
+        frame.render_widget(overview::overview_paragraph(&stats, accent), chunks[3]);
     }
 }
 
@@ -177,24 +190,19 @@ mod tests {
         });
 
         let today = CompactDate::from_datetime(chrono::Utc::now());
-        s.platform_mut(Platform::ClaudeCode).daily.insert(
-            today,
-            DayTotals {
-                cost_usd: 12.34,
-                tokens: 9_600_000,
-                calls: 42,
-            },
-        );
-        s.platform_mut(Platform::Codex).daily.insert(
-            today,
-            DayTotals {
-                cost_usd: 3.21,
-                tokens: 1_000_000,
-                calls: 10,
-            },
-        );
+        for days_ago in 0..14 {
+            if let Some(d) = today.checked_sub_days(days_ago) {
+                s.platform_mut(Platform::ClaudeCode).daily.insert(
+                    d,
+                    DayTotals {
+                        cost_usd: 1.0 + days_ago as f64 * 0.1,
+                        tokens: 100_000,
+                        calls: 5,
+                    },
+                );
+            }
+        }
 
-        // Still ingest records so aggregates stay exercised for non-UI paths.
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
             session: crate::state::intern(session),
             id: crate::state::record_id(&format!("{session}:{model}:{input}:{output}")),
@@ -204,26 +212,30 @@ mod tests {
         };
         s.add_records(
             Platform::ClaudeCode,
-            vec![mk("demo a3f2c1d8", "claude-opus-4", 1200, 340)],
+            vec![
+                mk("demo a3f2c1d8", "claude-opus-4", 1200, 340),
+                mk("demo a3f2c1d8", "claude-opus-4", 800, 200),
+            ],
         );
         s
     }
 
     #[test]
-    fn renders_platform_heatmaps_only() {
-        let out = dump(80, 24, sample_state());
+    fn renders_heatmap_and_overview() {
+        // Tall enough for heatmap + overview on two platforms.
+        let out = dump(100, 40, sample_state());
         println!("\n{out}");
-        let claude = out.find("CLAUDE").unwrap();
-        let codex = out.find("CODEX").unwrap();
-        assert!(claude < codex);
+        assert!(out.contains("CLAUDE"));
+        assert!(out.contains("CODEX"));
         assert!(out.contains("82%"), "claude quota window");
         assert!(out.contains("you@mail.com"));
-        // Model / session tables removed from the TUI.
+        assert!(out.contains('■') || out.contains('·'), "heatmap cells");
+        assert!(
+            out.contains("Less") || out.contains("Favorite"),
+            "legend or overview"
+        );
         assert!(!out.contains("MODEL"));
         assert!(!out.contains("SESSION"));
-        assert!(!out.contains("claude-opus-4"));
-        // Heatmap cells use ■
-        assert!(out.contains('■'), "heatmap should paint cells");
     }
 
     #[test]

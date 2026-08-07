@@ -162,25 +162,32 @@ Expect a JSON response with `serverInfo.name = "aum"`.
 ## Layout
 
 All platforms whose data directory exists are stacked top to bottom in order —
-no tabs. Each section is a header (platform label + account), a quota line
-(Claude Code / Codex), and a GitHub-style contribution heatmap. Model and
-session tables live in `aum stats` JSON / MCP, not the TUI. Sections share
-the screen equally.
+no tabs. Each section mirrors Claude Code’s Stats **Overview**: header,
+quota, contribution heatmap, and summary stats. Detailed model/session
+breakdowns live in `aum stats` JSON / MCP. Sections share the screen equally.
 
 ```
  CLAUDE                                                            ✓ you@mail.com
 ───────────────────────────────────────────────────────────────────────────────
  ✓ 5h ▓▓▓▓▓▓░░░░  82%  resets 2h30m  |  ✓ 7d ▓▓▓▓░░░░░░  54%  resets 4d6h
- S · · · ■ ■ …        (contribution heatmap — green intensity by day)
- M · · · ■ ■ …
- …
- CODEX                                                             not signed in
-───────────────────────────────────────────────────────────────────────────────
- S · · · · ■ …
+      Jan Feb Mar Apr May Jun Jul Aug
+ Mon  · · · · · · · · · · · · · ■ ■ …
+ Wed  · · · · · · · · · · · ■ ■ ■ ■ …
+ Fri  · · · · · · · · · · ■ ■ ■ ■ ■ …
+      Less ■ ■ ■ ■ More
+ Favorite model: Opus 4      Total tokens: 9.6m
+ Sessions: 12                Longest session: 2h 15m
+ Active days: 40/90          Longest streak: 7 days
+ Most active day: Aug 6      Current streak: 3 days
+ Input 1.2m · Output 340.0k · Cache read 8.1m · Cache write 0
 ```
 
-- **Heatmap** — up to ~52 weeks of daily cost/token intensity (GitHub contribution greens). Short terminals fall back to a 1-row strip.
-- **Quota bars** — one per window; the fill shows remaining usage, with a status glyph (`✓` ≥50%, `⚠` ≥20%, `✗` <20%) and reset time.
+- **Heatmap** — up to ~52 weeks, Mon-first weeks, month labels, platform accent
+  color ramp, empty days as dim dots, `Less … More` legend. Short terminals
+  fall back to a 1-row strip.
+- **Overview** — favorite model, totals, sessions, streaks, token split
+  (when height allows).
+- **Quota bars** — remaining usage with status glyph and reset time.
 
 Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
 

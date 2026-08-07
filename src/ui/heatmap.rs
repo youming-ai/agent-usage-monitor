@@ -1,5 +1,7 @@
-//! GitHub-style contribution heatmap (7 rows × N weeks).
+//! Claude Code–style contribution heatmap (Mon-first week, month labels,
+//! accent color ramp, Less/More legend).
 
+use super::util::month_abbr;
 use crate::state::{CompactDate, DayTotals};
 use chrono::{Datelike, Utc};
 use ratatui::{
@@ -10,30 +12,27 @@ use ratatui::{
 };
 use std::collections::BTreeMap;
 
-/// GitHub contribution greens (dark-theme approximate).
-const LEVELS: [Color; 5] = [
-    Color::Rgb(22, 27, 34),  // empty
-    Color::Rgb(14, 68, 41),  // low
-    Color::Rgb(0, 109, 50),  // mid-low
-    Color::Rgb(38, 166, 65), // mid-high
-    Color::Rgb(57, 211, 83), // high
-];
-
-/// Build a contribution heatmap ending today, spanning `weeks` columns.
+/// Build a contribution heatmap ending today, tinted with `accent`.
 pub fn contribution_heatmap<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     weeks: u16,
+    accent: Color,
 ) -> Heatmap<'a> {
     Heatmap {
         daily,
         weeks: weeks.max(1),
+        accent,
     }
 }
 
 pub struct Heatmap<'a> {
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     weeks: u16,
+    accent: Color,
 }
+
+/// Preferred height: 1 month row + 7 day rows + 1 legend = 9.
+pub const HEATMAP_FULL_HEIGHT: u16 = 9;
 
 impl Widget for Heatmap<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -41,77 +40,150 @@ impl Widget for Heatmap<'_> {
             return;
         }
 
-        let weeks = self.weeks.min(area.width.saturating_sub(2)).max(1) as usize;
-        let today = CompactDate::from_datetime(Utc::now());
-        let today_wd = today.weekday_sun0() as usize;
+        let levels = accent_levels(self.accent);
+        let has_month = area.height >= 9;
+        let has_legend = area.height >= 9;
+        let grid_top = area.y + u16::from(has_month);
+        let grid_h = if has_legend {
+            area.height.saturating_sub(2)
+        } else {
+            area.height.saturating_sub(u16::from(has_month))
+        }
+        .min(7) as usize;
 
-        // Grid: `weeks` columns × 7 rows (Sun..Sat). Today sits at
-        // (weeks-1, today_wd). Start from that week's Sunday, then fill.
-        let total_cells = weeks * 7;
-        let days_from_start_sunday = ((weeks - 1) * 7 + today_wd) as i64;
-        let start = today
-            .checked_sub_days(days_from_start_sunday)
-            .unwrap_or_else(|| CompactDate::new(1970, 1, 1));
-
-        let mut cells: Vec<u64> = Vec::with_capacity(total_cells);
-        let mut d = start;
-        for _ in 0..total_cells {
-            cells.push(self.daily.get(&d).map(day_metric).unwrap_or(0));
-            d = add_one_day(d).unwrap_or(d);
+        if grid_h == 0 {
+            return;
         }
 
-        let max = cells.iter().copied().max().unwrap_or(0);
+        let gutter = if area.width >= 14 { 4u16 } else { 0 };
+        let weeks = self.weeks.min(area.width.saturating_sub(gutter)).max(1) as usize;
 
-        // Optional one-letter weekday gutter when height >= 7.
-        let gutter = if area.width >= 12 && area.height >= 7 {
-            2
-        } else {
-            0
-        };
-        let labels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+        let today = CompactDate::from_datetime(Utc::now());
+        let today_wd = today.weekday_mon0() as usize; // Mon=0 … Sun=6
 
-        let rows = area.height.min(7) as usize;
-        for (row, label) in labels.iter().enumerate().take(rows) {
-            if gutter > 0 {
-                let x = area.x;
-                let y = area.y + row as u16;
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_symbol(&label.to_string());
-                    cell.set_style(Style::default().fg(Color::DarkGray));
+        // Grid: weeks columns × 7 rows (Mon…Sun). Today at (weeks-1, today_wd).
+        let total_cells = weeks * 7;
+        let days_from_start_monday = ((weeks - 1) * 7 + today_wd) as i64;
+        let start = today
+            .checked_sub_days(days_from_start_monday)
+            .unwrap_or_else(|| CompactDate::new(1970, 1, 1));
+
+        let mut cells: Vec<(CompactDate, u64)> = Vec::with_capacity(total_cells);
+        let mut d = start;
+        for _ in 0..total_cells {
+            let metric = self.daily.get(&d).map(day_metric).unwrap_or(0);
+            cells.push((d, metric));
+            d = add_one_day(d).unwrap_or(d);
+        }
+        let max = cells.iter().map(|(_, m)| *m).max().unwrap_or(0);
+
+        // Month labels on the first week of each month.
+        if has_month {
+            let mut last_month = 0u8;
+            for col in 0..weeks {
+                let idx = col * 7;
+                if idx >= cells.len() {
+                    break;
                 }
+                let month = cells[idx].0.month();
+                // Label when this week contains the 1st, or month changes on Mon.
+                let week_has_first = (0..7).any(|r| {
+                    let i = col * 7 + r;
+                    i < cells.len() && cells[i].0.day() == 1
+                });
+                if week_has_first || (col == 0 && month != last_month) {
+                    let label = month_abbr(month);
+                    let x = area.x + gutter + col as u16;
+                    put_str(buf, x, area.y, label, Style::default().fg(Color::DarkGray));
+                    last_month = month;
+                } else if month != last_month {
+                    last_month = month;
+                }
+            }
+        }
+
+        // Weekday gutter: Mon / Wed / Fri only (like Claude Code).
+        let day_labels = [
+            Some("Mon"),
+            None,
+            Some("Wed"),
+            None,
+            Some("Fri"),
+            None,
+            None,
+        ];
+
+        for row in 0..grid_h {
+            if gutter > 0
+                && let Some(label) = day_labels[row]
+            {
+                put_str(
+                    buf,
+                    area.x,
+                    grid_top + row as u16,
+                    label,
+                    Style::default().fg(Color::DarkGray),
+                );
             }
             for col in 0..weeks {
                 let idx = col * 7 + row;
                 if idx >= cells.len() {
                     break;
                 }
-                let metric = cells[idx];
+                let metric = cells[idx].1;
                 let level = intensity(metric, max);
                 let x = area.x + gutter + col as u16;
-                let y = area.y + row as u16;
+                let y = grid_top + row as u16;
                 if x >= area.x + area.width || y >= area.y + area.height {
                     continue;
                 }
                 if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_symbol("■");
-                    cell.set_style(Style::default().fg(LEVELS[level]));
+                    if level == 0 {
+                        cell.set_symbol("·");
+                        cell.set_style(Style::default().fg(Color::DarkGray));
+                    } else {
+                        cell.set_symbol("■");
+                        cell.set_style(Style::default().fg(levels[level]));
+                    }
                 }
             }
+        }
+
+        // Less ■■■■ More legend.
+        if has_legend {
+            let y = area.y + area.height - 1;
+            let mut x = area.x + gutter;
+            put_str(buf, x, y, "Less ", Style::default().fg(Color::DarkGray));
+            x += 5;
+            for level in 1..=4 {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_symbol("■");
+                    cell.set_style(Style::default().fg(levels[level]));
+                }
+                x += 1;
+            }
+            put_str(buf, x, y, " More", Style::default().fg(Color::DarkGray));
         }
     }
 }
 
-/// Compact 1-row strip of the last `n` days (fallback for short terminals).
+/// Compact 1-row strip of the last `n` days (short terminals).
 pub fn contribution_strip<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     n: u16,
+    accent: Color,
 ) -> StripHeatmap<'a> {
-    StripHeatmap { daily, n: n.max(1) }
+    StripHeatmap {
+        daily,
+        n: n.max(1),
+        accent,
+    }
 }
 
 pub struct StripHeatmap<'a> {
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     n: u16,
+    accent: Color,
 }
 
 impl Widget for StripHeatmap<'_> {
@@ -119,6 +191,7 @@ impl Widget for StripHeatmap<'_> {
         if area.width == 0 || area.height == 0 {
             return;
         }
+        let levels = accent_levels(self.accent);
         let n = self.n.min(area.width) as usize;
         let today = CompactDate::from_datetime(Utc::now());
         let mut days = Vec::with_capacity(n);
@@ -133,17 +206,19 @@ impl Widget for StripHeatmap<'_> {
             let level = intensity(metric, max);
             let x = area.x + i as u16;
             if let Some(cell) = buf.cell_mut((x, area.y)) {
-                cell.set_symbol("■");
-                cell.set_style(Style::default().fg(LEVELS[level]));
+                if level == 0 {
+                    cell.set_symbol("·");
+                    cell.set_style(Style::default().fg(Color::DarkGray));
+                } else {
+                    cell.set_symbol("■");
+                    cell.set_style(Style::default().fg(levels[level]));
+                }
             }
         }
     }
 }
 
-fn day_metric(d: &DayTotals) -> u64 {
-    // Prefer cost (micro-dollars) so free-but-busy days don't dominate once
-    // pricing is known; fall back to tokens when cost is zero across the board
-    // is handled by intensity against max of the same metric.
+pub fn day_metric(d: &DayTotals) -> u64 {
     if d.cost_usd > 0.0 {
         (d.cost_usd * 1_000_000.0) as u64
     } else {
@@ -164,6 +239,43 @@ fn intensity(metric: u64, max: u64) -> usize {
         2
     } else {
         1
+    }
+}
+
+/// Five colors: empty placeholder + 4 ramp steps from dark accent → bright accent.
+fn accent_levels(accent: Color) -> [Color; 5] {
+    let (r, g, b) = match accent {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (217, 119, 87), // Claude orange fallback
+    };
+    [
+        Color::Rgb(40, 40, 44),
+        mix_rgb(r, g, b, 0.22),
+        mix_rgb(r, g, b, 0.42),
+        mix_rgb(r, g, b, 0.68),
+        Color::Rgb(r, g, b),
+    ]
+}
+
+fn mix_rgb(r: u8, g: u8, b: u8, t: f64) -> Color {
+    // Blend toward near-black background.
+    let br = 22.0;
+    let bg = 27.0;
+    let bb = 34.0;
+    Color::Rgb(
+        (br + (r as f64 - br) * t).round() as u8,
+        (bg + (g as f64 - bg) * t).round() as u8,
+        (bb + (b as f64 - bb) * t).round() as u8,
+    )
+}
+
+fn put_str(buf: &mut Buffer, x: u16, y: u16, s: &str, style: Style) {
+    for (i, ch) in s.chars().enumerate() {
+        let cx = x + i as u16;
+        if let Some(cell) = buf.cell_mut((cx, y)) {
+            cell.set_symbol(&ch.to_string());
+            cell.set_style(style);
+        }
     }
 }
 

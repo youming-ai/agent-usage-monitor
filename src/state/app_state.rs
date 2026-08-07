@@ -85,6 +85,15 @@ impl CompactDate {
                 .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
         date.weekday().num_days_from_sunday() as u8
     }
+
+    /// Weekday where Monday = 0 … Sunday = 6 (Claude Code Stats graph).
+    pub fn weekday_mon0(self) -> u8 {
+        use chrono::{Datelike, NaiveDate};
+        let date =
+            NaiveDate::from_ymd_opt(self.year() as i32, self.month() as u32, self.day() as u32)
+                .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
+        date.weekday().num_days_from_monday() as u8
+    }
 }
 impl std::fmt::Display for CompactDate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
