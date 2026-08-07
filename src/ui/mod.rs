@@ -122,16 +122,10 @@ fn render_platform(
 
     let heat_area = chunks[2];
     if heat_area.height >= heatmap::HEATMAP_FULL_HEIGHT.saturating_sub(1) && heat_area.width > 4 {
-        let weeks = heat_area.width.saturating_sub(4).min(52);
-        frame.render_widget(
-            heatmap::contribution_heatmap(&p.daily, weeks, accent),
-            heat_area,
-        );
+        // Widget fills the full width (adaptive cell width); no weeks cap here.
+        frame.render_widget(heatmap::contribution_heatmap(&p.daily, accent), heat_area);
     } else if heat_area.height >= 1 && heat_area.width > 0 {
-        frame.render_widget(
-            heatmap::contribution_strip(&p.daily, heat_area.width, accent),
-            heat_area,
-        );
+        frame.render_widget(heatmap::contribution_strip(&p.daily, accent), heat_area);
     }
 
     if overview_h > 0 && chunks[3].height >= 3 {

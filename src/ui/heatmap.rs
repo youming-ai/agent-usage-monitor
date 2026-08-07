@@ -1,5 +1,6 @@
 //! Claude Code–style contribution heatmap (Mon-first week, month labels,
-//! accent color ramp, Less/More legend).
+//! accent color ramp, Less/More legend). Fills the full area width by growing
+//! cell width once ~52 weeks are shown.
 
 use super::util::month_abbr;
 use crate::state::{CompactDate, DayTotals};
@@ -12,27 +13,39 @@ use ratatui::{
 };
 use std::collections::BTreeMap;
 
+/// ~1 year of weeks; beyond this we widen cells instead of adding empty years.
+const TARGET_WEEKS: u16 = 53;
+
+/// Preferred height: 1 month row + 7 day rows + 1 legend = 9.
+pub const HEATMAP_FULL_HEIGHT: u16 = 9;
+
 /// Build a contribution heatmap ending today, tinted with `accent`.
+/// Fills `area` width: up to [`TARGET_WEEKS`] columns, then `cell_w ≥ 1`
+/// so the grid spans the remaining space.
 pub fn contribution_heatmap<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
-    weeks: u16,
     accent: Color,
 ) -> Heatmap<'a> {
-    Heatmap {
-        daily,
-        weeks: weeks.max(1),
-        accent,
-    }
+    Heatmap { daily, accent }
 }
 
 pub struct Heatmap<'a> {
     daily: &'a BTreeMap<CompactDate, DayTotals>,
-    weeks: u16,
     accent: Color,
 }
 
-/// Preferred height: 1 month row + 7 day rows + 1 legend = 9.
-pub const HEATMAP_FULL_HEIGHT: u16 = 9;
+/// Layout: gutter | weeks × cell_w.
+fn layout_grid(area_width: u16) -> (u16, u16, u16) {
+    let gutter = if area_width >= 14 { 4u16 } else { 0 };
+    let avail = area_width.saturating_sub(gutter).max(1);
+    // Prefer a year of weeks; when the terminal is wider, grow each cell.
+    let weeks = TARGET_WEEKS.min(avail).max(1);
+    let cell_w = (avail / weeks).max(1);
+    // Use as many weeks as fit at that cell width so we never leave a dead
+    // strip on the right (e.g. avail=100, weeks=53 → cell_w=1, weeks=100).
+    let weeks = (avail / cell_w).max(1);
+    (gutter, weeks, cell_w)
+}
 
 impl Widget for Heatmap<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -55,8 +68,9 @@ impl Widget for Heatmap<'_> {
             return;
         }
 
-        let gutter = if area.width >= 14 { 4u16 } else { 0 };
-        let weeks = self.weeks.min(area.width.saturating_sub(gutter)).max(1) as usize;
+        let (gutter, weeks, cell_w) = layout_grid(area.width);
+        let weeks = weeks as usize;
+        let cell_w = cell_w as usize;
 
         let today = CompactDate::from_datetime(Utc::now());
         let today_wd = today.weekday_mon0() as usize; // Mon=0 … Sun=6
@@ -77,28 +91,39 @@ impl Widget for Heatmap<'_> {
         }
         let max = cells.iter().map(|(_, m)| *m).max().unwrap_or(0);
 
-        // Month labels on the first week of each month.
+        // Month labels: one per month start, never overlapping previous text.
         if has_month {
-            let mut last_month = 0u8;
+            let mut next_free_x = area.x + gutter;
             for col in 0..weeks {
-                let idx = col * 7;
-                if idx >= cells.len() {
-                    break;
-                }
-                let month = cells[idx].0.month();
-                // Label when this week contains the 1st, or month changes on Mon.
                 let week_has_first = (0..7).any(|r| {
                     let i = col * 7 + r;
                     i < cells.len() && cells[i].0.day() == 1
                 });
-                if week_has_first || (col == 0 && month != last_month) {
-                    let label = month_abbr(month);
-                    let x = area.x + gutter + col as u16;
-                    put_str(buf, x, area.y, label, Style::default().fg(Color::DarkGray));
-                    last_month = month;
-                } else if month != last_month {
-                    last_month = month;
+                if !week_has_first && col != 0 {
+                    continue;
                 }
+                // Prefer the week that actually contains day 1.
+                let month = if week_has_first {
+                    (0..7)
+                        .find_map(|r| {
+                            let i = col * 7 + r;
+                            (i < cells.len() && cells[i].0.day() == 1).then(|| cells[i].0.month())
+                        })
+                        .unwrap_or(cells[col * 7].0.month())
+                } else {
+                    cells[col * 7].0.month()
+                };
+                let label = month_abbr(month);
+                let x = area.x + gutter + (col * cell_w) as u16;
+                if x < next_free_x {
+                    continue;
+                }
+                // Need room for the 3-letter label before the next paint zone.
+                if x + 3 > area.x + area.width {
+                    break;
+                }
+                put_str(buf, x, area.y, label, Style::default().fg(Color::DarkGray));
+                next_free_x = x + 4; // label + 1-space gap
             }
         }
 
@@ -132,18 +157,30 @@ impl Widget for Heatmap<'_> {
                 }
                 let metric = cells[idx].1;
                 let level = intensity(metric, max);
-                let x = area.x + gutter + col as u16;
+                let x0 = area.x + gutter + (col * cell_w) as u16;
                 let y = grid_top + row as u16;
-                if x >= area.x + area.width || y >= area.y + area.height {
+                if y >= area.y + area.height {
                     continue;
                 }
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    if level == 0 {
-                        cell.set_symbol("·");
-                        cell.set_style(Style::default().fg(Color::DarkGray));
-                    } else {
-                        cell.set_symbol("■");
-                        cell.set_style(Style::default().fg(levels[level]));
+                // Fill cell_w columns so wide terminals look solid, not sparse.
+                for dx in 0..cell_w as u16 {
+                    let x = x0 + dx;
+                    if x >= area.x + area.width {
+                        break;
+                    }
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        if level == 0 {
+                            // Leading · of multi-width cell, rest spaces (dim).
+                            if dx == 0 {
+                                cell.set_symbol("·");
+                            } else {
+                                cell.set_symbol(" ");
+                            }
+                            cell.set_style(Style::default().fg(Color::DarkGray));
+                        } else {
+                            cell.set_symbol("■");
+                            cell.set_style(Style::default().fg(levels[level]));
+                        }
                     }
                 }
             }
@@ -155,7 +192,7 @@ impl Widget for Heatmap<'_> {
             let mut x = area.x + gutter;
             put_str(buf, x, y, "Less ", Style::default().fg(Color::DarkGray));
             x += 5;
-            for level in 1..=4 {
+            for level in 1..=4usize {
                 if let Some(cell) = buf.cell_mut((x, y)) {
                     cell.set_symbol("■");
                     cell.set_style(Style::default().fg(levels[level]));
@@ -167,22 +204,16 @@ impl Widget for Heatmap<'_> {
     }
 }
 
-/// Compact 1-row strip of the last `n` days (short terminals).
+/// Compact 1-row strip of the last `n` days (short terminals) — fills width.
 pub fn contribution_strip<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
-    n: u16,
     accent: Color,
 ) -> StripHeatmap<'a> {
-    StripHeatmap {
-        daily,
-        n: n.max(1),
-        accent,
-    }
+    StripHeatmap { daily, accent }
 }
 
 pub struct StripHeatmap<'a> {
     daily: &'a BTreeMap<CompactDate, DayTotals>,
-    n: u16,
     accent: Color,
 }
 
@@ -192,7 +223,7 @@ impl Widget for StripHeatmap<'_> {
             return;
         }
         let levels = accent_levels(self.accent);
-        let n = self.n.min(area.width) as usize;
+        let n = area.width as usize;
         let today = CompactDate::from_datetime(Utc::now());
         let mut days = Vec::with_capacity(n);
         for i in (0..n).rev() {
@@ -258,7 +289,6 @@ fn accent_levels(accent: Color) -> [Color; 5] {
 }
 
 fn mix_rgb(r: u8, g: u8, b: u8, t: f64) -> Color {
-    // Blend toward near-black background.
     let br = 22.0;
     let bg = 27.0;
     let bb = 34.0;
@@ -301,5 +331,25 @@ mod tests {
         assert_eq!(intensity(30, 100), 2);
         assert_eq!(intensity(60, 100), 3);
         assert_eq!(intensity(90, 100), 4);
+    }
+
+    #[test]
+    fn layout_fills_wide_terminal() {
+        // 200 cols → gutter 4, avail 196 → cell_w ≥ 3, weeks fill width.
+        let (gutter, weeks, cell_w) = layout_grid(200);
+        assert_eq!(gutter, 4);
+        assert!(
+            cell_w >= 3,
+            "wide terminal should widen cells, got {cell_w}"
+        );
+        assert_eq!(weeks * cell_w, 196, "grid must span full avail width");
+    }
+
+    #[test]
+    fn layout_narrow_uses_unit_cells() {
+        let (gutter, weeks, cell_w) = layout_grid(60);
+        assert_eq!(gutter, 4);
+        assert_eq!(cell_w, 1);
+        assert_eq!(weeks, 56);
     }
 }

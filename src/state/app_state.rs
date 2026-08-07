@@ -395,7 +395,9 @@ impl AppState {
                 p.window_cost = (p.window_cost - old.cost_usd).max(0.0);
                 reverse_model_aggregate(&mut p.models, &old);
                 reverse_session_aggregate(&mut p.sessions, &old);
-                reverse_day_aggregate(&mut p.daily, &old);
+                // Daily buckets intentionally do NOT reverse on eviction: the
+                // contribution heatmap should keep ~year-long history even when
+                // the sliding record window has moved on. Age prune below.
             }
             p.window_cost += r.cost_usd;
             p.window_calls += 1;
@@ -640,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn eviction_reverses_daily_and_session_aggregates() {
+    fn eviction_reverses_session_but_keeps_daily_history() {
         let mut s = AppState::with_capacity(1);
         let a = UsageRecord {
             session: intern("sess-a"),
@@ -663,9 +665,9 @@ mod tests {
         assert_eq!(p.sessions.len(), 1, "first session evicted with the record");
         assert!(p.sessions.contains_key(&intern("sess-b")));
         assert_eq!(p.window_calls, 1);
-        // Day bucket for remaining record only.
+        // Heatmap history keeps both records' day contributions.
         let day_calls: u64 = p.daily.values().map(|d| d.calls).sum();
-        assert_eq!(day_calls, 1);
+        assert_eq!(day_calls, 2);
     }
 
     #[test]
