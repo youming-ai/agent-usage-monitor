@@ -182,12 +182,12 @@ breakdowns live in `aum stats` JSON / MCP. Sections share the screen equally.
  Input 1.2m · Output 340.0k · Cache read 8.1m · Cache write 0
 ```
 
-- **Heatmap** — up to ~52 weeks, Mon-first weeks, month labels, platform accent
-  color ramp, empty days as dim dots, `Less … More` legend. Short terminals
-  fall back to a 1-row strip.
-- **Overview** — favorite model, totals, sessions, streaks, token split
-  (when height allows).
-- **Quota bars** — remaining usage with status glyph and reset time.
+- **Live quota** (network) — vendor APIs using your local login: windows (5h/7d
+  and model-scoped when present), plan/org, credits/extra-usage. Prefixed
+  `live` in the UI. Claude: `api.anthropic.com/api/oauth/usage` + profile;
+  Codex: `chatgpt.com/backend-api/wham/usage`. No official day-by-day history.
+- **Heatmap + local overview** — from on-disk logs (Mon-first contribution
+  graph, favorite model, streaks, token split). Prefixed `local activity`.
 
 Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
 

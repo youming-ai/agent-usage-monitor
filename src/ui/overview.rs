@@ -10,8 +10,8 @@ use ratatui::{
 };
 use std::collections::BTreeMap;
 
-/// Lines needed for the full overview block (excluding blank separators).
-pub const OVERVIEW_LINES: u16 = 6;
+/// Lines needed for the full overview block (label + stats rows).
+pub const OVERVIEW_LINES: u16 = 7;
 
 #[derive(Debug, Clone)]
 pub struct OverviewStats {
@@ -94,6 +94,7 @@ pub fn overview_paragraph(stats: &OverviewStats, accent: Color) -> Paragraph<'st
     };
 
     let lines = vec![
+        Line::from(vec![Span::styled(" local activity (from logs) ", dim)]),
         Line::from(vec![
             Span::styled("Favorite model: ", label),
             Span::styled(stats.favorite_model.clone(), accent_style),

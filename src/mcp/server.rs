@@ -308,7 +308,10 @@ impl AumMcpServer {
                     platform: pr.platform_key.clone(),
                     tool_name: q.tool_name.clone(),
                     email: q.email.clone(),
+                    plan: q.plan.clone(),
+                    org: q.org.clone(),
                     windows: q.windows.clone(),
+                    live_summary: q.live_summary.clone(),
                     fetched_at: q.fetched_at.clone(),
                     error: q.error.clone(),
                 }

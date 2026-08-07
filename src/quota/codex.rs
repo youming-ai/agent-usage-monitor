@@ -118,6 +118,11 @@ fn parse_usage_response(
         .map(String::from)
         .or(email);
 
+    let plan = data
+        .get("plan_type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     if let Some(rate_limit) = data.get("rate_limit") {
         if let Some(primary) = rate_limit.get("primary_window") {
             let label = format_window_label(primary).unwrap_or_else(|| "5h".to_string());
@@ -133,13 +138,68 @@ fn parse_usage_response(
         }
     }
 
+    // Code-review / additional windows when present.
+    if let Some(cr) = data.get("code_review_rate_limit")
+        && !cr.is_null()
+        && let Some(primary) = cr.get("primary_window")
+    {
+        let label = format_window_label(primary).unwrap_or_else(|| "review".to_string());
+        if let Some(window) = format_window_value(&label, primary) {
+            windows.push(window);
+        }
+    }
+
+    let mut summary_bits = Vec::new();
+    if let Some(credits) = data.get("credits") {
+        if credits.get("unlimited").and_then(|v| v.as_bool()) == Some(true) {
+            summary_bits.push("credits unlimited".into());
+        } else if credits.get("has_credits").and_then(|v| v.as_bool()) == Some(true) {
+            if let Some(bal) = credits.get("balance").and_then(|v| v.as_f64()) {
+                summary_bits.push(format!("credits {bal:.0}"));
+            } else {
+                summary_bits.push("credits on".into());
+            }
+        }
+        if credits
+            .get("overage_limit_reached")
+            .and_then(|v| v.as_bool())
+            == Some(true)
+        {
+            summary_bits.push("overage limit".into());
+        }
+    }
+    if data
+        .get("spend_control")
+        .and_then(|s| s.get("reached"))
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
+        summary_bits.push("spend control".into());
+    }
+    if data
+        .get("rate_limit")
+        .and_then(|r| r.get("limit_reached"))
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
+        summary_bits.push("limit reached".into());
+    }
+    let live_summary = if summary_bits.is_empty() {
+        None
+    } else {
+        Some(summary_bits.join(" · "))
+    };
+
     let error = classify_api_error(data, windows.is_empty());
 
     Some(QuotaInfo {
         tool_name: "Codex".to_string(),
         email,
         account_id: Some(account_id),
+        plan,
+        org: None,
         windows,
+        live_summary,
         fetched_at: Instant::now(),
         error,
     })
@@ -201,5 +261,30 @@ mod tests {
     fn other_error_is_parse() {
         let q = parse(json!({ "error": { "type": "rate_limit", "message": "slow" } }));
         assert_eq!(q.error, Some(QuotaError::Parse("rate_limit: slow".into())));
+    }
+
+    #[test]
+    fn parses_plan_and_primary_window() {
+        let q = parse(json!({
+            "email": "a@b.c",
+            "plan_type": "team",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 44.0,
+                    "limit_window_seconds": 604800,
+                    "reset_after_seconds": 3600,
+                    "reset_at": 1786275643
+                },
+                "secondary_window": null
+            },
+            "credits": { "has_credits": false, "unlimited": false }
+        }));
+        assert_eq!(q.plan.as_deref(), Some("team"));
+        assert_eq!(q.email.as_deref(), Some("a@b.c"));
+        assert_eq!(q.windows.len(), 1);
+        assert_eq!(q.windows[0].label, "7d");
+        assert!((q.windows[0].remaining_percent.unwrap() - 0.56).abs() < 0.01);
     }
 }

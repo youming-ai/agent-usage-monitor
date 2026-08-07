@@ -122,7 +122,10 @@ pub struct QuotaEntry {
     pub platform: String,
     pub tool_name: String,
     pub email: Option<String>,
+    pub plan: Option<String>,
+    pub org: Option<String>,
     pub windows: Vec<crate::quota::QuotaWindow>,
+    pub live_summary: Option<String>,
     pub fetched_at: String,
     pub error: Option<String>,
 }

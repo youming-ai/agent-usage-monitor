@@ -130,7 +130,13 @@ pub struct PlatformReport {
 pub struct QuotaView {
     pub tool_name: String,
     pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
     pub windows: Vec<QuotaWindow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_summary: Option<String>,
     pub fetched_at: String,
     pub error: Option<String>,
 }
@@ -140,7 +146,10 @@ impl QuotaView {
         Self {
             tool_name: q.tool_name,
             email: q.email,
+            plan: q.plan,
+            org: q.org,
             windows: q.windows,
+            live_summary: q.live_summary,
             fetched_at: fetched_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             error: q.error.map(|e| e.display()),
         }
@@ -426,7 +435,10 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
                     .is_none()
                     .then(|| crate::quota::QuotaError::NoCredentials.display()),
                 email,
+                plan: None,
+                org: None,
                 windows: vec![],
+                live_summary: None,
                 fetched_at: fetched_at.clone(),
             });
         }
@@ -641,12 +653,15 @@ mod tests {
             tool_name: "Claude Code".to_string(),
             email: Some("me@example.com".to_string()),
             account_id: None,
+            plan: Some("claude max 5x".into()),
+            org: Some("elestyle".into()),
             windows: vec![QuotaWindow {
                 label: "5h".to_string(),
                 remaining_percent: Some(0.85),
                 resets_at: None,
                 reset_in: Some("3h 25m".to_string()),
             }],
+            live_summary: Some("extra usage on".into()),
             fetched_at: Instant::now(),
             error: None,
         };
@@ -656,6 +671,7 @@ mod tests {
         assert_eq!(view.email, Some("me@example.com".to_string()));
         assert_eq!(view.windows.len(), 1);
         assert_eq!(view.windows[0].label, "5h");
+        assert_eq!(view.plan.as_deref(), Some("claude max 5x"));
         assert!(view.fetched_at.contains("T"));
     }
 
@@ -666,7 +682,10 @@ mod tests {
             tool_name: "Codex".to_string(),
             email: None,
             account_id: None,
+            plan: None,
+            org: None,
             windows: vec![],
+            live_summary: None,
             fetched_at: Instant::now(),
             error: Some(QuotaError::Auth("no token".to_string())),
         };

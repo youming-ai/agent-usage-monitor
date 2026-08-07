@@ -53,7 +53,11 @@ fn render_platform(
     let h = area.height;
 
     let header_h: u16 = if h >= 2 { 2 } else { 1 };
-    let quota_h: u16 = if has_quota && h >= 4 { 1 } else { 0 };
+    let quota_h: u16 = if has_quota && h >= 4 {
+        quota_bar::quota_panel_height(quota).min(h.saturating_sub(header_h + 2))
+    } else {
+        0
+    };
     let remain = h.saturating_sub(header_h + quota_h);
 
     // Prefer full heatmap (9) + overview (6); drop overview, then shrink heatmap.
@@ -165,6 +169,8 @@ mod tests {
             tool_name: "Claude Code".into(),
             email: Some("you@mail.com".into()),
             account_id: None,
+            plan: Some("claude max 5x".into()),
+            org: Some("elestyle".into()),
             windows: vec![
                 QuotaWindow {
                     label: "5h".into(),
@@ -179,6 +185,7 @@ mod tests {
                     reset_in: Some("4d6h".into()),
                 },
             ],
+            live_summary: Some("extra usage on".into()),
             fetched_at: Instant::now(),
             error: None,
         });
@@ -223,9 +230,14 @@ mod tests {
         assert!(out.contains("CODEX"));
         assert!(out.contains("82%"), "claude quota window");
         assert!(out.contains("you@mail.com"));
+        assert!(out.contains("live"), "live quota label");
+        assert!(
+            out.contains("claude max") || out.contains("elestyle") || out.contains("extra"),
+            "live plan/org/summary"
+        );
         assert!(out.contains('■') || out.contains('·'), "heatmap cells");
         assert!(
-            out.contains("Less") || out.contains("Favorite"),
+            out.contains("Less") || out.contains("Favorite") || out.contains("local activity"),
             "legend or overview"
         );
         assert!(!out.contains("MODEL"));
