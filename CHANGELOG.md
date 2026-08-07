@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.3.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.2.1...v1.3.0) (2026-08-07)
+
+
+### Features
+
+* Claude/Codex-only TUI with heatmap and live quota ([e1ada28](https://github.com/youming-ai/agent-usage-monitor/commit/e1ada28281828fb4e4a56397fe2b605e53ea4bf6))
+* **quota:** surface richer live usage from Claude and Codex APIs ([39a2679](https://github.com/youming-ai/agent-usage-monitor/commit/39a2679b7a573f8a2958b87d5b0ed52d035273fa))
+* slim to Claude/Codex, add heatmap and richer usage aggregates ([3decc64](https://github.com/youming-ai/agent-usage-monitor/commit/3decc644e1579827f93cbcf089e26e728fa3a355))
+* **tui:** aggregate contribution heatmap by week ([1720bb7](https://github.com/youming-ai/agent-usage-monitor/commit/1720bb7ce294246a31de18a9677479c36110c0cb))
+* **tui:** Claude Code–style heatmap and overview stats ([88614bf](https://github.com/youming-ai/agent-usage-monitor/commit/88614bf4729123fa1286799323327c20dce85188))
+
+
+### Bug Fixes
+
+* restore weekly heatmap and correct usage aggregates ([798c954](https://github.com/youming-ai/agent-usage-monitor/commit/798c954e36359a2395e9c0a891d00a7956e80faa))
+* **tui:** distribute heatmap cell widths to fill residual columns ([4fb440d](https://github.com/youming-ai/agent-usage-monitor/commit/4fb440d73fa90f451e8ce7ef9e17d9d2d4153de7))
+* **tui:** spread heatmap across full terminal width ([068ba7a](https://github.com/youming-ai/agent-usage-monitor/commit/068ba7a3f4afc2b104ea693ada26017c98ca495d))
+* **tui:** weekday columns instead of month labels on heatmap ([3cebd1e](https://github.com/youming-ai/agent-usage-monitor/commit/3cebd1e79a4cd9de98c6b25f7d10d3f0d6e72ab6))
+
+
+### Refactors
+
+* **tui:** show only contribution heatmaps per platform ([5b4ffd8](https://github.com/youming-ai/agent-usage-monitor/commit/5b4ffd80d0b19047be5e4d786ade7bd94bcdf4d0))
+
 ## [1.2.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.2.0...v1.2.1) (2026-07-31)
 
 
