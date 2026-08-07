@@ -60,14 +60,19 @@ fn render_platform(
     };
     let remain = h.saturating_sub(header_h + quota_h);
 
-    // Prefer full weekly heatmap + overview; drop overview, then shrink bars.
+    // Prefer tall weekday×week grid + overview; drop overview, then shrink rows.
     let (heatmap_h, overview_h) =
         if remain >= heatmap::HEATMAP_FULL_HEIGHT + overview::OVERVIEW_LINES {
             (heatmap::HEATMAP_FULL_HEIGHT, overview::OVERVIEW_LINES)
-        } else if remain >= heatmap::HEATMAP_FULL_HEIGHT {
-            (heatmap::HEATMAP_FULL_HEIGHT, 0)
+        } else if remain >= 10 {
+            (
+                remain.saturating_sub(overview::OVERVIEW_LINES).max(3),
+                overview::OVERVIEW_LINES,
+            )
+        } else if remain >= 5 {
+            (remain, 0)
         } else if remain >= 3 {
-            (remain.min(8), 0)
+            (remain, 0)
         } else if remain >= 1 {
             (1, 0)
         } else {
@@ -125,8 +130,8 @@ fn render_platform(
     }
 
     let heat_area = chunks[2];
-    if heat_area.height >= 3 && heat_area.width > 4 {
-        // One column per week; fills width with adaptive cell size.
+    if heat_area.height >= 3 && heat_area.width >= 7 {
+        // Columns = Mon…Sun, rows = weeks; no month axis.
         frame.render_widget(heatmap::contribution_heatmap(&p.daily, accent), heat_area);
     } else if heat_area.height >= 1 && heat_area.width > 0 {
         frame.render_widget(heatmap::contribution_strip(&p.daily, accent), heat_area);
@@ -236,6 +241,14 @@ mod tests {
             "live plan/org/summary"
         );
         assert!(out.contains('■') || out.contains('·'), "heatmap cells");
+        assert!(
+            out.contains("Mon") && out.contains("Tue") && out.contains("Wed"),
+            "weekday header instead of months:\n{out}"
+        );
+        assert!(
+            !out.contains("Jan") && !out.contains("Feb"),
+            "no month labels"
+        );
         assert!(
             out.contains("Less") || out.contains("Favorite") || out.contains("local activity"),
             "legend or overview"

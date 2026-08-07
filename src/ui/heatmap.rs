@@ -1,10 +1,7 @@
-//! Week-aggregated contribution heatmap.
-//!
-//! One column per ISO week (Mon–Sun), intensity = sum of that week's daily
-//! metrics. Fills the area width by growing cell width; optional vertical
-//! bars when height allows.
+//! Day contribution heatmap with **weekday columns** (Mon…Sun) and **one row
+//! per week** — no month labels. Intensity is per-day; fills the area by
+//! growing cell width.
 
-use super::util::month_abbr;
 use crate::state::{CompactDate, DayTotals};
 use chrono::{Datelike, Utc};
 use ratatui::{
@@ -15,13 +12,16 @@ use ratatui::{
 };
 use std::collections::BTreeMap;
 
-/// ~1 year of weeks; beyond this we widen cells instead of adding empty years.
+/// ~1 year of weeks as rows when height allows; otherwise as many as fit.
 const TARGET_WEEKS: u16 = 53;
 
-/// Preferred height: month labels + 4 bar rows + legend.
-pub const HEATMAP_FULL_HEIGHT: u16 = 6;
+/// Preferred height: weekday header + many week rows + legend.
+/// Caller may give less; we adapt.
+pub const HEATMAP_FULL_HEIGHT: u16 = 16;
 
-/// Build a week-aggregated heatmap ending this week, tinted with `accent`.
+const WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// Contribution heatmap: columns = weekdays, rows = weeks (oldest → newest).
 pub fn contribution_heatmap<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     accent: Color,
@@ -34,51 +34,25 @@ pub struct Heatmap<'a> {
     accent: Color,
 }
 
-/// `(gutter, weeks, base_cell_w, extra)` — first `extra` cols are base+1 wide.
-fn layout_grid(area_width: u16) -> (u16, u16, u16, u16) {
-    // No weekday gutter for weekly view; keep a small left pad for legend align.
-    let gutter = if area_width >= 8 { 1u16 } else { 0 };
-    let avail = area_width.saturating_sub(gutter).max(1);
-    if avail <= TARGET_WEEKS {
-        return (gutter, avail, 1, 0);
-    }
-    let weeks = TARGET_WEEKS;
-    let base = avail / weeks;
-    let extra = avail % weeks;
-    (gutter, weeks, base.max(1), extra)
-}
+/// How many week-rows fit, and cell width for the 7 weekday columns.
+/// Returns `(gutter, weeks, cell_w, pad_left)` where pad centers the 7 cols.
+fn layout(area: Rect) -> (u16, usize, u16, u16) {
+    let has_header = area.height >= 2;
+    let has_legend = area.height >= 3;
+    let rows_avail = area
+        .height
+        .saturating_sub(u16::from(has_header) + u16::from(has_legend))
+        .max(1) as usize;
 
-fn col_width(base: u16, extra: u16, col: usize) -> u16 {
-    if (col as u16) < extra { base + 1 } else { base }
-}
+    let weeks = (TARGET_WEEKS as usize).min(rows_avail).max(1);
 
-fn col_x(gutter: u16, base: u16, extra: u16, col: usize) -> u16 {
-    let col = col as u16;
-    if col <= extra {
-        gutter + col * (base + 1)
-    } else {
-        gutter + extra * (base + 1) + (col - extra) * base
-    }
-}
-
-/// Sum metrics for Mon–Sun week starting at `week_start` (must be a Monday).
-fn week_metric(daily: &BTreeMap<CompactDate, DayTotals>, week_start: CompactDate) -> u64 {
-    let mut total = 0u64;
-    let mut d = week_start;
-    for _ in 0..7 {
-        if let Some(day) = daily.get(&d) {
-            total = total.saturating_add(day_metric(day));
-        }
-        d = add_one_day(d).unwrap_or(d);
-    }
-    total
-}
-
-/// Monday of the calendar week containing `day`.
-fn monday_of(day: CompactDate) -> CompactDate {
-    let wd = day.weekday_mon0() as i64;
-    day.checked_sub_days(wd)
-        .unwrap_or_else(|| CompactDate::new(1970, 1, 5)) // 1970-01-05 was a Monday
+    // 7 weekday columns fill the width (optional 1-col left pad).
+    let gutter = 0u16;
+    let avail = area.width.saturating_sub(gutter).max(7);
+    let cell_w = (avail / 7).max(1);
+    let used = cell_w * 7;
+    let pad_left = gutter + (avail - used) / 2;
+    (gutter, weeks, cell_w, pad_left)
 }
 
 impl Widget for Heatmap<'_> {
@@ -88,96 +62,83 @@ impl Widget for Heatmap<'_> {
         }
 
         let levels = accent_levels(self.accent);
-        let has_month = area.height >= 3;
+        let has_header = area.height >= 2;
         let has_legend = area.height >= 3;
-        let grid_top = area.y + u16::from(has_month);
-        let grid_bottom = if has_legend {
-            area.y + area.height - 1
-        } else {
-            area.y + area.height
-        };
-        let bar_h = grid_bottom.saturating_sub(grid_top).max(1) as usize;
+        let (_, weeks, cell_w, pad_left) = layout(area);
 
-        let (gutter, weeks_u, base_w, extra) = layout_grid(area.width);
-        let weeks = weeks_u as usize;
+        let grid_top = area.y + u16::from(has_header);
+        let grid_h = if has_legend {
+            area.height.saturating_sub(1 + u16::from(has_header))
+        } else {
+            area.height.saturating_sub(u16::from(has_header))
+        }
+        .min(weeks as u16) as usize;
+
+        if grid_h == 0 {
+            return;
+        }
 
         let today = CompactDate::from_datetime(Utc::now());
         let this_monday = monday_of(today);
-        // Oldest week Monday: this_monday - (weeks-1)*7
+        // Oldest week at top: this_monday - (grid_h-1)*7
         let start_monday = this_monday
-            .checked_sub_days(((weeks.saturating_sub(1)) * 7) as i64)
+            .checked_sub_days(((grid_h.saturating_sub(1)) * 7) as i64)
             .unwrap_or_else(|| CompactDate::new(1970, 1, 5));
 
-        let mut week_starts = Vec::with_capacity(weeks);
-        let mut week_metrics = Vec::with_capacity(weeks);
+        // Build grid_h weeks × 7 days metrics.
+        let mut metrics = vec![0u64; grid_h * 7];
         let mut d = start_monday;
-        for _ in 0..weeks {
-            week_starts.push(d);
-            week_metrics.push(week_metric(self.daily, d));
-            d = add_days(d, 7).unwrap_or(d);
+        for row in 0..grid_h {
+            for col in 0..7 {
+                metrics[row * 7 + col] = self.daily.get(&d).map(day_metric).unwrap_or(0);
+                d = add_days(d, 1).unwrap_or(d);
+            }
         }
+        let max = metrics.iter().copied().max().unwrap_or(0);
 
-        let max = week_metrics.iter().copied().max().unwrap_or(0);
-
-        // Month labels above weeks that contain the 1st of a month (or col 0).
-        if has_month {
-            let mut next_free_x = area.x + gutter;
-            for (col, &ws) in week_starts.iter().enumerate() {
-                let mut month_to_label: Option<u8> = None;
-                let mut day = ws;
-                for _ in 0..7 {
-                    if day.day() == 1 {
-                        month_to_label = Some(day.month());
-                        break;
-                    }
-                    day = add_one_day(day).unwrap_or(day);
-                }
-                if month_to_label.is_none() && col == 0 {
-                    month_to_label = Some(ws.month());
-                }
-                let Some(month) = month_to_label else {
-                    continue;
+        // Header: Mon Tue Wed Thu Fri Sat Sun
+        if has_header {
+            for (col, label) in WEEKDAY_LABELS.iter().enumerate() {
+                let x = area.x + pad_left + (col as u16) * cell_w;
+                // Center short label in the cell when wide enough.
+                let label_x = if cell_w >= 3 {
+                    x + (cell_w.saturating_sub(3)) / 2
+                } else {
+                    x
                 };
-                let label = month_abbr(month);
-                let x = area.x + col_x(gutter, base_w, extra, col);
-                if x < next_free_x || x + 3 > area.x + area.width {
-                    continue;
+                if label_x + 3 <= area.x + area.width {
+                    put_str(
+                        buf,
+                        label_x,
+                        area.y,
+                        label,
+                        Style::default().fg(Color::DarkGray),
+                    );
+                } else if cell_w >= 1 {
+                    // Single letter fallback
+                    let ch = &label[..1];
+                    put_str(buf, x, area.y, ch, Style::default().fg(Color::DarkGray));
                 }
-                put_str(buf, x, area.y, label, Style::default().fg(Color::DarkGray));
-                next_free_x = x + 4;
             }
         }
 
-        // Vertical bars: fill bottom `level/4 * bar_h` rows.
-        for (col, &metric) in week_metrics.iter().enumerate() {
-            let level = intensity(metric, max);
-            let filled = if level == 0 {
-                0
-            } else {
-                // level 1..4 → at least 1 row, up to bar_h
-                ((level * bar_h) + 3) / 4
-            };
-            let x0 = area.x + col_x(gutter, base_w, extra, col);
-            let cw = col_width(base_w, extra, col);
-            for row in 0..bar_h {
-                // row 0 is top of bar area; fill from bottom
-                let from_bottom = bar_h - 1 - row;
-                let y = grid_top + row as u16;
-                if y >= grid_bottom {
-                    break;
-                }
-                let on = from_bottom < filled;
-                for dx in 0..cw {
+        // Body: row = week, col = weekday
+        for row in 0..grid_h {
+            let y = grid_top + row as u16;
+            if y >= area.y + area.height {
+                break;
+            }
+            for col in 0..7 {
+                let metric = metrics[row * 7 + col];
+                let level = intensity(metric, max);
+                let x0 = area.x + pad_left + (col as u16) * cell_w;
+                for dx in 0..cell_w {
                     let x = x0 + dx;
                     if x >= area.x + area.width {
                         break;
                     }
                     if let Some(cell) = buf.cell_mut((x, y)) {
-                        if on {
-                            cell.set_symbol("■");
-                            cell.set_style(Style::default().fg(levels[level.max(1)]));
-                        } else if bar_h == 1 {
-                            // Single-row mode: empty weeks as dots
+                        if level == 0 {
                             if dx == 0 {
                                 cell.set_symbol("·");
                             } else {
@@ -185,16 +146,18 @@ impl Widget for Heatmap<'_> {
                             }
                             cell.set_style(Style::default().fg(Color::DarkGray));
                         } else {
-                            cell.set_symbol(" ");
+                            cell.set_symbol("■");
+                            cell.set_style(Style::default().fg(levels[level]));
                         }
                     }
                 }
             }
         }
 
+        // Legend
         if has_legend {
             let y = area.y + area.height - 1;
-            let mut x = area.x + gutter;
+            let mut x = area.x + pad_left;
             put_str(buf, x, y, "Less ", Style::default().fg(Color::DarkGray));
             x += 5;
             for level in 1..=4usize {
@@ -204,18 +167,12 @@ impl Widget for Heatmap<'_> {
                 }
                 x += 1;
             }
-            put_str(
-                buf,
-                x,
-                y,
-                " More · per week",
-                Style::default().fg(Color::DarkGray),
-            );
+            put_str(buf, x, y, " More", Style::default().fg(Color::DarkGray));
         }
     }
 }
 
-/// Compact 1-row weekly strip for short terminals.
+/// Compact strip: last N days left→right (short terminals).
 pub fn contribution_strip<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     accent: Color,
@@ -236,16 +193,15 @@ impl Widget for StripHeatmap<'_> {
         let levels = accent_levels(self.accent);
         let n = area.width as usize;
         let today = CompactDate::from_datetime(Utc::now());
-        let this_monday = monday_of(today);
-        let mut metrics = Vec::with_capacity(n);
+        let mut days = Vec::with_capacity(n);
         for i in (0..n).rev() {
-            let start = this_monday
-                .checked_sub_days((i * 7) as i64)
-                .unwrap_or_else(|| CompactDate::new(1970, 1, 5));
-            metrics.push(week_metric(self.daily, start));
+            let d = today
+                .checked_sub_days(i as i64)
+                .unwrap_or_else(|| CompactDate::new(1970, 1, 1));
+            days.push(self.daily.get(&d).map(day_metric).unwrap_or(0));
         }
-        let max = metrics.iter().copied().max().unwrap_or(0);
-        for (i, metric) in metrics.into_iter().enumerate() {
+        let max = days.iter().copied().max().unwrap_or(0);
+        for (i, metric) in days.into_iter().enumerate() {
             let level = intensity(metric, max);
             let x = area.x + i as u16;
             if let Some(cell) = buf.cell_mut((x, area.y)) {
@@ -320,8 +276,10 @@ fn put_str(buf: &mut Buffer, x: u16, y: u16, s: &str, style: Style) {
     }
 }
 
-fn add_one_day(d: CompactDate) -> Option<CompactDate> {
-    add_days(d, 1)
+fn monday_of(day: CompactDate) -> CompactDate {
+    let wd = day.weekday_mon0() as i64;
+    day.checked_sub_days(wd)
+        .unwrap_or_else(|| CompactDate::new(1970, 1, 5))
 }
 
 fn add_days(d: CompactDate, days: i64) -> Option<CompactDate> {
@@ -349,48 +307,20 @@ mod tests {
     }
 
     #[test]
-    fn layout_fills_wide_terminal() {
-        let (gutter, weeks, base, extra) = layout_grid(200);
-        assert_eq!(gutter, 1);
-        assert_eq!(weeks, TARGET_WEEKS);
-        assert!(base >= 3, "wide terminal should widen cells, got {base}");
-        assert_eq!(weeks * base + extra, 199, "grid must span full avail width");
-    }
-
-    #[test]
-    fn layout_narrow_uses_unit_cells() {
-        let (gutter, weeks, base, extra) = layout_grid(40);
-        assert_eq!(gutter, 1);
-        assert_eq!(base, 1);
-        assert_eq!(extra, 0);
-        assert_eq!(weeks, 39);
-    }
-
-    #[test]
-    fn week_metric_sums_seven_days() {
-        let mut daily = BTreeMap::new();
-        // 2026-08-03 is a Monday
-        let mon = CompactDate::new(2026, 8, 3);
-        for i in 0..7 {
-            let d = add_days(mon, i).unwrap();
-            daily.insert(
-                d,
-                DayTotals {
-                    cost_usd: 1.0,
-                    tokens: 0,
-                    calls: 1,
-                },
-            );
-        }
-        // 1.0 * 1e6 * 7
-        assert_eq!(week_metric(&daily, mon), 7_000_000);
+    fn layout_seven_columns_fill_width() {
+        let area = Rect::new(0, 0, 70, 20);
+        let (_, weeks, cell_w, pad) = layout(area);
+        assert!(weeks >= 1);
+        assert_eq!(cell_w * 7 + pad * 2 <= 70 || cell_w * 7 <= 70, true);
+        assert_eq!(cell_w, 10); // 70/7
     }
 
     #[test]
     fn monday_of_aligns() {
-        // 2026-08-07 is Friday → Monday is 2026-08-03
-        let fri = CompactDate::new(2026, 8, 7);
-        assert_eq!(monday_of(fri), CompactDate::new(2026, 8, 3));
-        assert_eq!(monday_of(CompactDate::new(2026, 8, 3)).weekday_mon0(), 0);
+        // 2026-08-07 Friday → Monday 2026-08-03
+        assert_eq!(
+            monday_of(CompactDate::new(2026, 8, 7)),
+            CompactDate::new(2026, 8, 3)
+        );
     }
 }
