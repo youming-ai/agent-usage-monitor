@@ -1,7 +1,5 @@
 mod heatmap;
-mod model_table;
 mod quota_bar;
-mod session_table;
 mod util;
 
 use crate::state::{AppState, Platform};
@@ -14,8 +12,6 @@ use ratatui::{
 };
 use std::sync::{Arc, RwLock};
 
-const SESSION_TOP_N: usize = 5;
-
 pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let state = match app_state.try_read() {
         Ok(state) => state,
@@ -23,9 +19,7 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     };
 
     // Every platform whose data directory exists, stacked top to bottom in
-    // registry order. Sections split the screen equally; a section whose
-    // model rows exceed its share clips at the bottom (rows are sorted by
-    // cost, so the most relevant stay visible).
+    // registry order. Each section is header + optional quota + heatmap.
     let available = &state.available_platforms;
     if available.is_empty() {
         frame.render_widget(
@@ -53,39 +47,33 @@ fn render_platform(
     state: &AppState,
 ) {
     let p = state.platform(platform);
-    let (quota, models, _, _) = p.refs();
+    let (quota, _, _, _) = p.refs();
     let accent = platform.primary_color();
 
     let has_quota = crate::platforms::entry_for_platform(platform).has_quota();
     let h = area.height;
 
-    // Priority under tight height: header > quota > models > heatmap > sessions.
-    // Drop sessions first, then shrink heatmap to a 1-row strip, then drop it.
     let quota_h: u16 = if has_quota && h >= 4 { 1 } else { 0 };
     let header_h: u16 = if h >= 2 { 2 } else { 1 };
-    let remain_after_header = h.saturating_sub(header_h + quota_h);
+    let remain = h.saturating_sub(header_h + quota_h);
 
-    let (heatmap_h, sessions_h) = if remain_after_header >= 14 {
-        (7u16, 6u16) // full 7-row graph + top-N sessions
-    } else if remain_after_header >= 10 {
-        (7, 0)
-    } else if remain_after_header >= 5 {
-        (1, 0) // strip
+    // Full 7-row graph when room; otherwise a 1-row strip; drop if tiny.
+    let heatmap_h: u16 = if remain >= 8 {
+        8 // month/gutter room + 7 day rows (widget clips to height)
+    } else if remain >= 1 {
+        remain.clamp(1, 7)
     } else {
-        (0, 0)
+        0
     };
 
     let chunks = Layout::vertical([
         Constraint::Length(header_h),
         Constraint::Length(quota_h),
-        Constraint::Length(heatmap_h),
-        Constraint::Min(1),
-        Constraint::Length(sessions_h),
+        Constraint::Min(heatmap_h.max(1)),
     ])
     .split(area);
 
-    // Header row: accent underline, platform label on the left, account
-    // identity right-aligned. Per-model tokens/cost live in the table below.
+    // Header: platform label left, account right.
     let header_block = Block::default()
         .borders(Borders::BOTTOM)
         .border_style(Style::default().fg(accent));
@@ -127,23 +115,15 @@ fn render_platform(
         frame.render_widget(quota_bar::quota_panel(platform, quota), chunks[1]);
     }
 
-    if heatmap_h >= 7 {
-        let weeks = chunks[2].width.saturating_sub(2).min(26);
-        frame.render_widget(heatmap::contribution_heatmap(&p.daily, weeks), chunks[2]);
-    } else if heatmap_h == 1 {
+    let heat_area = chunks[2];
+    if heat_area.height >= 7 {
+        let weeks = heat_area.width.saturating_sub(2).min(52);
+        frame.render_widget(heatmap::contribution_heatmap(&p.daily, weeks), heat_area);
+    } else if heat_area.height >= 1 && heat_area.width > 0 {
         frame.render_widget(
-            heatmap::contribution_strip(&p.daily, chunks[2].width),
-            chunks[2],
+            heatmap::contribution_strip(&p.daily, heat_area.width),
+            heat_area,
         );
-    }
-
-    frame.render_widget(model_table::model_table(models, platform), chunks[3]);
-
-    if sessions_h > 0 {
-        let top = p.top_sessions(SESSION_TOP_N);
-        if !top.is_empty() {
-            frame.render_widget(session_table::session_table(&top), chunks[4]);
-        }
     }
 }
 
@@ -195,27 +175,7 @@ mod tests {
             fetched_at: Instant::now(),
             error: None,
         });
-        let add_model = |state: &mut AppState, p: Platform, model: &str, cost: f64, calls: u64| {
-            let ps = state.platform_mut(p);
-            let m = crate::state::intern(model);
-            ps.models.insert(
-                m,
-                crate::state::ModelTotals {
-                    model: m,
-                    total_input: 1_200_000,
-                    total_output: 340_000,
-                    total_cache_read: 8_100_000,
-                    total_cache_creation: 0,
-                    total_reasoning: 0,
-                    total_cost: cost,
-                    request_count: calls,
-                },
-            );
-        };
-        add_model(&mut s, Platform::ClaudeCode, "claude-opus-4", 12.34, 42);
-        add_model(&mut s, Platform::Codex, "gpt-5.4", 3.21, 17);
 
-        // Seed daily so the heatmap has non-empty cells.
         let today = CompactDate::from_datetime(chrono::Utc::now());
         s.platform_mut(Platform::ClaudeCode).daily.insert(
             today,
@@ -225,49 +185,45 @@ mod tests {
                 calls: 42,
             },
         );
+        s.platform_mut(Platform::Codex).daily.insert(
+            today,
+            DayTotals {
+                cost_usd: 3.21,
+                tokens: 1_000_000,
+                calls: 10,
+            },
+        );
 
+        // Still ingest records so aggregates stay exercised for non-UI paths.
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
             session: crate::state::intern(session),
             id: crate::state::record_id(&format!("{session}:{model}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,
-            session_title: crate::state::intern("demo title"),
-            project: crate::state::intern("demo"),
             ..crate::state::test_record(model)
         };
-        // Use add_records so session aggregates populate.
         s.add_records(
             Platform::ClaudeCode,
-            vec![
-                mk("ollama-monitor a3f2c1d8", "claude-opus-4", 1200, 340),
-                mk("my-web-app 1c2d3e4f", "claude-opus-4", 5000, 600),
-            ],
+            vec![mk("demo a3f2c1d8", "claude-opus-4", 1200, 340)],
         );
         s
     }
 
     #[test]
-    fn renders_all_platform_sections_stacked() {
-        let out = dump(80, 40, sample_state());
+    fn renders_platform_heatmaps_only() {
+        let out = dump(80, 24, sample_state());
         println!("\n{out}");
         let claude = out.find("CLAUDE").unwrap();
         let codex = out.find("CODEX").unwrap();
         assert!(claude < codex);
-        assert!(!out.contains("CURSOR"));
-        assert!(!out.contains("GROK"));
         assert!(out.contains("82%"), "claude quota window");
-        assert!(out.contains("claude-opus-4"));
-        assert!(out.contains("gpt-5.4"));
         assert!(out.contains("you@mail.com"));
-        assert!(!out.contains(" calls"), "header must not show call totals");
-        assert!(
-            out.contains("$12.34") || out.contains("12.34"),
-            "cost visible"
-        );
-        // Split columns
-        assert!(out.contains("IN"));
-        assert!(out.contains("OUT"));
-        assert!(out.contains("CACHE"));
+        // Model / session tables removed from the TUI.
+        assert!(!out.contains("MODEL"));
+        assert!(!out.contains("SESSION"));
+        assert!(!out.contains("claude-opus-4"));
+        // Heatmap cells use ■
+        assert!(out.contains('■'), "heatmap should paint cells");
     }
 
     #[test]

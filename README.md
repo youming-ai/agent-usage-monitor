@@ -162,32 +162,25 @@ Expect a JSON response with `serverInfo.name = "aum"`.
 ## Layout
 
 All platforms whose data directory exists are stacked top to bottom in order —
-no tabs. Each section shows a header (platform label and account identity), a
-quota line where the platform has a quota API (Claude Code, Codex), a
-GitHub-style contribution heatmap (daily activity), the per-model table, and
-a top-N session list when height allows. Sections share the screen equally.
+no tabs. Each section is a header (platform label + account), a quota line
+(Claude Code / Codex), and a GitHub-style contribution heatmap. Model and
+session tables live in `aum stats` JSON / MCP, not the TUI. Sections share
+the screen equally.
 
 ```
  CLAUDE                                                            ✓ you@mail.com
 ───────────────────────────────────────────────────────────────────────────────
  ✓ 5h ▓▓▓▓▓▓░░░░  82%  resets 2h30m  |  ✓ 7d ▓▓▓▓░░░░░░  54%  resets 4d6h
- S ■ ■ ■ ■ …          (contribution heatmap — green intensity by day)
- M ■ ■ ■ ■ …
+ S · · · ■ ■ …        (contribution heatmap — green intensity by day)
+ M · · · ■ ■ …
  …
- MODEL              IN       OUT      CACHE     COST       #
- claude-opus-4      1.2M     340.0k   8.1M      $12.34     42
- SESSION                 TITLE                      COST     AGE
- ollama-monitor a3f2…    demo title                 $0.01    2h
  CODEX                                                             not signed in
 ───────────────────────────────────────────────────────────────────────────────
- MODEL              IN       OUT      CACHE     COST       #
- gpt-5.4            2.0M     800.0k   1.1M      $3.21      17
+ S · · · · ■ …
 ```
 
-- **Heatmap** — last ~26 weeks of daily cost/token intensity (GitHub contribution greens). Short terminals fall back to a 1-row strip.
+- **Heatmap** — up to ~52 weeks of daily cost/token intensity (GitHub contribution greens). Short terminals fall back to a 1-row strip.
 - **Quota bars** — one per window; the fill shows remaining usage, with a status glyph (`✓` ≥50%, `⚠` ≥20%, `✗` <20%) and reset time.
-- **Models** — per-model totals for the sliding window: input, output (+ reasoning for Codex), cache, cost, request count.
-- **Sessions** — top sessions by cost: label, title (when known), cost, relative age.
 
 Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
 
