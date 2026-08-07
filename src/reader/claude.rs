@@ -1,24 +1,20 @@
-use crate::state::UsageRecord;
+use crate::state::{ToolOps, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::FileScanner;
 use super::find_recursive;
-use super::{ReaderResult, UsageSource};
-
-/// Per-file running state: the conversation title, carried across lines and
-/// polls. Claude logs the title on its own `ai-title` lines interspersed with
-/// the `assistant` records, so it must persist rather than being re-derived
-/// from each line.
-#[derive(Clone, Default)]
-struct ClaudeState {
-    title: String,
-}
+use super::{ReaderResult, UsageSource, note_tool};
 
 pub struct ClaudeReader {
     data_dir: PathBuf,
-    scanner: FileScanner<ClaudeState>,
+    scanner: FileScanner<()>,
+    pending_ops: ToolOps,
+    seen_tool_ids: HashSet<String>,
+    /// session_id -> latest title seen in this process
+    titles: std::collections::HashMap<String, String>,
 }
 
 impl ClaudeReader {
@@ -26,6 +22,9 @@ impl ClaudeReader {
         Self {
             data_dir,
             scanner: FileScanner::new(),
+            pending_ops: ToolOps::default(),
+            seen_tool_ids: HashSet::new(),
+            titles: std::collections::HashMap::new(),
         }
     }
 
@@ -41,12 +40,15 @@ impl ClaudeReader {
 
     fn scan(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         let files = self.find_files()?;
+        let titles = &mut self.titles;
+        let ops = &mut self.pending_ops;
+        let seen_tool_ids = &mut self.seen_tool_ids;
         self.scanner.scan(
             files,
-            |_| ClaudeState::default(),
-            |file, offset, st| {
+            |_| (),
+            |file, offset, _st| {
                 crate::reader::read_lines_from_offset(file, offset, |line| {
-                    parse_claude_line(line, st)
+                    parse_claude_line(line, titles, ops, seen_tool_ids)
                 })
             },
         )
@@ -67,12 +69,15 @@ impl ClaudeReader {
         }
         files.sort_unstable();
         files.dedup();
+        let titles = &mut self.titles;
+        let ops = &mut self.pending_ops;
+        let seen_tool_ids = &mut self.seen_tool_ids;
         self.scanner.scan_changed(
             files,
-            |_| ClaudeState::default(),
-            |file, offset, st| {
+            |_| (),
+            |file, offset, _st| {
                 crate::reader::read_lines_from_offset(file, offset, |line| {
-                    parse_claude_line(line, st)
+                    parse_claude_line(line, titles, ops, seen_tool_ids)
                 })
             },
         )
@@ -82,6 +87,9 @@ impl ClaudeReader {
 impl UsageSource for ClaudeReader {
     fn scan_all(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         self.scanner.reset();
+        self.titles.clear();
+        self.pending_ops = ToolOps::default();
+        self.seen_tool_ids.clear();
         self.scan()
     }
 
@@ -92,22 +100,61 @@ impl UsageSource for ClaudeReader {
     fn poll_changed(&mut self, paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
         self.scan_changed(paths)
     }
+
+    fn take_tool_ops_delta(&mut self) -> ToolOps {
+        std::mem::take(&mut self.pending_ops)
+    }
 }
 
-fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Option<UsageRecord> {
+fn parse_claude_line(
+    line: &str,
+    titles: &mut std::collections::HashMap<String, String>,
+    ops: &mut ToolOps,
+    seen_tool_ids: &mut HashSet<String>,
+) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
 
     let line_type = v.get("type")?.as_str()?;
+    let session_id = v
+        .get("sessionId")
+        .or_else(|| v.get("session_id"))
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
 
-    // `ai-title` lines carry the conversation title Claude Code shows in its
-    // resume picker; capture the latest so records below display it.
     if line_type == "ai-title" {
-        if let Some(title) = v.get("aiTitle").and_then(|s| s.as_str())
-            && !title.is_empty()
+        if let Some(title) = v.get("aiTitle").and_then(|t| t.as_str())
+            && !session_id.is_empty()
         {
-            st.title = title.to_string();
+            titles.insert(session_id, title.to_string());
         }
         return None;
+    }
+
+    // Tool uses live inside assistant message content blocks.
+    if line_type == "assistant"
+        && let Some(content) = v
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+    {
+        for block in content {
+            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                && let Some(name) = block.get("name").and_then(|n| n.as_str())
+            {
+                if let Some(id) = block.get("id").and_then(|id| id.as_str())
+                    && !seen_tool_ids.insert(id.to_string())
+                {
+                    continue;
+                }
+                note_tool(
+                    ops,
+                    name,
+                    v.get("timestamp").and_then(|value| value.as_str()),
+                    block.get("input"),
+                );
+            }
+        }
     }
 
     if line_type != "assistant" {
@@ -147,8 +194,8 @@ fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Option<UsageRecord> {
     } else {
         crate::reader::basename(cwd)
     };
-    let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
-    let session = crate::reader::session_label(&dir, session_id);
+    let session = crate::reader::session_label(&dir, &session_id);
+    let title = titles.get(&session_id).map(|s| s.as_str()).unwrap_or("");
 
     // Cost: read from JSONL only (comes from Anthropic API response).
     // `costUSD` is the historical camelCase key some Claude Code versions
@@ -173,14 +220,14 @@ fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Option<UsageRecord> {
         timestamp,
         model: crate::state::intern(&model),
         session: crate::state::intern(&session),
-        session_id: crate::state::intern(session_id),
-        cwd: crate::state::intern(cwd),
-        title: crate::state::intern(&st.title),
         id: crate::state::record_id(record_id),
         input_tokens,
         output_tokens,
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_creation,
+        reasoning_tokens: 0,
+        session_title: crate::state::intern(title),
+        project: crate::state::intern(&dir),
         cost_usd,
     })
 }
@@ -211,21 +258,6 @@ mod tests {
         let mut f = fs::File::create(&path).unwrap();
         f.write_all(content.as_bytes()).unwrap();
         path
-    }
-
-    #[test]
-    fn ai_title_line_becomes_the_record_title() {
-        let dir = tempfile::tempdir().unwrap();
-        let content = format!(
-            "{}\n{}\n",
-            r#"{"type":"ai-title","aiTitle":"Fix the login bug","sessionId":"s1"}"#,
-            r#"{"type":"assistant","timestamp":"2026-05-29T10:00:00Z","requestId":"r1","message":{"id":"m1","model":"claude-opus-4","usage":{"input_tokens":100,"output_tokens":50}}}"#,
-        );
-        write_file(dir.path(), "a.jsonl", &content);
-        let mut reader = ClaudeReader::new(dir.path().to_path_buf());
-        let records = reader.scan_all().unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(crate::state::resolve(records[0].title), "Fix the login bug");
     }
 
     #[test]

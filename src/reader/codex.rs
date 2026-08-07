@@ -1,12 +1,13 @@
 use crate::reader::pricing;
-use crate::state::UsageRecord;
+use crate::state::{ToolOps, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::FileScanner;
 use super::find_recursive;
-use super::{ReaderResult, UsageSource};
+use super::{ReaderResult, UsageSource, note_tool};
 
 /// Per-file running state. A rollout file declares its model and working
 /// directory in events at the top, which are skipped on later polls — so this
@@ -16,10 +17,8 @@ use super::{ReaderResult, UsageSource};
 struct FileState {
     model: String,
     dir: String,
-    /// Full working-directory path (from `session_meta`/`turn_context` `cwd`),
-    /// kept alongside `dir` (its basename) so a resume can launch there.
-    cwd: String,
     sid: String,
+    seen_tool_call_ids: HashSet<String>,
 }
 
 impl FileState {
@@ -31,6 +30,7 @@ impl FileState {
 pub struct CodexReader {
     pub(crate) sessions_dir: PathBuf,
     scanner: FileScanner<FileState>,
+    pending_ops: ToolOps,
 }
 
 impl CodexReader {
@@ -39,6 +39,7 @@ impl CodexReader {
         Self {
             sessions_dir,
             scanner: FileScanner::new(),
+            pending_ops: ToolOps::default(),
         }
     }
 
@@ -57,15 +58,16 @@ impl CodexReader {
 
     fn scan(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         let files = self.find_files()?;
+        let ops = &mut self.pending_ops;
         self.scanner.scan(
             files,
             |file| FileState {
                 model: "unknown".to_string(),
                 dir: "codex".to_string(),
-                cwd: String::new(),
                 sid: extract_codex_project(file),
+                seen_tool_call_ids: HashSet::new(),
             },
-            read_codex_from_offset,
+            |path, skip, st| read_codex_from_offset(path, skip, st, ops),
         )
     }
 
@@ -83,15 +85,16 @@ impl CodexReader {
         }
         files.sort_unstable();
         files.dedup();
+        let ops = &mut self.pending_ops;
         self.scanner.scan_changed(
             files,
             |file| FileState {
                 model: "unknown".to_string(),
                 dir: "codex".to_string(),
-                cwd: String::new(),
                 sid: extract_codex_project(file),
+                seen_tool_call_ids: HashSet::new(),
             },
-            read_codex_from_offset,
+            |path, skip, st| read_codex_from_offset(path, skip, st, ops),
         )
     }
 }
@@ -99,6 +102,7 @@ impl CodexReader {
 impl UsageSource for CodexReader {
     fn scan_all(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         self.scanner.reset();
+        self.pending_ops = ToolOps::default();
         self.scan()
     }
 
@@ -109,19 +113,24 @@ impl UsageSource for CodexReader {
     fn poll_changed(&mut self, paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
         self.scan_changed(paths)
     }
+
+    fn take_tool_ops_delta(&mut self) -> ToolOps {
+        std::mem::take(&mut self.pending_ops)
+    }
 }
 
 fn read_codex_from_offset(
     path: &Path,
     skip_bytes: u64,
     st: &mut FileState,
+    ops: &mut ToolOps,
 ) -> ReaderResult<(Vec<UsageRecord>, u64)> {
-    crate::reader::read_lines_from_offset(path, skip_bytes, |line| parse_codex_line(line, st))
+    crate::reader::read_lines_from_offset(path, skip_bytes, |line| parse_codex_line(line, st, ops))
 }
 
 /// Parse one rollout line. `st` carries the session's running model and working
 /// directory across lines and polls; meta events update it in place.
-fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
+fn parse_codex_line(line: &str, st: &mut FileState, ops: &mut ToolOps) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
     let event_type = v.get("type")?.as_str()?;
 
@@ -130,7 +139,6 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
         let payload = v.get("payload");
         if let Some(cwd) = payload.and_then(|p| p.get("cwd")).and_then(|c| c.as_str()) {
             st.dir = crate::reader::basename(cwd);
-            st.cwd = cwd.to_string();
         }
         if let Some(id) = payload.and_then(|p| p.get("id")).and_then(|i| i.as_str()) {
             st.sid = id.to_string();
@@ -152,103 +160,170 @@ fn parse_codex_line(line: &str, st: &mut FileState) -> Option<UsageRecord> {
             .and_then(|c| c.as_str())
         {
             st.dir = crate::reader::basename(cwd);
-            st.cwd = cwd.to_string();
         }
         return None;
     }
 
-    if event_type != "event_msg" {
-        return None;
-    }
-
-    let payload = v.get("payload")?;
-    let payload_type = payload.get("type")?.as_str()?;
-
-    // Also check task_started for model (fallback)
-    if payload_type == "task_started" {
-        if let Some(m) = payload
-            .get("collaboration_mode")
-            .and_then(|c| c.get("settings"))
-            .and_then(|s| s.get("model"))
-            .and_then(|m| m.as_str())
-        {
-            st.model = m.to_string();
+    // Tool calls live under response_item.
+    if event_type == "response_item" {
+        let payload = v.get("payload")?;
+        let item_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match item_type {
+            "function_call" | "custom_tool_call" => {
+                let name = payload
+                    .get("name")
+                    .or_else(|| payload.get("tool_name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or(item_type);
+                if first_tool_event(st, payload) {
+                    note_tool(
+                        ops,
+                        name,
+                        v.get("timestamp").and_then(|value| value.as_str()),
+                        payload.get("input").or_else(|| payload.get("arguments")),
+                    );
+                }
+            }
+            "function_call_output" | "custom_tool_call_output" => {}
+            _ => {}
+        }
+        if item_type.contains("patch") && first_tool_event(st, payload) {
+            note_tool(
+                ops,
+                "apply_patch",
+                v.get("timestamp").and_then(|value| value.as_str()),
+                payload.get("input"),
+            );
         }
         return None;
     }
 
-    if payload_type != "token_count" {
-        return None;
+    if event_type == "event_msg" {
+        let payload = v.get("payload")?;
+        let payload_type = payload.get("type")?.as_str()?;
+        if payload_type == "patch_apply_end" {
+            if first_tool_event(st, payload) {
+                note_tool(
+                    ops,
+                    "apply_patch",
+                    v.get("timestamp").and_then(|value| value.as_str()),
+                    Some(payload),
+                );
+            }
+            return None;
+        }
+        if payload_type == "web_search_end" {
+            if first_tool_event(st, payload) {
+                note_tool(
+                    ops,
+                    "web_search",
+                    v.get("timestamp").and_then(|value| value.as_str()),
+                    None,
+                );
+            }
+            return None;
+        }
+        // Also check task_started for model (fallback)
+        if payload_type == "task_started" {
+            if let Some(m) = payload
+                .get("collaboration_mode")
+                .and_then(|c| c.get("settings"))
+                .and_then(|s| s.get("model"))
+                .and_then(|m| m.as_str())
+            {
+                st.model = m.to_string();
+            }
+            return None;
+        }
+
+        if payload_type != "token_count" {
+            return None;
+        }
+
+        let info = payload.get("info")?;
+        if info.is_null() {
+            return None;
+        }
+
+        let total = info.get("total_token_usage")?;
+        let input_tokens = total.get("input_tokens")?.as_u64()?;
+        let output_tokens = total.get("output_tokens")?.as_u64().unwrap_or(0);
+        let cached = total
+            .get("cached_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        // `last_token_usage` carries the per-turn delta; `total_token_usage` is the
+        // session's running cumulative total. When `last_token_usage` is missing
+        // OR explicitly `null` (both collapse to `None` via `Option::get`+`and_then`),
+        // falling back to the cumulative total would record it as a delta and wildly
+        // over-count (e.g. cumulative 10k -> 20k -> 30k would sum to 60k instead of
+        // 30k). Treat "no usable delta" as "nothing new happened this event" (0, 0,
+        // 0) instead, matching the case where the rollout simply omits the field.
+        let last = info.get("last_token_usage").filter(|l| !l.is_null());
+        let delta_input = last
+            .and_then(|l| l.get("input_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let delta_output = last
+            .and_then(|l| l.get("output_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let delta_cached = last
+            .and_then(|l| l.get("cached_input_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let delta_reasoning = last
+            .and_then(|l| l.get("reasoning_output_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        if delta_input == 0 && delta_output == 0 && delta_reasoning == 0 {
+            return None;
+        }
+
+        let timestamp_str = v.get("timestamp")?.as_str()?;
+        let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
+
+        // Codex reports reasoning_output_tokens as a subset of output_tokens,
+        // so output already contains the full billable amount.
+        let cost_usd =
+            pricing::calculate_cost(&st.model, delta_input, delta_output, delta_cached, 0);
+
+        // Codex token_count events carry no per-event id. The cumulative totals
+        // change monotonically, so pairing them with the timestamp gives a stable
+        // fallback identity: a truncation-triggered re-read of an unchanged line
+        // reproduces the same key, while a genuinely new event has a different
+        // cumulative total.
+        let record_id = format!(
+            "{}:{timestamp_str}:{input_tokens}:{output_tokens}:{cached}",
+            st.session()
+        );
+
+        return Some(UsageRecord {
+            timestamp,
+            model: crate::state::intern(&st.model),
+            session: crate::state::intern(&st.session()),
+            id: crate::state::record_id(&record_id),
+            input_tokens: delta_input,
+            output_tokens: delta_output,
+            cache_read_tokens: delta_cached,
+            cache_creation_tokens: 0,
+            reasoning_tokens: delta_reasoning,
+            session_title: crate::state::intern(""),
+            project: crate::state::intern(&st.dir),
+            cost_usd,
+        });
     }
 
-    let info = payload.get("info")?;
-    if info.is_null() {
-        return None;
-    }
+    None
+}
 
-    let total = info.get("total_token_usage")?;
-    let input_tokens = total.get("input_tokens")?.as_u64()?;
-    let output_tokens = total.get("output_tokens")?.as_u64().unwrap_or(0);
-    let cached = total
-        .get("cached_input_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    // `last_token_usage` carries the per-turn delta; `total_token_usage` is the
-    // session's running cumulative total. When `last_token_usage` is missing
-    // OR explicitly `null` (both collapse to `None` via `Option::get`+`and_then`),
-    // falling back to the cumulative total would record it as a delta and wildly
-    // over-count (e.g. cumulative 10k -> 20k -> 30k would sum to 60k instead of
-    // 30k). Treat "no usable delta" as "nothing new happened this event" (0, 0,
-    // 0) instead, matching the case where the rollout simply omits the field.
-    let last = info.get("last_token_usage").filter(|l| !l.is_null());
-    let delta_input = last
-        .and_then(|l| l.get("input_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let delta_output = last
-        .and_then(|l| l.get("output_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let delta_cached = last
-        .and_then(|l| l.get("cached_input_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    if delta_input == 0 && delta_output == 0 {
-        return None;
-    }
-
-    let timestamp_str = v.get("timestamp")?.as_str()?;
-    let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
-
-    let cost_usd = pricing::calculate_cost(&st.model, delta_input, delta_output, delta_cached, 0);
-
-    // Codex token_count events carry no per-event id. The cumulative totals
-    // change monotonically, so pairing them with the timestamp gives a stable
-    // fallback identity: a truncation-triggered re-read of an unchanged line
-    // reproduces the same key, while a genuinely new event has a different
-    // cumulative total.
-    let record_id = format!(
-        "{}:{timestamp_str}:{input_tokens}:{output_tokens}:{cached}",
-        st.session()
-    );
-
-    Some(UsageRecord {
-        timestamp,
-        model: crate::state::intern(&st.model),
-        session: crate::state::intern(&st.session()),
-        session_id: crate::state::intern(&st.sid),
-        cwd: crate::state::intern(&st.cwd),
-        // Codex rollout files don't record a conversation title.
-        title: crate::state::intern(""),
-        id: crate::state::record_id(&record_id),
-        input_tokens: delta_input,
-        output_tokens: delta_output,
-        cache_read_tokens: delta_cached,
-        cache_creation_tokens: 0,
-        cost_usd,
-    })
+fn first_tool_event(st: &mut FileState, payload: &Value) -> bool {
+    payload
+        .get("call_id")
+        .and_then(Value::as_str)
+        .is_none_or(|id| st.seen_tool_call_ids.insert(id.to_string()))
 }
 
 fn extract_codex_project(path: &Path) -> String {
@@ -297,7 +372,75 @@ mod tests {
     }
 
     #[test]
-    fn session_meta_populates_session_id_and_cwd() {
+    fn reasoning_tokens_are_not_added_to_inclusive_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let last = serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cached_input_tokens": 0,
+            "reasoning_output_tokens": 20
+        });
+        write_rollout(
+            &sessions,
+            "rollout-reasoning.jsonl",
+            &[
+                turn_context("gpt-5.4"),
+                token_count_with_last("2026-05-29T10:01:00Z", 100, 50, &last.to_string()),
+            ],
+        );
+
+        let mut reader = reader_for(&sessions);
+        let records = reader.scan_all().unwrap();
+        assert_eq!(records[0].output_tokens, 50);
+        assert_eq!(records[0].reasoning_tokens, 20);
+        assert_eq!(
+            records[0].cost_usd,
+            pricing::calculate_cost("gpt-5.4", 100, 50, 0, 0)
+        );
+    }
+
+    #[test]
+    fn patch_call_and_completion_are_counted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let call = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-08-07T10:00:00Z",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": "call-1",
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n-old\n+new\n*** End Patch"
+            }
+        })
+        .to_string();
+        let completion = serde_json::json!({
+            "type": "event_msg",
+            "timestamp": "2026-08-07T10:00:01Z",
+            "payload": { "type": "patch_apply_end", "call_id": "call-1" }
+        })
+        .to_string();
+        write_rollout(&sessions, "rollout-tools.jsonl", &[call, completion]);
+
+        let mut reader = reader_for(&sessions);
+        assert!(reader.scan_all().unwrap().is_empty());
+        let ops = reader.take_tool_ops_delta();
+        assert_eq!(ops.files_edited, 1);
+        assert_eq!(ops.lines_edited, 2);
+        assert_eq!(
+            ops.by_date
+                .get(&crate::state::CompactDate::new(2026, 8, 7))
+                .unwrap()
+                .files_edited,
+            1
+        );
+    }
+
+    #[test]
+    fn session_meta_populates_session_label() {
         let dir = tempfile::tempdir().unwrap();
         let sessions = dir.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
@@ -314,9 +457,8 @@ mod tests {
         let mut reader = reader_for(&sessions);
         let records = reader.scan_all().unwrap();
         assert_eq!(records.len(), 1);
-        // The real id and working dir must be threaded through for resume.
-        assert_eq!(crate::state::resolve(records[0].session_id), "sess-42");
-        assert_eq!(crate::state::resolve(records[0].cwd), "/Users/me/proj");
+        // The real id and working dir must feed the session label.
+        assert_eq!(crate::state::resolve(records[0].session), "proj sess-42");
     }
 
     /// A rollout whose `last_token_usage` is `null` (as opposed to absent)

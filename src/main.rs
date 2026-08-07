@@ -1,7 +1,6 @@
 use agent_usage_monitor::cli;
 use agent_usage_monitor::config::{self, Config};
 use agent_usage_monitor::event::{AppEvent, EventLoop};
-use agent_usage_monitor::launcher;
 use agent_usage_monitor::mcp;
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::readers::{self, PlatformReaders};
@@ -82,10 +81,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
     }
     let app_state = Arc::new(RwLock::new(AppState::with_capacity(config.max_records)));
-    app_state
-        .write()
-        .unwrap()
-        .detect_available_tabs(&agent_paths);
 
     // Reader task: FS-driven via the watcher module, with a configured
     // fallback poll as a safety net for edge cases the watcher misses (atomic
@@ -98,7 +93,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let agent_paths = agent_paths.clone();
         let app_state = app_state.clone();
         async move {
-            let mut readers = PlatformReaders::build(&agent_paths);
+            let build_paths = agent_paths.clone();
+            let mut readers = task::spawn_blocking(move || PlatformReaders::build(&build_paths))
+                .await
+                .expect("reader discovery task panicked");
+            if let Ok(mut state) = app_state.write() {
+                state.set_available_platforms(readers.platforms());
+            }
             let (mut platform_watchers, mut watcher_rx) = watcher::start_watchers(&agent_paths);
             let mut fallback = tokio::time::interval(fallback_interval);
             fallback.tick().await; // discard immediate first tick
@@ -137,9 +138,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     _ = fallback.tick() => {
                         // Pick up paths that appeared after launch, then give
                         // every live reader a coalesced incremental refresh.
-                        let newly = readers.discover_new(&agent_paths);
+                        let discovery_paths = agent_paths.clone();
+                        let (updated_readers, newly) = task::spawn_blocking(move || {
+                            let mut readers = readers;
+                            let newly = readers.discover_new(&discovery_paths);
+                            (readers, newly)
+                        })
+                        .await
+                        .expect("reader discovery task panicked");
+                        readers = updated_readers;
                         if let Ok(mut state) = app_state.write() {
-                            state.detect_available_tabs(&agent_paths);
+                            state.set_available_platforms(readers.platforms());
                         }
                         for platform in readers.platforms() {
                             platform_watchers
@@ -412,65 +421,7 @@ fn run_tui(
             match event {
                 AppEvent::Tick => {}
                 AppEvent::Key(key) => match key.code {
-                    KeyCode::Char('q') => break,
-                    // Esc backs out of session-selection mode; quits otherwise.
-                    KeyCode::Esc => {
-                        if let Ok(mut state) = app_state.write() {
-                            if state.sessions_focused {
-                                state.unfocus_sessions();
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    // Tab/←/→ switch tabs only when not selecting a session, so
-                    // the arrow keys can drive the list once it has focus.
-                    KeyCode::Tab | KeyCode::Right => {
-                        if let Ok(mut state) = app_state.write()
-                            && !state.sessions_focused
-                        {
-                            state.active_tab = state.active_tab.next_in(&state.available_tabs);
-                            state.reset_session_focus();
-                        }
-                    }
-                    KeyCode::Left => {
-                        if let Ok(mut state) = app_state.write()
-                            && !state.sessions_focused
-                        {
-                            state.active_tab = state.active_tab.prev_in(&state.available_tabs);
-                            state.reset_session_focus();
-                        }
-                    }
-                    // Down/j and Up/k enter the sessions list (highlighting the
-                    // first row) or move within it once focused.
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if let Ok(mut state) = app_state.write() {
-                            state.nav_down();
-                        }
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if let Ok(mut state) = app_state.write() {
-                            state.nav_up();
-                        }
-                    }
-                    // Enter: focus the list, then let the launcher resume
-                    // the selected session without exposing its OS policy here.
-                    KeyCode::Enter => {
-                        let selection = app_state
-                            .write()
-                            .ok()
-                            .and_then(|mut state| state.activate_sessions());
-                        if let Some(selection) = selection {
-                            launcher::resume(selection)?;
-                        }
-                    }
-                    KeyCode::Char('r') => {
-                        if let Ok(mut state) = app_state.write() {
-                            let tab = state.active_tab;
-                            state.clear_tab(tab);
-                            state.reset_session_focus();
-                        }
-                    }
+                    KeyCode::Char('q') | KeyCode::Esc => break,
                     _ => {}
                 },
             }

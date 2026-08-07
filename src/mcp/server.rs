@@ -236,13 +236,31 @@ impl AumMcpServer {
 
     #[tool(
         name = "get_file_operations",
-        description = "Get file operation statistics (returns 0 in spec 2; reader-side data not yet collected)."
+        description = "Get file/tool operation counts aggregated from local agent logs (reads, edits, terminals)."
     )]
     async fn get_file_operations(
         &self,
-        _req: Parameters<GetFileOpsRequest>,
+        Parameters(req): Parameters<GetFileOpsRequest>,
     ) -> Result<Json<FileOpsResponse>, String> {
-        Ok(Json(FileOpsResponse::default()))
+        let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let mut out = FileOpsResponse::default();
+        for (key, pr) in &report.platforms {
+            if let Some(a) = &req.analyzer
+                && key != a
+            {
+                continue;
+            }
+            let ops = select_tool_ops(&pr.tool_ops, req.date.as_deref());
+            let Some(ops) = ops else { continue };
+            out.files_read += ops.files_read;
+            out.files_edited += ops.files_edited;
+            out.files_added += ops.files_added;
+            out.files_deleted += ops.files_deleted;
+            out.terminal_commands += ops.terminal_commands;
+            out.lines_read += ops.lines_read;
+            out.lines_edited += ops.lines_edited;
+        }
+        Ok(Json(out))
     }
 
     #[tool(name = "get_session_stats", description = "Get per-session summary.")]
@@ -278,7 +296,7 @@ impl AumMcpServer {
 
     #[tool(
         name = "get_quota",
-        description = "Get live quota for Claude Code and Codex."
+        description = "Get live quota (Claude Code, Codex) and account identity for all platforms."
     )]
     async fn get_quota(&self) -> Result<Json<QuotaResponse>, String> {
         let report = self.collect(true).await.map_err(|e| e.to_string())?;
@@ -292,13 +310,30 @@ impl AumMcpServer {
                     platform: pr.platform_key.clone(),
                     tool_name: q.tool_name.clone(),
                     email: q.email.clone(),
+                    plan: q.plan.clone(),
+                    org: q.org.clone(),
                     windows: q.windows.clone(),
+                    live_summary: q.live_summary.clone(),
                     fetched_at: q.fetched_at.clone(),
                     error: q.error.clone(),
                 }
             })
             .collect();
         Ok(Json(QuotaResponse { quota }))
+    }
+}
+
+fn select_tool_ops<'a>(
+    ops: &'a stats::ToolOpsView,
+    date: Option<&str>,
+) -> Option<&'a stats::ToolOpsView> {
+    match date {
+        Some(date) => ops
+            .by_date
+            .iter()
+            .find(|(day, _)| day.to_string() == date)
+            .map(|(_, ops)| ops),
+        None => Some(ops),
     }
 }
 
@@ -479,6 +514,29 @@ mod tests {
         let result = server.get_file_operations(Parameters(req)).await.unwrap();
         assert_eq!(result.0.files_read, 0);
         assert_eq!(result.0.files_edited, 0);
+    }
+
+    #[test]
+    fn file_operations_date_selects_only_that_bucket() {
+        let mut all = stats::ToolOpsView {
+            files_read: 9,
+            ..Default::default()
+        };
+        all.by_date.insert(
+            crate::state::CompactDate::new(2026, 8, 7),
+            stats::ToolOpsView {
+                files_read: 2,
+                ..Default::default()
+            },
+        );
+        assert_eq!(select_tool_ops(&all, None).unwrap().files_read, 9);
+        assert_eq!(
+            select_tool_ops(&all, Some("2026-08-07"))
+                .unwrap()
+                .files_read,
+            2
+        );
+        assert!(select_tool_ops(&all, Some("2026-08-06")).is_none());
     }
 
     #[tokio::test]

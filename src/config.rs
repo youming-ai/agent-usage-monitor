@@ -12,14 +12,6 @@ pub struct Config {
     #[serde(default = "default_codex_path")]
     pub codex_path: PathBuf,
 
-    /// Path to Pi data directory (~/.pi/agent/sessions)
-    #[serde(default = "default_pi_path")]
-    pub pi_path: PathBuf,
-
-    /// Path to Cursor CLI data directory (~/.cursor)
-    #[serde(default = "default_cursor_path")]
-    pub cursor_path: PathBuf,
-
     /// Fallback polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -35,8 +27,6 @@ impl Default for Config {
         Self {
             claude_path: default_claude_path(),
             codex_path: default_codex_path(),
-            pi_path: default_pi_path(),
-            cursor_path: default_cursor_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -45,8 +35,8 @@ impl Default for Config {
 
 // Every `default_*_path` below is a thin `fn() -> PathBuf` shim around
 // `Platform::default_path` — required because `#[serde(default = "...")]`
-// needs a zero-arg free function. `Platform` is the single source of truth
-// for these paths.
+// needs a zero-arg free function. The platform registry is the single source
+// of truth; `Platform::default_path` delegates to it.
 use crate::state::Platform;
 
 fn default_claude_path() -> PathBuf {
@@ -55,14 +45,6 @@ fn default_claude_path() -> PathBuf {
 
 fn default_codex_path() -> PathBuf {
     Platform::Codex.default_path()
-}
-
-fn default_pi_path() -> PathBuf {
-    Platform::Pi.default_path()
-}
-
-fn default_cursor_path() -> PathBuf {
-    Platform::Cursor.default_path()
 }
 
 fn default_refresh() -> u64 {
@@ -134,5 +116,21 @@ mod tests {
         let deserialized: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.refresh, deserialized.refresh);
         assert_eq!(config.max_records, deserialized.max_records);
+    }
+
+    #[test]
+    fn unknown_path_keys_in_toml_are_ignored() {
+        // Old configs may still list cursor_path / grok_path; serde should not fail.
+        let raw = r#"
+claude_path = "/tmp/c"
+codex_path = "/tmp/x"
+cursor_path = "/tmp/old"
+grok_path = "/tmp/old2"
+refresh = 5
+max_records = 1000
+"#;
+        let config: Config = toml::from_str(raw).unwrap();
+        assert_eq!(config.claude_path, PathBuf::from("/tmp/c"));
+        assert_eq!(config.refresh, 5);
     }
 }

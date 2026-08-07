@@ -1,6 +1,5 @@
 pub mod claude;
 pub mod codex;
-pub mod cursor;
 pub(crate) mod util;
 
 use serde::{Deserialize, Serialize};
@@ -43,6 +42,7 @@ pub struct QuotaWindow {
     pub reset_in: Option<String>,
 }
 
+/// Live account usage pulled from vendor APIs (not local logs).
 #[derive(Debug, Clone)]
 pub struct QuotaInfo {
     #[allow(dead_code)]
@@ -50,7 +50,13 @@ pub struct QuotaInfo {
     pub email: Option<String>,
     #[allow(dead_code)]
     pub account_id: Option<String>,
+    /// Subscription / plan label from the vendor (e.g. `team`, `claude_team`).
+    pub plan: Option<String>,
+    /// Organization / workspace name when the API exposes one.
+    pub org: Option<String>,
     pub windows: Vec<QuotaWindow>,
+    /// One-line extras (credits, spend, rate-limit flags) for the live strip.
+    pub live_summary: Option<String>,
     pub fetched_at: std::time::Instant,
     pub error: Option<QuotaError>,
 }

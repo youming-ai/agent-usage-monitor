@@ -1,6 +1,6 @@
 # Agent Usage Monitor
 
-Real-time terminal dashboard for **Claude Code**, **Codex**, **Pi** & **Cursor CLI** usage — quota windows, token usage, and cost, read straight from local log files. No API keys required. The command is `aum`.
+Real-time terminal dashboard for **Claude Code** & **Codex** usage — quota windows, token usage, and cost, read straight from local log files. No API keys required. The command is `aum`.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -30,19 +30,12 @@ aum stats         # print JSON usage report (no TUI)
 |------|---------|-------------|
 | `--claude-path` | `~/.claude/projects` | Claude Code data directory |
 | `--codex-path` | `~/.codex` | Codex data directory |
-| `--pi-path` | `~/.pi/agent/sessions` | Pi data directory |
-| `--cursor-path` | `~/.cursor` | Cursor CLI data directory |
 | `-r, --refresh` | `5` | Fallback poll interval, in seconds |
 
-**Keys:** `Tab` / `←` / `→` switch tab · `↑` / `↓` focus & move through the sessions list · `Enter` resume the selected session in its agent CLI · `Esc` leave the list · `r` clear current tab · `q` quit
+**Keys:** `q` / `Esc` quit
 
-Selecting a session and pressing `Enter` opens that session in a **new terminal window**, resuming it in its working directory — `aum` keeps running so you can launch more. On macOS the window is the default terminal (Terminal.app, or iTerm if that's your default); on Linux it uses `x-terminal-emulator`, and if no terminal emulator is found it falls back to handing off the current terminal (`aum` exits).
-
-- **Claude Code** — `claude --resume <id>` (verified)
-- **Codex** — `codex resume <id>` (verified)
-- **Cursor** — `cursor-agent --resume=<id>` (best-effort; not yet verified against a live `cursor-agent`). Cursor sessions carry no recorded working directory, so they resume from the current directory.
-
-Only tabs for agents whose data directory exists are shown in the TUI.
+Only platforms whose data directory exists are shown, stacked top to bottom in
+the order Claude Code, Codex.
 
 ## JSON stats
 
@@ -90,19 +83,17 @@ Configuration is stored in `~/.config/aum/config.toml` (or platform equivalent).
 
 - `claude_path` - Path to Claude Code data directory
 - `codex_path` - Path to Codex data directory
-- `pi_path` - Path to Pi data directory
-- `cursor_path` - Path to Cursor CLI data directory
 - `refresh` - Fallback polling interval in seconds (minimum: 1)
 - `max_records` - Per-platform sliding-window size (default: 20000) used by all
-  TUI totals, model rows, and session rows. Lower it and the headline totals
-  cover proportionally less history; `aum stats` is unaffected, it always reads
+  TUI totals and model rows. Lower it and the headline totals cover
+  proportionally less history; `aum stats` is unaffected, it always reads
   the full logs
 
 Example:
 ```bash
 aum config set refresh 2
 aum config set max_records 50000
-aum config set cursor_path ~/.cursor
+aum config set codex_path ~/.codex
 ```
 
 ## Real-time updates
@@ -121,7 +112,7 @@ configured fallback poll still works there.
 ## MCP server
 
 `aum` can run as an MCP (Model Context Protocol) server, exposing usage
-data to AI agent CLIs (Claude Code, Cursor, Copilot) via JSON-RPC over stdio:
+data to AI agent CLIs (Claude Code, Codex, etc.) via JSON-RPC over stdio:
 
 ```bash
 aum mcp
@@ -149,7 +140,7 @@ Add to your client's MCP config (e.g., `~/.config/claude-code/.mcp.json`):
 | `get_daily_stats` | Daily usage breakdown (calls, cost, tokens, models) |
 | `get_model_usage` | AI model usage counts (sorted desc) |
 | `get_cost_breakdown` | Cost over a date range |
-| `get_file_operations` | File read/edited/added/deleted counts (returns 0 in current spec; reader-side data not yet collected) |
+| `get_file_operations` | File read/edited/added/deleted / terminal command counts from local logs |
 | `get_session_stats` | Per-session summary |
 | `get_quota` | Live Claude Code / Codex quota |
 
@@ -170,49 +161,37 @@ Expect a JSON response with `serverInfo.name = "aum"`.
 
 ## Layout
 
-Each agent tab uses the same layout; only the accent color and data source change. Claude and Codex also show quota bars when credentials are available.
-
-### Claude Code (quota + usage)
+All platforms whose data directory exists are stacked top to bottom in order —
+no tabs. Each section mirrors Claude Code’s Stats **Overview**: header,
+quota, contribution heatmap, and summary stats. Detailed model/session
+breakdowns live in `aum stats` JSON / MCP. Sections share the screen equally.
 
 ```
- CLAUDE   codex   CURSOR                                              ✓ you@mail.com
+ CLAUDE                                                            ✓ you@mail.com
 ───────────────────────────────────────────────────────────────────────────────
- ✓ 5h ▓▓▓▓▓▓▓▓▓▓░░  82%  resets 2h30m
- ✓ 7d ▓▓▓▓▓▓░░░░░░  54%  resets 4d6h
-┌ CLAUDE models (42) ───────────────────────────────────────────────────────────┐
-│ MODEL          INPUT   OUTPUT   CACHE     COST     #                          │
-│ claude-opus-4  1.2M    340.0k   8.1M      $12.34   42                         │
-└───────────────────────────────────────────────────────────────────────────────┘
-┌ sessions ─────────────────────────────────────────────────────────────────────┐
-│ SESSION                       TOKENS    REQUESTS                              │
-│ agent-usage-monitor a3f2c1d8  10.5k     2                                     │
-│ my-web-app 9b4e7f02           2.3k      1                                     │
-└───────────────────────────────────────────────────────────────────────────────┘
- 42 calls · $12.34                                                    tab·r·q
+ ✓ 5h ▓▓▓▓▓▓░░░░  82%  resets 2h30m  |  ✓ 7d ▓▓▓▓░░░░░░  54%  resets 4d6h
+      Jan Feb Mar Apr May Jun Jul Aug
+ Mon  · · · · · · · · · · · · · ■ ■ …
+ Wed  · · · · · · · · · · · ■ ■ ■ ■ …
+ Fri  · · · · · · · · · · ■ ■ ■ ■ ■ …
+      Less ■ ■ ■ ■ More
+ Favorite model: Opus 4      Total tokens: 9.6m
+ Sessions: 12                Longest session: 2h 15m
+ Active days: 40/90          Longest streak: 7 days
+ Most active day: Aug 6      Current streak: 3 days
+ Input 1.2m · Output 340.0k · Cache read 8.1m · Cache write 0
 ```
 
-### Cursor CLI (usage only)
+- **Live quota** (network) — vendor APIs using your local login: windows (5h/7d
+  and model-scoped when present), plan/org, credits/extra-usage. Prefixed
+  `live` in the UI. Claude: `api.anthropic.com/api/oauth/usage` + profile;
+  Codex: `chatgpt.com/backend-api/wham/usage`. No official day-by-day history.
+- **Heatmap + local overview** — from on-disk logs. Heatmap columns are
+  **Mon…Sun**, each row is one recent week, and cells expand across the full
+  terminal width. Overview: favorite model, streaks, token split. Always
+  prefixed `local activity`.
 
-```
- CURSOR   CLAUDE   codex
-───────────────────────────────────────────────────────────────────────────────
- (no quota API — usage from transcripts and store.db)
-┌ CURSOR models (3) ────────────────────────────────────────────────────────────┐
-│ MODEL               INPUT   OUTPUT   CACHE   COST     #                      │
-│ claude-sonnet-4-5   8.4k    2.1k     0      $0.00    3                       │
-└───────────────────────────────────────────────────────────────────────────────┘
-┌ sessions ─────────────────────────────────────────────────────────────────────┐
-│ SESSION                       TOKENS    REQUESTS                              │
-│ myproject a3f2c1d8            3.2k      1                                     │
-└───────────────────────────────────────────────────────────────────────────────┘
- 3 calls · $0.00                                                      tab·r·q
-```
-
-- **Quota bars** — one per window (Claude & Codex only); the fill shows remaining usage, with a status glyph (`✓` ≥50%, `⚠` ≥20%, `✗` <20%) and reset time.
-- **models** — per-model totals for the configured sliding window: tokens, cost, and request count.
-- **sessions** — per-conversation usage in the same window (tokens, requests), labelled `<dir> <id>` so multiple sessions in one project stay distinct.
-
-Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue, Cursor cyan); everything else stays default or dimmed. These are defined in `src/state/app_state.rs` (`Platform::primary_color`).
+Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
 
 ## How it works
 
@@ -220,15 +199,13 @@ Each platform uses an accent color matched to its official CLI theme or brand pa
 
 - **Claude Code** — `~/.claude/projects/**/*.jsonl`
 - **Codex** — `~/.codex/sessions/**/rollout-*.jsonl`
-- **Pi** — `~/.pi/agent/sessions/**/*.jsonl`
-- **Cursor CLI** — `~/.cursor/projects/**/agent-transcripts/**/*.jsonl`, `~/.cursor/chats/**/store.db`, and `~/.config/cursor/chats/**/store.db`
 
 Quota percentages come from the official endpoints, authenticated with your existing local credentials (Claude: macOS Keychain or `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`). Cost is computed from built-in pricing tables for Anthropic & OpenAI models; unknown models show `$0.00`.
 
 ### Adding a new agent
 
 Platform wiring lives in `src/platforms.rs` (`RegistryEntry`). A registry row
-contains its path keys, reader factory, resume command, and optional quota/account
+contains its path keys, reader factory, and optional quota/account
 fetchers, keeping runtime orchestration free of platform-specific match arms.
 
 ### Tests
