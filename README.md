@@ -186,8 +186,9 @@ breakdowns live in `aum stats` JSON / MCP. Sections share the screen equally.
   and model-scoped when present), plan/org, credits/extra-usage. Prefixed
   `live` in the UI. Claude: `api.anthropic.com/api/oauth/usage` + profile;
   Codex: `chatgpt.com/backend-api/wham/usage`. No official day-by-day history.
-- **Heatmap + local overview** — from on-disk logs (Mon-first contribution
-  graph, favorite model, streaks, token split). Prefixed `local activity`.
+- **Heatmap + local overview** — from on-disk logs. Heatmap is **one column per
+  week** (Mon–Sun total intensity, vertical bars, month labels). Overview:
+  favorite model, streaks, token split. Prefixed `local activity`.
 
 Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
 

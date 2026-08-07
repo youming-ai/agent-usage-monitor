@@ -60,16 +60,16 @@ fn render_platform(
     };
     let remain = h.saturating_sub(header_h + quota_h);
 
-    // Prefer full heatmap (9) + overview (6); drop overview, then shrink heatmap.
+    // Prefer full weekly heatmap + overview; drop overview, then shrink bars.
     let (heatmap_h, overview_h) =
         if remain >= heatmap::HEATMAP_FULL_HEIGHT + overview::OVERVIEW_LINES {
             (heatmap::HEATMAP_FULL_HEIGHT, overview::OVERVIEW_LINES)
         } else if remain >= heatmap::HEATMAP_FULL_HEIGHT {
             (heatmap::HEATMAP_FULL_HEIGHT, 0)
-        } else if remain >= 8 {
-            (remain.saturating_sub(0).min(9), 0)
+        } else if remain >= 3 {
+            (remain.min(8), 0)
         } else if remain >= 1 {
-            (remain.clamp(1, 7), 0)
+            (1, 0)
         } else {
             (0, 0)
         };
@@ -125,8 +125,8 @@ fn render_platform(
     }
 
     let heat_area = chunks[2];
-    if heat_area.height >= heatmap::HEATMAP_FULL_HEIGHT.saturating_sub(1) && heat_area.width > 4 {
-        // Widget fills the full width (adaptive cell width); no weeks cap here.
+    if heat_area.height >= 3 && heat_area.width > 4 {
+        // One column per week; fills width with adaptive cell size.
         frame.render_widget(heatmap::contribution_heatmap(&p.daily, accent), heat_area);
     } else if heat_area.height >= 1 && heat_area.width > 0 {
         frame.render_widget(heatmap::contribution_strip(&p.daily, accent), heat_area);
