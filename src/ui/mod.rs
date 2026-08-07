@@ -54,26 +54,29 @@ fn render_platform(
 
     let header_h: u16 = if h >= 2 { 2 } else { 1 };
     let quota_h: u16 = if has_quota && h >= 4 {
-        quota_bar::quota_panel_height(quota).min(h.saturating_sub(header_h + 2))
+        quota_bar::quota_panel_height(quota).min(h.saturating_sub(header_h + 3))
     } else {
         0
     };
     let remain = h.saturating_sub(header_h + quota_h);
+    let local_label_h = u16::from(remain > 0);
+    let content_remain = remain.saturating_sub(local_label_h);
 
-    // Prefer tall weekday×week grid + overview; drop overview, then shrink rows.
+    // Prefer the weekday-by-week grid plus overview. Shorter terminals show
+    // fewer recent week rows; only extremely short areas use the day strip.
     let (heatmap_h, overview_h) =
-        if remain >= heatmap::HEATMAP_FULL_HEIGHT + overview::OVERVIEW_LINES {
+        if content_remain >= heatmap::HEATMAP_FULL_HEIGHT + overview::OVERVIEW_LINES {
             (heatmap::HEATMAP_FULL_HEIGHT, overview::OVERVIEW_LINES)
-        } else if remain >= 10 {
+        } else if content_remain >= 10 {
             (
-                remain.saturating_sub(overview::OVERVIEW_LINES).max(3),
+                content_remain
+                    .saturating_sub(overview::OVERVIEW_LINES)
+                    .max(3),
                 overview::OVERVIEW_LINES,
             )
-        } else if remain >= 5 {
-            (remain, 0)
-        } else if remain >= 3 {
-            (remain, 0)
-        } else if remain >= 1 {
+        } else if content_remain >= 3 {
+            (content_remain, 0)
+        } else if content_remain >= 1 {
             (1, 0)
         } else {
             (0, 0)
@@ -82,6 +85,7 @@ fn render_platform(
     let chunks = Layout::vertical([
         Constraint::Length(header_h),
         Constraint::Length(quota_h),
+        Constraint::Length(local_label_h),
         Constraint::Length(heatmap_h),
         Constraint::Min(overview_h),
     ])
@@ -129,17 +133,24 @@ fn render_platform(
         frame.render_widget(quota_bar::quota_panel(platform, quota), chunks[1]);
     }
 
-    let heat_area = chunks[2];
+    if local_label_h > 0 {
+        frame.render_widget(
+            Paragraph::new(" local activity (from logs)")
+                .style(Style::default().fg(Color::DarkGray)),
+            chunks[2],
+        );
+    }
+
+    let heat_area = chunks[3];
     if heat_area.height >= 3 && heat_area.width >= 7 {
-        // Columns = Mon…Sun, rows = weeks; no month axis.
         frame.render_widget(heatmap::contribution_heatmap(&p.daily, accent), heat_area);
     } else if heat_area.height >= 1 && heat_area.width > 0 {
         frame.render_widget(heatmap::contribution_strip(&p.daily, accent), heat_area);
     }
 
-    if overview_h > 0 && chunks[3].height >= 3 {
+    if overview_h > 0 && chunks[4].height >= 3 {
         let stats = overview::OverviewStats::from_platform(p);
-        frame.render_widget(overview::overview_paragraph(&stats, accent), chunks[3]);
+        frame.render_widget(overview::overview_paragraph(&stats, accent), chunks[4]);
     }
 }
 
@@ -242,12 +253,12 @@ mod tests {
         );
         assert!(out.contains('■') || out.contains('·'), "heatmap cells");
         assert!(
-            out.contains("Mon") && out.contains("Tue") && out.contains("Wed"),
-            "weekday header instead of months:\n{out}"
+            out.contains("local activity"),
+            "local data must stay labeled"
         );
         assert!(
-            !out.contains("Jan") && !out.contains("Feb"),
-            "no month labels"
+            out.contains("Mon") && out.contains("Tue") && out.contains("Wed"),
+            "weekly heatmap should include weekday columns:\n{out}"
         );
         assert!(
             out.contains("Less") || out.contains("Favorite") || out.contains("local activity"),
@@ -262,6 +273,15 @@ mod tests {
         for h in 3..=7 {
             let _ = dump(80, h, sample_state());
         }
+    }
+
+    #[test]
+    fn standard_height_keeps_local_activity_label() {
+        let out = dump(80, 24, sample_state());
+        assert!(
+            out.contains("local activity"),
+            "local heatmaps must be labeled:\n{out}"
+        );
     }
 
     #[test]

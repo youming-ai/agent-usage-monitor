@@ -1,6 +1,7 @@
 use crate::state::{ToolOps, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::FileScanner;
@@ -11,6 +12,7 @@ pub struct ClaudeReader {
     data_dir: PathBuf,
     scanner: FileScanner<()>,
     pending_ops: ToolOps,
+    seen_tool_ids: HashSet<String>,
     /// session_id -> latest title seen in this process
     titles: std::collections::HashMap<String, String>,
 }
@@ -21,6 +23,7 @@ impl ClaudeReader {
             data_dir,
             scanner: FileScanner::new(),
             pending_ops: ToolOps::default(),
+            seen_tool_ids: HashSet::new(),
             titles: std::collections::HashMap::new(),
         }
     }
@@ -39,12 +42,13 @@ impl ClaudeReader {
         let files = self.find_files()?;
         let titles = &mut self.titles;
         let ops = &mut self.pending_ops;
+        let seen_tool_ids = &mut self.seen_tool_ids;
         self.scanner.scan(
             files,
             |_| (),
             |file, offset, _st| {
                 crate::reader::read_lines_from_offset(file, offset, |line| {
-                    parse_claude_line(line, titles, ops)
+                    parse_claude_line(line, titles, ops, seen_tool_ids)
                 })
             },
         )
@@ -67,12 +71,13 @@ impl ClaudeReader {
         files.dedup();
         let titles = &mut self.titles;
         let ops = &mut self.pending_ops;
+        let seen_tool_ids = &mut self.seen_tool_ids;
         self.scanner.scan_changed(
             files,
             |_| (),
             |file, offset, _st| {
                 crate::reader::read_lines_from_offset(file, offset, |line| {
-                    parse_claude_line(line, titles, ops)
+                    parse_claude_line(line, titles, ops, seen_tool_ids)
                 })
             },
         )
@@ -84,6 +89,7 @@ impl UsageSource for ClaudeReader {
         self.scanner.reset();
         self.titles.clear();
         self.pending_ops = ToolOps::default();
+        self.seen_tool_ids.clear();
         self.scan()
     }
 
@@ -104,6 +110,7 @@ fn parse_claude_line(
     line: &str,
     titles: &mut std::collections::HashMap<String, String>,
     ops: &mut ToolOps,
+    seen_tool_ids: &mut HashSet<String>,
 ) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
 
@@ -135,7 +142,17 @@ fn parse_claude_line(
             if block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
                 && let Some(name) = block.get("name").and_then(|n| n.as_str())
             {
-                note_tool(ops, name);
+                if let Some(id) = block.get("id").and_then(|id| id.as_str())
+                    && !seen_tool_ids.insert(id.to_string())
+                {
+                    continue;
+                }
+                note_tool(
+                    ops,
+                    name,
+                    v.get("timestamp").and_then(|value| value.as_str()),
+                    block.get("input"),
+                );
             }
         }
     }

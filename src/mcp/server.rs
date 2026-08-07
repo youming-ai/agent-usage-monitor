@@ -250,13 +250,15 @@ impl AumMcpServer {
             {
                 continue;
             }
-            out.files_read += pr.tool_ops.files_read;
-            out.files_edited += pr.tool_ops.files_edited;
-            out.files_added += pr.tool_ops.files_added;
-            out.files_deleted += pr.tool_ops.files_deleted;
-            out.terminal_commands += pr.tool_ops.terminal_commands;
-            out.lines_read += pr.tool_ops.lines_read;
-            out.lines_edited += pr.tool_ops.lines_edited;
+            let ops = select_tool_ops(&pr.tool_ops, req.date.as_deref());
+            let Some(ops) = ops else { continue };
+            out.files_read += ops.files_read;
+            out.files_edited += ops.files_edited;
+            out.files_added += ops.files_added;
+            out.files_deleted += ops.files_deleted;
+            out.terminal_commands += ops.terminal_commands;
+            out.lines_read += ops.lines_read;
+            out.lines_edited += ops.lines_edited;
         }
         Ok(Json(out))
     }
@@ -321,6 +323,20 @@ impl AumMcpServer {
     }
 }
 
+fn select_tool_ops<'a>(
+    ops: &'a stats::ToolOpsView,
+    date: Option<&str>,
+) -> Option<&'a stats::ToolOpsView> {
+    match date {
+        Some(date) => ops
+            .by_date
+            .iter()
+            .find(|(day, _)| day.to_string() == date)
+            .map(|(_, ops)| ops),
+        None => Some(ops),
+    }
+}
+
 #[tool_handler]
 impl ServerHandler for AumMcpServer {
     fn get_info(&self) -> ServerInfo {
@@ -340,8 +356,7 @@ impl ServerHandler for AumMcpServer {
             instructions: Some(
                 "aum is a usage monitor for AI coding agents. Use get_daily_stats, \
                  get_model_usage, get_cost_breakdown, get_file_operations, get_session_stats \
-                 for usage queries. get_quota returns live quota for Claude Code and Codex \
-                 for Claude Code and Codex."
+                 for usage queries. get_quota returns live quota for Claude Code and Codex."
                     .to_string(),
             ),
         }
@@ -499,6 +514,29 @@ mod tests {
         let result = server.get_file_operations(Parameters(req)).await.unwrap();
         assert_eq!(result.0.files_read, 0);
         assert_eq!(result.0.files_edited, 0);
+    }
+
+    #[test]
+    fn file_operations_date_selects_only_that_bucket() {
+        let mut all = stats::ToolOpsView {
+            files_read: 9,
+            ..Default::default()
+        };
+        all.by_date.insert(
+            crate::state::CompactDate::new(2026, 8, 7),
+            stats::ToolOpsView {
+                files_read: 2,
+                ..Default::default()
+            },
+        );
+        assert_eq!(select_tool_ops(&all, None).unwrap().files_read, 9);
+        assert_eq!(
+            select_tool_ops(&all, Some("2026-08-07"))
+                .unwrap()
+                .files_read,
+            2
+        );
+        assert!(select_tool_ops(&all, Some("2026-08-06")).is_none());
     }
 
     #[tokio::test]

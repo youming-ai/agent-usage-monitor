@@ -35,8 +35,8 @@ impl Default for Config {
 
 // Every `default_*_path` below is a thin `fn() -> PathBuf` shim around
 // `Platform::default_path` — required because `#[serde(default = "...")]`
-// needs a zero-arg free function. `Platform` is the single source of truth
-// for these paths.
+// needs a zero-arg free function. The platform registry is the single source
+// of truth; `Platform::default_path` delegates to it.
 use crate::state::Platform;
 
 fn default_claude_path() -> PathBuf {

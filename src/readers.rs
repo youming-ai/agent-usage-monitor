@@ -172,18 +172,7 @@ pub fn scan_reader_into(
     state: &Arc<RwLock<AppState>>,
     platform: Platform,
 ) -> usize {
-    let (result, tool_ops) = match reader.lock() {
-        Ok(mut r) => {
-            let result = r.scan_all();
-            let ops = r.take_tool_ops_delta();
-            (result, ops)
-        }
-        Err(_) => (
-            Err(ReaderError::new("reader lock poisoned")),
-            crate::state::ToolOps::default(),
-        ),
-    };
-    apply_result(result, tool_ops, state, platform)
+    run_reader_operation(reader, state, platform, |reader| reader.scan_all())
 }
 
 /// Incremental refresh: read only records appended since the last poll and
@@ -194,18 +183,7 @@ pub fn poll_reader_into(
     state: &Arc<RwLock<AppState>>,
     platform: Platform,
 ) -> usize {
-    let (result, tool_ops) = match reader.lock() {
-        Ok(mut r) => {
-            let result = r.poll_delta();
-            let ops = r.take_tool_ops_delta();
-            (result, ops)
-        }
-        Err(_) => (
-            Err(ReaderError::new("reader lock poisoned")),
-            crate::state::ToolOps::default(),
-        ),
-    };
-    apply_result(result, tool_ops, state, platform)
+    run_reader_operation(reader, state, platform, |reader| reader.poll_delta())
 }
 
 pub fn poll_changed_reader_into(
@@ -214,9 +192,18 @@ pub fn poll_changed_reader_into(
     platform: Platform,
     paths: &[PathBuf],
 ) -> usize {
+    run_reader_operation(reader, state, platform, |reader| reader.poll_changed(paths))
+}
+
+fn run_reader_operation(
+    reader: &SharedReader,
+    state: &Arc<RwLock<AppState>>,
+    platform: Platform,
+    operation: impl FnOnce(&mut dyn UsageSource) -> ReaderResult<Vec<crate::state::UsageRecord>>,
+) -> usize {
     let (result, tool_ops) = match reader.lock() {
         Ok(mut r) => {
-            let result = r.poll_changed(paths);
+            let result = operation(r.as_mut());
             let ops = r.take_tool_ops_delta();
             (result, ops)
         }

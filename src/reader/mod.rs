@@ -2,7 +2,7 @@ pub mod claude;
 pub mod codex;
 pub mod pricing;
 
-use crate::state::{ToolOps, UsageRecord};
+use crate::state::{CompactDate, ToolOps, UsageRecord};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
@@ -287,22 +287,159 @@ pub(crate) fn classify_tool_name(name: &str) -> Option<&'static str> {
         "write" | "write_file" | "writefile" | "create_file" | "createfile" => Some("add"),
         "edit" | "search_replace" | "strreplace" | "multiedit" | "apply_patch" | "applypatch"
         | "notebookedit" | "edit_file" => Some("edit"),
-        "bash" | "shell" | "run_terminal_command" | "run_command" | "terminal" | "execute" => {
-            Some("terminal")
-        }
+        "bash"
+        | "shell"
+        | "run_terminal_command"
+        | "run_command"
+        | "terminal"
+        | "execute"
+        | "exec"
+        | "exec_command"
+        | "write_stdin" => Some("terminal"),
         _ => None,
     }
 }
 
-pub(crate) fn note_tool(ops: &mut ToolOps, name: &str) {
-    match classify_tool_name(name) {
-        Some("read") => ops.files_read += 1,
-        Some("edit") => ops.files_edited += 1,
-        Some("add") => ops.files_added += 1,
-        Some("delete") => ops.files_deleted += 1,
-        Some("terminal") => ops.terminal_commands += 1,
-        _ => {}
+pub(crate) fn note_tool(
+    ops: &mut ToolOps,
+    name: &str,
+    timestamp: Option<&str>,
+    input: Option<&serde_json::Value>,
+) {
+    let Some(kind) = classify_tool_name(name) else {
+        return;
+    };
+    let (lines_read, lines_edited) = tool_line_counts(kind, input);
+    let patch_files = patch_file_counts(input);
+    apply_tool_count(ops, kind, lines_read, lines_edited, patch_files);
+
+    if let Some(date) = timestamp
+        .and_then(|value| value.parse::<chrono::DateTime<chrono::Utc>>().ok())
+        .map(CompactDate::from_datetime)
+    {
+        apply_tool_count(
+            ops.by_date.entry(date).or_default(),
+            kind,
+            lines_read,
+            lines_edited,
+            patch_files,
+        );
     }
+}
+
+fn apply_tool_count(
+    ops: &mut ToolOps,
+    kind: &str,
+    lines_read: u64,
+    lines_edited: u64,
+    patch_files: Option<(u64, u64, u64)>,
+) {
+    match kind {
+        "read" => ops.files_read += 1,
+        "edit" => match patch_files {
+            Some((added, deleted, edited)) if added + deleted + edited > 0 => {
+                ops.files_added += added;
+                ops.files_deleted += deleted;
+                ops.files_edited += edited;
+            }
+            _ => ops.files_edited += 1,
+        },
+        "add" => ops.files_added += 1,
+        "delete" => ops.files_deleted += 1,
+        "terminal" => ops.terminal_commands += 1,
+        _ => return,
+    }
+    ops.lines_read += lines_read;
+    ops.lines_edited += lines_edited;
+}
+
+fn tool_line_counts(kind: &str, input: Option<&serde_json::Value>) -> (u64, u64) {
+    let Some(input) = input else { return (0, 0) };
+    if kind == "read" {
+        let lines = input
+            .get("limit")
+            .or_else(|| input.get("line_count"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        return (lines, 0);
+    }
+    if !matches!(kind, "edit" | "add") {
+        return (0, 0);
+    }
+
+    let text = tool_input_text(input);
+    if let Some(patch) = text {
+        let changed = patch
+            .lines()
+            .filter(|line| {
+                (line.starts_with('+') && !line.starts_with("+++"))
+                    || (line.starts_with('-') && !line.starts_with("---"))
+            })
+            .count() as u64;
+        return (0, changed);
+    }
+
+    if let Some(changes) = input.get("changes").and_then(serde_json::Value::as_object) {
+        let changed = changes
+            .values()
+            .filter_map(|change| {
+                change
+                    .get("unified_diff")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .flat_map(str::lines)
+            .filter(|line| {
+                (line.starts_with('+') && !line.starts_with("+++"))
+                    || (line.starts_with('-') && !line.starts_with("---"))
+            })
+            .count() as u64;
+        return (0, changed);
+    }
+
+    let changed = ["new_string", "replacement", "content"]
+        .iter()
+        .find_map(|key| input.get(*key).and_then(serde_json::Value::as_str))
+        .map(|value| value.lines().count() as u64)
+        .unwrap_or(0);
+    (0, changed)
+}
+
+fn tool_input_text(input: &serde_json::Value) -> Option<&str> {
+    input
+        .as_str()
+        .or_else(|| input.get("patch").and_then(serde_json::Value::as_str))
+        .or_else(|| input.get("input").and_then(serde_json::Value::as_str))
+}
+
+fn patch_file_counts(input: Option<&serde_json::Value>) -> Option<(u64, u64, u64)> {
+    let input = input?;
+    if let Some(patch) = tool_input_text(input) {
+        let added = patch
+            .lines()
+            .filter(|line| line.starts_with("*** Add File:"))
+            .count() as u64;
+        let deleted = patch
+            .lines()
+            .filter(|line| line.starts_with("*** Delete File:"))
+            .count() as u64;
+        let edited = patch
+            .lines()
+            .filter(|line| line.starts_with("*** Update File:"))
+            .count() as u64;
+        return Some((added, deleted, edited));
+    }
+
+    let changes = input.get("changes")?.as_object()?;
+    let mut counts = (0, 0, 0);
+    for change in changes.values() {
+        match change.get("type").and_then(serde_json::Value::as_str) {
+            Some("add" | "create") => counts.0 += 1,
+            Some("delete" | "remove") => counts.1 += 1,
+            Some("update" | "modify") => counts.2 += 1,
+            _ => counts.2 += 1,
+        }
+    }
+    Some(counts)
 }
 
 #[cfg(test)]
@@ -326,5 +463,55 @@ mod tests {
     fn basename_uses_path_file_name() {
         assert_eq!(basename("/Users/me/repo"), "repo");
         assert_eq!(basename("repo"), "repo");
+    }
+
+    #[test]
+    fn tool_counts_include_date_and_known_line_counts() {
+        let mut ops = ToolOps::default();
+        note_tool(
+            &mut ops,
+            "Read",
+            Some("2026-08-07T12:00:00Z"),
+            Some(&serde_json::json!({ "limit": 80 })),
+        );
+        note_tool(
+            &mut ops,
+            "apply_patch",
+            Some("2026-08-07T12:01:00Z"),
+            Some(&serde_json::json!(
+                "*** Begin Patch\n*** Update File: a.rs\n-old\n+new\n*** End Patch"
+            )),
+        );
+        note_tool(
+            &mut ops,
+            "functions.exec",
+            Some("2026-08-07T12:02:00Z"),
+            None,
+        );
+        assert_eq!(ops.files_read, 1);
+        assert_eq!(ops.files_edited, 1);
+        assert_eq!(ops.lines_read, 80);
+        assert_eq!(ops.lines_edited, 2);
+        assert_eq!(ops.terminal_commands, 1);
+        let daily = ops.by_date.get(&CompactDate::new(2026, 8, 7)).unwrap();
+        assert_eq!(daily.files_read, 1);
+        assert_eq!(daily.files_edited, 1);
+    }
+
+    #[test]
+    fn patch_file_directives_preserve_add_delete_and_edit_kinds() {
+        let mut ops = ToolOps::default();
+        note_tool(
+            &mut ops,
+            "apply_patch",
+            None,
+            Some(&serde_json::json!(
+                "*** Begin Patch\n*** Add File: a\n+x\n*** Delete File: b\n-y\n*** Update File: c\n-z\n+w\n*** End Patch"
+            )),
+        );
+        assert_eq!(ops.files_added, 1);
+        assert_eq!(ops.files_deleted, 1);
+        assert_eq!(ops.files_edited, 1);
+        assert_eq!(ops.lines_edited, 4);
     }
 }

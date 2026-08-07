@@ -2,6 +2,7 @@ use crate::reader::pricing;
 use crate::state::{ToolOps, UsageRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::FileScanner;
@@ -17,6 +18,7 @@ struct FileState {
     model: String,
     dir: String,
     sid: String,
+    seen_tool_call_ids: HashSet<String>,
 }
 
 impl FileState {
@@ -63,6 +65,7 @@ impl CodexReader {
                 model: "unknown".to_string(),
                 dir: "codex".to_string(),
                 sid: extract_codex_project(file),
+                seen_tool_call_ids: HashSet::new(),
             },
             |path, skip, st| read_codex_from_offset(path, skip, st, ops),
         )
@@ -89,6 +92,7 @@ impl CodexReader {
                 model: "unknown".to_string(),
                 dir: "codex".to_string(),
                 sid: extract_codex_project(file),
+                seen_tool_call_ids: HashSet::new(),
             },
             |path, skip, st| read_codex_from_offset(path, skip, st, ops),
         )
@@ -171,16 +175,25 @@ fn parse_codex_line(line: &str, st: &mut FileState, ops: &mut ToolOps) -> Option
                     .or_else(|| payload.get("tool_name"))
                     .and_then(|n| n.as_str())
                     .unwrap_or(item_type);
-                note_tool(ops, name);
+                if first_tool_event(st, payload) {
+                    note_tool(
+                        ops,
+                        name,
+                        v.get("timestamp").and_then(|value| value.as_str()),
+                        payload.get("input").or_else(|| payload.get("arguments")),
+                    );
+                }
             }
             "function_call_output" | "custom_tool_call_output" => {}
             _ => {}
         }
-        if item_type == "function_call" || item_type.contains("patch") {
-            // patch_apply style tools
-            if item_type.contains("patch") {
-                note_tool(ops, "apply_patch");
-            }
+        if item_type.contains("patch") && first_tool_event(st, payload) {
+            note_tool(
+                ops,
+                "apply_patch",
+                v.get("timestamp").and_then(|value| value.as_str()),
+                payload.get("input"),
+            );
         }
         return None;
     }
@@ -189,11 +202,25 @@ fn parse_codex_line(line: &str, st: &mut FileState, ops: &mut ToolOps) -> Option
         let payload = v.get("payload")?;
         let payload_type = payload.get("type")?.as_str()?;
         if payload_type == "patch_apply_end" {
-            note_tool(ops, "apply_patch");
+            if first_tool_event(st, payload) {
+                note_tool(
+                    ops,
+                    "apply_patch",
+                    v.get("timestamp").and_then(|value| value.as_str()),
+                    Some(payload),
+                );
+            }
             return None;
         }
         if payload_type == "web_search_end" {
-            note_tool(ops, "web_search");
+            if first_tool_event(st, payload) {
+                note_tool(
+                    ops,
+                    "web_search",
+                    v.get("timestamp").and_then(|value| value.as_str()),
+                    None,
+                );
+            }
             return None;
         }
         // Also check task_started for model (fallback)
@@ -258,14 +285,10 @@ fn parse_codex_line(line: &str, st: &mut FileState, ops: &mut ToolOps) -> Option
         let timestamp_str = v.get("timestamp")?.as_str()?;
         let timestamp: DateTime<Utc> = timestamp_str.parse().ok()?;
 
-        // Price reasoning tokens at the output rate.
-        let cost_usd = pricing::calculate_cost(
-            &st.model,
-            delta_input,
-            delta_output + delta_reasoning,
-            delta_cached,
-            0,
-        );
+        // Codex reports reasoning_output_tokens as a subset of output_tokens,
+        // so output already contains the full billable amount.
+        let cost_usd =
+            pricing::calculate_cost(&st.model, delta_input, delta_output, delta_cached, 0);
 
         // Codex token_count events carry no per-event id. The cumulative totals
         // change monotonically, so pairing them with the timestamp gives a stable
@@ -294,6 +317,13 @@ fn parse_codex_line(line: &str, st: &mut FileState, ops: &mut ToolOps) -> Option
     }
 
     None
+}
+
+fn first_tool_event(st: &mut FileState, payload: &Value) -> bool {
+    payload
+        .get("call_id")
+        .and_then(Value::as_str)
+        .is_none_or(|id| st.seen_tool_call_ids.insert(id.to_string()))
 }
 
 fn extract_codex_project(path: &Path) -> String {
@@ -339,6 +369,74 @@ mod tests {
         format!(
             r#"{{"type":"event_msg","timestamp":"{ts}","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"output_tokens":{output},"cached_input_tokens":0}},"last_token_usage":{last}}}}}}}"#
         )
+    }
+
+    #[test]
+    fn reasoning_tokens_are_not_added_to_inclusive_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let last = serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cached_input_tokens": 0,
+            "reasoning_output_tokens": 20
+        });
+        write_rollout(
+            &sessions,
+            "rollout-reasoning.jsonl",
+            &[
+                turn_context("gpt-5.4"),
+                token_count_with_last("2026-05-29T10:01:00Z", 100, 50, &last.to_string()),
+            ],
+        );
+
+        let mut reader = reader_for(&sessions);
+        let records = reader.scan_all().unwrap();
+        assert_eq!(records[0].output_tokens, 50);
+        assert_eq!(records[0].reasoning_tokens, 20);
+        assert_eq!(
+            records[0].cost_usd,
+            pricing::calculate_cost("gpt-5.4", 100, 50, 0, 0)
+        );
+    }
+
+    #[test]
+    fn patch_call_and_completion_are_counted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let call = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-08-07T10:00:00Z",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": "call-1",
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n-old\n+new\n*** End Patch"
+            }
+        })
+        .to_string();
+        let completion = serde_json::json!({
+            "type": "event_msg",
+            "timestamp": "2026-08-07T10:00:01Z",
+            "payload": { "type": "patch_apply_end", "call_id": "call-1" }
+        })
+        .to_string();
+        write_rollout(&sessions, "rollout-tools.jsonl", &[call, completion]);
+
+        let mut reader = reader_for(&sessions);
+        assert!(reader.scan_all().unwrap().is_empty());
+        let ops = reader.take_tool_ops_delta();
+        assert_eq!(ops.files_edited, 1);
+        assert_eq!(ops.lines_edited, 2);
+        assert_eq!(
+            ops.by_date
+                .get(&crate::state::CompactDate::new(2026, 8, 7))
+                .unwrap()
+                .files_edited,
+            1
+        );
     }
 
     #[test]

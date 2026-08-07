@@ -252,6 +252,9 @@ pub struct ToolOps {
     pub terminal_commands: u64,
     pub lines_read: u64,
     pub lines_edited: u64,
+    /// Per-day operation totals used by dated MCP queries. Daily entries do
+    /// not themselves contain nested `by_date` maps.
+    pub by_date: BTreeMap<CompactDate, ToolOps>,
 }
 
 impl ToolOps {
@@ -263,6 +266,9 @@ impl ToolOps {
         self.terminal_commands += other.terminal_commands;
         self.lines_read += other.lines_read;
         self.lines_edited += other.lines_edited;
+        for (date, daily) in &other.by_date {
+            self.by_date.entry(*date).or_default().accumulate(daily);
+        }
     }
 }
 
@@ -432,11 +438,7 @@ impl AppState {
 }
 
 fn record_tokens(r: &UsageRecord) -> u64 {
-    r.input_tokens
-        + r.output_tokens
-        + r.cache_read_tokens
-        + r.cache_creation_tokens
-        + r.reasoning_tokens
+    r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens
 }
 
 fn upsert_model_aggregate(map: &mut HashMap<InternedString, ModelTotals>, r: &UsageRecord) {
@@ -678,6 +680,21 @@ mod tests {
         assert_eq!(m.request_count, 2);
         assert_eq!(s.platforms[claude_idx()].window_cost, 5.0);
         assert_eq!(s.platforms[claude_idx()].window_calls, 2);
+    }
+
+    #[test]
+    fn reasoning_is_a_subset_of_output_in_combined_totals() {
+        let mut state = AppState::with_capacity(10);
+        let record = UsageRecord {
+            input_tokens: 100,
+            output_tokens: 50,
+            reasoning_tokens: 20,
+            ..rec("gpt-5.4", 100, 50, 1.0)
+        };
+        state.add_records(Platform::Codex, vec![record]);
+        let platform = state.platform(Platform::Codex);
+        assert_eq!(platform.sessions.values().next().unwrap().tokens, 150);
+        assert_eq!(platform.daily.values().next().unwrap().tokens, 150);
     }
 
     /// A reader that re-reads one file from byte 0 (truncation, or a store.db

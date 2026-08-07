@@ -96,6 +96,10 @@ pub struct ToolOpsView {
     pub terminal_commands: u64,
     pub lines_read: u64,
     pub lines_edited: u64,
+    /// Internal per-day breakdown for MCP date filtering. The public stats
+    /// JSON keeps the existing flat aggregate schema.
+    #[serde(skip_serializing)]
+    pub by_date: BTreeMap<crate::state::CompactDate, ToolOpsView>,
 }
 
 impl From<crate::state::ToolOps> for ToolOpsView {
@@ -108,6 +112,11 @@ impl From<crate::state::ToolOps> for ToolOpsView {
             terminal_commands: o.terminal_commands,
             lines_read: o.lines_read,
             lines_edited: o.lines_edited,
+            by_date: o
+                .by_date
+                .into_iter()
+                .map(|(date, ops)| (date, Self::from(ops)))
+                .collect(),
         }
     }
 }

@@ -197,15 +197,15 @@ fn parse_usage_response(
 ) -> Option<QuotaInfo> {
     let mut windows = Vec::new();
 
-    if let Some(five_hour) = data.get("five_hour") {
-        if let Some(w) = window_from_block("5h", five_hour) {
-            windows.push(w);
-        }
+    if let Some(five_hour) = data.get("five_hour")
+        && let Some(w) = window_from_block("5h", five_hour)
+    {
+        windows.push(w);
     }
-    if let Some(seven_day) = data.get("seven_day") {
-        if let Some(w) = window_from_block("7d", seven_day) {
-            windows.push(w);
-        }
+    if let Some(seven_day) = data.get("seven_day")
+        && let Some(w) = window_from_block("7d", seven_day)
+    {
+        windows.push(w);
     }
     for (key, label) in EXTRA_WINDOW_KEYS {
         if let Some(block) = data.get(*key)

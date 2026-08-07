@@ -34,9 +34,10 @@ pub struct Heatmap<'a> {
     accent: Color,
 }
 
-/// How many week-rows fit, and cell width for the 7 weekday columns.
-/// Returns `(gutter, weeks, cell_w, pad_left)` where pad centers the 7 cols.
-fn layout(area: Rect) -> (u16, usize, u16, u16) {
+/// How many week rows fit and how the seven weekday columns divide the width.
+/// The first `extra` columns are one cell wider, so every terminal column is
+/// used even when the width is not divisible by seven.
+fn layout(area: Rect) -> (usize, u16, u16) {
     let has_header = area.height >= 2;
     let has_legend = area.height >= 3;
     let rows_avail = area
@@ -46,13 +47,18 @@ fn layout(area: Rect) -> (u16, usize, u16, u16) {
 
     let weeks = (TARGET_WEEKS as usize).min(rows_avail).max(1);
 
-    // 7 weekday columns fill the width (optional 1-col left pad).
-    let gutter = 0u16;
-    let avail = area.width.saturating_sub(gutter).max(7);
-    let cell_w = (avail / 7).max(1);
-    let used = cell_w * 7;
-    let pad_left = gutter + (avail - used) / 2;
-    (gutter, weeks, cell_w, pad_left)
+    let base_w = (area.width / 7).max(1);
+    let extra = area.width % 7;
+    (weeks, base_w, extra)
+}
+
+fn col_width(base_w: u16, extra: u16, col: usize) -> u16 {
+    base_w + u16::from((col as u16) < extra)
+}
+
+fn col_x(base_w: u16, extra: u16, col: usize) -> u16 {
+    let col = col as u16;
+    col * base_w + col.min(extra)
 }
 
 impl Widget for Heatmap<'_> {
@@ -64,7 +70,7 @@ impl Widget for Heatmap<'_> {
         let levels = accent_levels(self.accent);
         let has_header = area.height >= 2;
         let has_legend = area.height >= 3;
-        let (_, weeks, cell_w, pad_left) = layout(area);
+        let (weeks, base_w, extra) = layout(area);
 
         let grid_top = area.y + u16::from(has_header);
         let grid_h = if has_legend {
@@ -99,14 +105,11 @@ impl Widget for Heatmap<'_> {
         // Header: Mon Tue Wed Thu Fri Sat Sun
         if has_header {
             for (col, label) in WEEKDAY_LABELS.iter().enumerate() {
-                let x = area.x + pad_left + (col as u16) * cell_w;
+                let x = area.x + col_x(base_w, extra, col);
+                let cell_w = col_width(base_w, extra, col);
                 // Center short label in the cell when wide enough.
-                let label_x = if cell_w >= 3 {
-                    x + (cell_w.saturating_sub(3)) / 2
-                } else {
-                    x
-                };
-                if label_x + 3 <= area.x + area.width {
+                if cell_w >= 3 {
+                    let label_x = x + (cell_w - 3) / 2;
                     put_str(
                         buf,
                         label_x,
@@ -114,8 +117,9 @@ impl Widget for Heatmap<'_> {
                         label,
                         Style::default().fg(Color::DarkGray),
                     );
-                } else if cell_w >= 1 {
-                    // Single letter fallback
+                } else {
+                    // Narrow cells always use one letter; writing the full
+                    // label here would overwrite adjacent weekday columns.
                     let ch = &label[..1];
                     put_str(buf, x, area.y, ch, Style::default().fg(Color::DarkGray));
                 }
@@ -131,7 +135,8 @@ impl Widget for Heatmap<'_> {
             for col in 0..7 {
                 let metric = metrics[row * 7 + col];
                 let level = intensity(metric, max);
-                let x0 = area.x + pad_left + (col as u16) * cell_w;
+                let x0 = area.x + col_x(base_w, extra, col);
+                let cell_w = col_width(base_w, extra, col);
                 for dx in 0..cell_w {
                     let x = x0 + dx;
                     if x >= area.x + area.width {
@@ -157,13 +162,13 @@ impl Widget for Heatmap<'_> {
         // Legend
         if has_legend {
             let y = area.y + area.height - 1;
-            let mut x = area.x + pad_left;
+            let mut x = area.x;
             put_str(buf, x, y, "Less ", Style::default().fg(Color::DarkGray));
             x += 5;
-            for level in 1..=4usize {
+            for color in levels.iter().skip(1) {
                 if let Some(cell) = buf.cell_mut((x, y)) {
                     cell.set_symbol("■");
-                    cell.set_style(Style::default().fg(levels[level]));
+                    cell.set_style(Style::default().fg(*color));
                 }
                 x += 1;
             }
@@ -308,11 +313,22 @@ mod tests {
 
     #[test]
     fn layout_seven_columns_fill_width() {
-        let area = Rect::new(0, 0, 70, 20);
-        let (_, weeks, cell_w, pad) = layout(area);
+        let area = Rect::new(0, 0, 80, 20);
+        let (weeks, base_w, extra) = layout(area);
         assert!(weeks >= 1);
-        assert_eq!(cell_w * 7 + pad * 2 <= 70 || cell_w * 7 <= 70, true);
-        assert_eq!(cell_w, 10); // 70/7
+        assert_eq!(base_w * 7 + extra, 80);
+        assert_eq!(col_x(base_w, extra, 6) + col_width(base_w, extra, 6), 80);
+    }
+
+    #[test]
+    fn narrow_weekday_labels_do_not_overlap() {
+        let area = Rect::new(0, 0, 7, 3);
+        let mut buffer = Buffer::empty(area);
+        contribution_heatmap(&BTreeMap::new(), Color::Blue).render(area, &mut buffer);
+        let header: String = (0..7)
+            .filter_map(|x| buffer.cell((x, 0)).map(|cell| cell.symbol()))
+            .collect();
+        assert_eq!(header, "MTWTFSS");
     }
 
     #[test]

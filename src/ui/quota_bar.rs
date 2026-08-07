@@ -56,13 +56,9 @@ fn mini_window_spans(
 /// How many terminal rows the live quota panel needs for this payload.
 pub fn quota_panel_height(quota: Option<&QuotaInfo>) -> u16 {
     match quota {
-        Some(q)
-            if q.plan.is_some()
-                || q.org.is_some()
-                || q.live_summary.is_some()
-                || q.windows.len() > 2 =>
-        {
-            2
+        Some(q) if !q.windows.is_empty() => {
+            let meta = u16::from(q.plan.is_some() || q.org.is_some() || q.live_summary.is_some());
+            q.windows.len() as u16 + meta
         }
         _ => 1,
     }
@@ -95,23 +91,21 @@ pub fn quota_panel(platform: Platform, quota: Option<&QuotaInfo>) -> Paragraph<'
         }
         Some(q) => {
             let mut lines = Vec::new();
-            // Row 1: live window bars
-            let mut spans = vec![Span::styled(" live ", dim)];
+            // One window per row prevents later model-scoped limits from
+            // being silently clipped at ordinary terminal widths.
             for (i, w) in q.windows.iter().enumerate() {
-                if i > 0 {
-                    spans.push(Span::styled("  |  ", dim));
-                }
+                let mut spans = vec![Span::styled(if i == 0 { " live " } else { "      " }, dim)];
                 spans.extend(mini_window_spans(
                     accent,
                     &w.label,
                     w.remaining_percent,
                     w.reset_in.as_deref(),
                 ));
+                lines.push(Line::from(spans));
             }
-            lines.push(Line::from(spans));
 
-            // Row 2: plan / org / credits (when present or many windows)
-            if quota_panel_height(Some(q)) >= 2 {
+            // Final row: plan / org / credits when present.
+            if q.plan.is_some() || q.org.is_some() || q.live_summary.is_some() {
                 let mut meta = vec![Span::styled("      ", dim)];
                 let mut first = true;
                 let mut push_sep = |meta: &mut Vec<Span<'static>>| {
@@ -131,10 +125,6 @@ pub fn quota_panel(platform: Platform, quota: Option<&QuotaInfo>) -> Paragraph<'
                 if let Some(sum) = q.live_summary.as_deref() {
                     push_sep(&mut meta);
                     meta.push(Span::styled(sum.to_string(), dim));
-                }
-                if first {
-                    // Extra windows overflow: show count hint
-                    meta.push(Span::styled(format!("{} windows", q.windows.len()), dim));
                 }
                 lines.push(Line::from(meta));
             }
@@ -189,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn height_grows_when_plan_present() {
+    fn extra_windows_get_their_own_rows() {
         use std::time::Instant;
         let q = QuotaInfo {
             tool_name: "Claude".into(),
@@ -197,12 +187,32 @@ mod tests {
             account_id: None,
             plan: Some("team".into()),
             org: None,
-            windows: vec![],
+            windows: ["5h", "7d", "Opus"]
+                .into_iter()
+                .map(|label| crate::quota::QuotaWindow {
+                    label: label.into(),
+                    remaining_percent: Some(0.5),
+                    resets_at: None,
+                    reset_in: None,
+                })
+                .collect(),
             live_summary: None,
             fetched_at: Instant::now(),
             error: None,
         };
-        assert_eq!(quota_panel_height(Some(&q)), 2);
+        assert_eq!(quota_panel_height(Some(&q)), 4);
         assert_eq!(quota_panel_height(None), 1);
+
+        use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+        let area = Rect::new(0, 0, 60, 4);
+        let mut buffer = Buffer::empty(area);
+        quota_panel(Platform::ClaudeCode, Some(&q)).render(area, &mut buffer);
+        let rendered: String = (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .filter_map(|pos| buffer.cell(pos).map(|cell| cell.symbol()))
+            .collect();
+        assert!(rendered.contains("5h"));
+        assert!(rendered.contains("7d"));
+        assert!(rendered.contains("Opus"));
     }
 }

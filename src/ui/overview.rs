@@ -10,8 +10,8 @@ use ratatui::{
 };
 use std::collections::BTreeMap;
 
-/// Lines needed for the full overview block (label + stats rows).
-pub const OVERVIEW_LINES: u16 = 7;
+/// Lines needed for the full overview stats block.
+pub const OVERVIEW_LINES: u16 = 5;
 
 #[derive(Debug, Clone)]
 pub struct OverviewStats {
@@ -40,7 +40,9 @@ impl OverviewStats {
         let mut cache_write = 0u64;
         for m in p.models.values() {
             input += m.total_input;
-            output += m.total_output + m.total_reasoning;
+            // Codex reasoning is a subset of output, not an additional token
+            // category. Keep the split available without inflating totals.
+            output += m.total_output;
             cache_read += m.total_cache_read;
             cache_write += m.total_cache_creation;
             if m.request_count > best_calls {
@@ -94,7 +96,6 @@ pub fn overview_paragraph(stats: &OverviewStats, accent: Color) -> Paragraph<'st
     };
 
     let lines = vec![
-        Line::from(vec![Span::styled(" local activity (from logs) ", dim)]),
         Line::from(vec![
             Span::styled("Favorite model: ", label),
             Span::styled(stats.favorite_model.clone(), accent_style),
