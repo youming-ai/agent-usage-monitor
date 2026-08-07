@@ -34,9 +34,6 @@ aum stats         # print JSON usage report (no TUI)
 
 **Keys:** `q` / `Esc` quit
 
-Only platforms whose data directory exists are shown, stacked top to bottom in
-the order Claude Code, Codex.
-
 ## JSON stats
 
 For scripts, CI, and external monitoring, `aum` can emit a structured JSON
@@ -98,8 +95,8 @@ aum config set codex_path ~/.codex
 
 ## Real-time updates
 
-The TUI uses `notify` (FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW
-on Windows) to react to file changes immediately, instead of polling on a timer.
+The TUI uses `notify` (FSEvents on macOS, inotify on Linux) to react to file
+changes immediately, instead of polling on a timer.
 A 50 ms per-platform debounce coalesces bursts of writes; the configured fallback
 poll (5 s by default) ensures the display stays current even if a FS event is
 dropped. Watcher events pass the changed path to the reader so normal refreshes
