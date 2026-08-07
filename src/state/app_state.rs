@@ -532,19 +532,6 @@ fn upsert_day_aggregate(map: &mut BTreeMap<CompactDate, DayTotals>, r: &UsageRec
     entry.calls += 1;
 }
 
-fn reverse_day_aggregate(map: &mut BTreeMap<CompactDate, DayTotals>, r: &UsageRecord) {
-    let day = CompactDate::from_datetime(r.timestamp);
-    if let std::collections::btree_map::Entry::Occupied(mut entry) = map.entry(day) {
-        let d = entry.get_mut();
-        d.cost_usd = (d.cost_usd - r.cost_usd).max(0.0);
-        d.tokens = d.tokens.saturating_sub(record_tokens(r));
-        d.calls = d.calls.saturating_sub(1);
-        if d.calls == 0 {
-            entry.remove();
-        }
-    }
-}
-
 /// Drop day buckets older than ~370 days so the heatmap can't grow forever.
 fn prune_daily(map: &mut BTreeMap<CompactDate, DayTotals>) {
     let today = CompactDate::from_datetime(Utc::now());
