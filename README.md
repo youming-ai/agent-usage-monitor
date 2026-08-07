@@ -163,8 +163,9 @@ Expect a JSON response with `serverInfo.name = "aum"`.
 
 All platforms whose data directory exists are stacked top to bottom in order —
 no tabs. Each section mirrors Claude Code’s Stats **Overview**: header,
-quota, contribution heatmap, and summary stats. Detailed model/session
-breakdowns live in `aum stats` JSON / MCP. Sections share the screen equally.
+quota, a current-month daily contribution calendar, and summary stats.
+Detailed model/session breakdowns live in `aum stats` JSON / MCP. Sections
+share the screen equally.
 
 ```
  CLAUDE                                                            ✓ you@mail.com
@@ -189,10 +190,11 @@ breakdowns live in `aum stats` JSON / MCP. Sections share the screen equally.
   and model-scoped when present), plan/org, credits/extra-usage. Prefixed
   `live` in the UI. Claude: `api.anthropic.com/api/oauth/usage` + profile;
   Codex: `chatgpt.com/backend-api/wham/usage`. No official day-by-day history.
-- **Heatmap + local overview** — from on-disk logs. The heatmap shows only the
-  **current calendar month**, with one daily cell in Mon…Sun calendar columns;
-  days outside the month are blank. Overview: favorite model, streaks, token
-  split. Always prefixed `local activity`.
+- **Heatmap + local overview** — from on-disk logs. The heatmap is a calendar
+  for only the **current month**, with one daily cell under the Mon…Sun
+  columns. Empty days in the month show a dot; leading and trailing cells from
+  adjacent months are blank. Overview: favorite model, streaks, token split.
+  Always prefixed `local activity`.
 
 Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
 
