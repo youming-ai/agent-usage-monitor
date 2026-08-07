@@ -357,11 +357,19 @@ mod tests {
     }
 
     #[test]
-    fn layout_narrow_uses_unit_cells() {
+    fn layout_near_year_uses_unit_cells() {
+        // avail just above TARGET_WEEKS → still base 1, remainder distributed.
         let (gutter, weeks, base, extra) = layout_grid(60);
+        assert_eq!(gutter, 4);
+        assert_eq!(weeks, TARGET_WEEKS);
+        assert_eq!(base, 1);
+        assert_eq!(weeks * base + extra, 56);
+
+        // Truly narrow: fewer columns than a year.
+        let (gutter, weeks, base, extra) = layout_grid(40);
         assert_eq!(gutter, 4);
         assert_eq!(base, 1);
         assert_eq!(extra, 0);
-        assert_eq!(weeks, 56);
+        assert_eq!(weeks, 36);
     }
 }
