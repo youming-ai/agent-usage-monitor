@@ -34,17 +34,34 @@ pub struct Heatmap<'a> {
     accent: Color,
 }
 
-/// Layout: gutter | weeks × cell_w.
-fn layout_grid(area_width: u16) -> (u16, u16, u16) {
+/// Layout: gutter + weeks columns. Returns `(gutter, weeks, base_cell_w, extra)`.
+/// The first `extra` columns are one cell wider so `sum(widths) == avail`.
+fn layout_grid(area_width: u16) -> (u16, u16, u16, u16) {
     let gutter = if area_width >= 14 { 4u16 } else { 0 };
     let avail = area_width.saturating_sub(gutter).max(1);
-    // Prefer a year of weeks; when the terminal is wider, grow each cell.
-    let weeks = TARGET_WEEKS.min(avail).max(1);
-    let cell_w = (avail / weeks).max(1);
-    // Use as many weeks as fit at that cell width so we never leave a dead
-    // strip on the right (e.g. avail=100, weeks=53 → cell_w=1, weeks=100).
-    let weeks = (avail / cell_w).max(1);
-    (gutter, weeks, cell_w)
+    if avail <= TARGET_WEEKS {
+        // Narrow: one column per week, show as many weeks as fit.
+        return (gutter, avail, 1, 0);
+    }
+    // Wide: fixed ~year of weeks, grow cell width to fill the rest.
+    let weeks = TARGET_WEEKS;
+    let base = avail / weeks;
+    let extra = avail % weeks; // first `extra` cols get base+1
+    (gutter, weeks, base.max(1), extra)
+}
+
+fn col_width(base: u16, extra: u16, col: usize) -> u16 {
+    if (col as u16) < extra { base + 1 } else { base }
+}
+
+fn col_x(gutter: u16, base: u16, extra: u16, col: usize) -> u16 {
+    // Sum of widths of columns 0..col.
+    let col = col as u16;
+    if col <= extra {
+        gutter + col * (base + 1)
+    } else {
+        gutter + extra * (base + 1) + (col - extra) * base
+    }
 }
 
 impl Widget for Heatmap<'_> {
@@ -68,9 +85,8 @@ impl Widget for Heatmap<'_> {
             return;
         }
 
-        let (gutter, weeks, cell_w) = layout_grid(area.width);
-        let weeks = weeks as usize;
-        let cell_w = cell_w as usize;
+        let (gutter, weeks_u, base_w, extra) = layout_grid(area.width);
+        let weeks = weeks_u as usize;
 
         let today = CompactDate::from_datetime(Utc::now());
         let today_wd = today.weekday_mon0() as usize; // Mon=0 … Sun=6
@@ -102,7 +118,6 @@ impl Widget for Heatmap<'_> {
                 if !week_has_first && col != 0 {
                     continue;
                 }
-                // Prefer the week that actually contains day 1.
                 let month = if week_has_first {
                     (0..7)
                         .find_map(|r| {
@@ -114,11 +129,10 @@ impl Widget for Heatmap<'_> {
                     cells[col * 7].0.month()
                 };
                 let label = month_abbr(month);
-                let x = area.x + gutter + (col * cell_w) as u16;
+                let x = area.x + col_x(gutter, base_w, extra, col);
                 if x < next_free_x {
                     continue;
                 }
-                // Need room for the 3-letter label before the next paint zone.
                 if x + 3 > area.x + area.width {
                     break;
                 }
@@ -157,20 +171,19 @@ impl Widget for Heatmap<'_> {
                 }
                 let metric = cells[idx].1;
                 let level = intensity(metric, max);
-                let x0 = area.x + gutter + (col * cell_w) as u16;
+                let x0 = area.x + col_x(gutter, base_w, extra, col);
+                let cw = col_width(base_w, extra, col);
                 let y = grid_top + row as u16;
                 if y >= area.y + area.height {
                     continue;
                 }
-                // Fill cell_w columns so wide terminals look solid, not sparse.
-                for dx in 0..cell_w as u16 {
+                for dx in 0..cw {
                     let x = x0 + dx;
                     if x >= area.x + area.width {
                         break;
                     }
                     if let Some(cell) = buf.cell_mut((x, y)) {
                         if level == 0 {
-                            // Leading · of multi-width cell, rest spaces (dim).
                             if dx == 0 {
                                 cell.set_symbol("·");
                             } else {
@@ -335,21 +348,20 @@ mod tests {
 
     #[test]
     fn layout_fills_wide_terminal() {
-        // 200 cols → gutter 4, avail 196 → cell_w ≥ 3, weeks fill width.
-        let (gutter, weeks, cell_w) = layout_grid(200);
+        // 200 cols → gutter 4, avail 196 → 53 weeks × base(+extra) = 196.
+        let (gutter, weeks, base, extra) = layout_grid(200);
         assert_eq!(gutter, 4);
-        assert!(
-            cell_w >= 3,
-            "wide terminal should widen cells, got {cell_w}"
-        );
-        assert_eq!(weeks * cell_w, 196, "grid must span full avail width");
+        assert_eq!(weeks, TARGET_WEEKS);
+        assert!(base >= 3, "wide terminal should widen cells, got {base}");
+        assert_eq!(weeks * base + extra, 196, "grid must span full avail width");
     }
 
     #[test]
     fn layout_narrow_uses_unit_cells() {
-        let (gutter, weeks, cell_w) = layout_grid(60);
+        let (gutter, weeks, base, extra) = layout_grid(60);
         assert_eq!(gutter, 4);
-        assert_eq!(cell_w, 1);
+        assert_eq!(base, 1);
+        assert_eq!(extra, 0);
         assert_eq!(weeks, 56);
     }
 }
