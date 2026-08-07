@@ -62,8 +62,8 @@ fn render_platform(
     let local_label_h = u16::from(remain > 0);
     let content_remain = remain.saturating_sub(local_label_h);
 
-    // Prefer the weekday-by-week grid plus overview. Shorter terminals show
-    // fewer recent week rows; only extremely short areas use the day strip.
+    // Prefer the current-month calendar plus overview. Shorter terminals show
+    // fewer recent calendar rows; only extremely short areas use the day strip.
     let (heatmap_h, overview_h) =
         if content_remain >= heatmap::HEATMAP_FULL_HEIGHT + overview::OVERVIEW_LINES {
             (heatmap::HEATMAP_FULL_HEIGHT, overview::OVERVIEW_LINES)
@@ -258,7 +258,7 @@ mod tests {
         );
         assert!(
             out.contains("Mon") && out.contains("Tue") && out.contains("Wed"),
-            "weekly heatmap should include weekday columns:\n{out}"
+            "current-month heatmap should include weekday columns:\n{out}"
         );
         assert!(
             out.contains("Less") || out.contains("Favorite") || out.contains("local activity"),

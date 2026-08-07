@@ -1,6 +1,6 @@
-//! Day contribution heatmap with **weekday columns** (Mon…Sun) and **one row
-//! per week** — no month labels. Intensity is per-day; fills the area by
-//! growing cell width.
+//! Current-month contribution heatmap with one cell for every calendar day.
+//! Weekday columns keep the month in a familiar calendar layout; days outside
+//! the current month are left blank.
 
 use crate::state::{CompactDate, DayTotals};
 use chrono::{Datelike, Utc};
@@ -12,16 +12,13 @@ use ratatui::{
 };
 use std::collections::BTreeMap;
 
-/// ~1 year of weeks as rows when height allows; otherwise as many as fit.
-const TARGET_WEEKS: u16 = 53;
-
-/// Preferred height: weekday header + many week rows + legend.
-/// Caller may give less; we adapt.
-pub const HEATMAP_FULL_HEIGHT: u16 = 16;
+/// Preferred height: weekday header + the six rows a month can occupy + legend.
+pub const HEATMAP_FULL_HEIGHT: u16 = 8;
 
 const WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-/// Contribution heatmap: columns = weekdays, rows = weeks (oldest → newest).
+/// Contribution heatmap: columns = weekdays, rows = the calendar weeks that
+/// contain the current month's days.
 pub fn contribution_heatmap<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     accent: Color,
@@ -34,22 +31,13 @@ pub struct Heatmap<'a> {
     accent: Color,
 }
 
-/// How many week rows fit and how the seven weekday columns divide the width.
-/// The first `extra` columns are one cell wider, so every terminal column is
-/// used even when the width is not divisible by seven.
-fn layout(area: Rect) -> (usize, u16, u16) {
-    let has_header = area.height >= 2;
-    let has_legend = area.height >= 3;
-    let rows_avail = area
-        .height
-        .saturating_sub(u16::from(has_header) + u16::from(has_legend))
-        .max(1) as usize;
-
-    let weeks = (TARGET_WEEKS as usize).min(rows_avail).max(1);
-
+/// How the seven weekday columns divide the width. The first `extra` columns
+/// are one cell wider, so every terminal column is used even when the width is
+/// not divisible by seven.
+fn layout(area: Rect) -> (u16, u16) {
     let base_w = (area.width / 7).max(1);
     let extra = area.width % 7;
-    (weeks, base_w, extra)
+    (base_w, extra)
 }
 
 fn col_width(base_w: u16, extra: u16, col: usize) -> u16 {
@@ -70,39 +58,41 @@ impl Widget for Heatmap<'_> {
         let levels = accent_levels(self.accent);
         let has_header = area.height >= 2;
         let has_legend = area.height >= 3;
-        let (weeks, base_w, extra) = layout(area);
+        let (base_w, extra) = layout(area);
+
+        let today = CompactDate::from_datetime(Utc::now());
+        let month = month_grid(today);
+        let rows_avail = area
+            .height
+            .saturating_sub(u16::from(has_header) + u16::from(has_legend))
+            .max(1) as usize;
+        // A month can span at most six calendar weeks. On a short terminal,
+        // keep the most recent rows visible so today's activity is not lost.
+        let grid_h = month.weeks.min(rows_avail);
+        let first_row = month.weeks.saturating_sub(grid_h);
 
         let grid_top = area.y + u16::from(has_header);
-        let grid_h = if has_legend {
-            area.height.saturating_sub(1 + u16::from(has_header))
-        } else {
-            area.height.saturating_sub(u16::from(has_header))
-        }
-        .min(weeks as u16) as usize;
-
         if grid_h == 0 {
             return;
         }
 
-        let today = CompactDate::from_datetime(Utc::now());
-        let this_monday = monday_of(today);
-        // Oldest week at top: this_monday - (grid_h-1)*7
-        let start_monday = this_monday
-            .checked_sub_days(((grid_h.saturating_sub(1)) * 7) as i64)
-            .unwrap_or_else(|| CompactDate::new(1970, 1, 5));
+        let start = add_days(month.grid_start, (first_row * 7) as i64).unwrap_or(month.grid_start);
 
-        // Build grid_h weeks × 7 days metrics.
-        let mut metrics = vec![0u64; grid_h * 7];
-        let mut d = start_monday;
+        // Build the visible calendar rows. `None` marks the leading/trailing
+        // cells that belong to an adjacent month and must remain blank.
+        let mut metrics = vec![None; grid_h * 7];
+        let mut d = start;
         for row in 0..grid_h {
             for col in 0..7 {
-                metrics[row * 7 + col] = self.daily.get(&d).map(day_metric).unwrap_or(0);
+                if d.year() == today.year() && d.month() == today.month() {
+                    metrics[row * 7 + col] = Some(self.daily.get(&d).map(day_metric).unwrap_or(0));
+                }
                 d = add_days(d, 1).unwrap_or(d);
             }
         }
-        let max = metrics.iter().copied().max().unwrap_or(0);
+        let max = metrics.iter().flatten().copied().max().unwrap_or(0);
 
-        // Header: Mon Tue Wed Thu Fri Sat Sun
+        // Header: Mon Tue Wed Thu Fri Sat Sun.
         if has_header {
             for (col, label) in WEEKDAY_LABELS.iter().enumerate() {
                 let x = area.x + col_x(base_w, extra, col);
@@ -126,17 +116,28 @@ impl Widget for Heatmap<'_> {
             }
         }
 
-        // Body: row = week, col = weekday
+        // Body: row = calendar week, col = weekday. Only dates in the current
+        // month receive a cell; adjacent-month padding stays empty.
         for row in 0..grid_h {
             let y = grid_top + row as u16;
             if y >= area.y + area.height {
                 break;
             }
             for col in 0..7 {
-                let metric = metrics[row * 7 + col];
-                let level = intensity(metric, max);
                 let x0 = area.x + col_x(base_w, extra, col);
                 let cell_w = col_width(base_w, extra, col);
+                let Some(metric) = metrics[row * 7 + col] else {
+                    // Clear padding cells explicitly because ratatui reuses
+                    // the frame buffer between draws (notably at month end).
+                    for dx in 0..cell_w {
+                        if let Some(cell) = buf.cell_mut((x0 + dx, y)) {
+                            cell.set_symbol(" ");
+                            cell.set_style(Style::default());
+                        }
+                    }
+                    continue;
+                };
+                let level = intensity(metric, max);
                 for dx in 0..cell_w {
                     let x = x0 + dx;
                     if x >= area.x + area.width {
@@ -159,7 +160,7 @@ impl Widget for Heatmap<'_> {
             }
         }
 
-        // Legend
+        // Legend.
         if has_legend {
             let y = area.y + area.height - 1;
             let mut x = area.x;
@@ -177,7 +178,8 @@ impl Widget for Heatmap<'_> {
     }
 }
 
-/// Compact strip: last N days left→right (short terminals).
+/// Compact strip of the current month's days for short terminals. If there
+/// is not enough width for all days, keep the most recent visible days.
 pub fn contribution_strip<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     accent: Color,
@@ -196,15 +198,17 @@ impl Widget for StripHeatmap<'_> {
             return;
         }
         let levels = accent_levels(self.accent);
-        let n = area.width as usize;
         let today = CompactDate::from_datetime(Utc::now());
-        let mut days = Vec::with_capacity(n);
-        for i in (0..n).rev() {
-            let d = today
-                .checked_sub_days(i as i64)
-                .unwrap_or_else(|| CompactDate::new(1970, 1, 1));
-            days.push(self.daily.get(&d).map(day_metric).unwrap_or(0));
-        }
+        let month = month_grid(today);
+        let days_in_month = month.last_day.day() as usize;
+        let visible_days = days_in_month.min(area.width as usize);
+        let start_day = days_in_month.saturating_sub(visible_days);
+        let days: Vec<u64> = (start_day..days_in_month)
+            .map(|offset| {
+                let d = add_days(month.first_day, offset as i64).unwrap_or(month.first_day);
+                self.daily.get(&d).map(day_metric).unwrap_or(0)
+            })
+            .collect();
         let max = days.iter().copied().max().unwrap_or(0);
         for (i, metric) in days.into_iter().enumerate() {
             let level = intensity(metric, max);
@@ -217,6 +221,12 @@ impl Widget for StripHeatmap<'_> {
                     cell.set_symbol("■");
                     cell.set_style(Style::default().fg(levels[level]));
                 }
+            }
+        }
+        for i in visible_days..area.width as usize {
+            if let Some(cell) = buf.cell_mut((area.x + i as u16, area.y)) {
+                cell.set_symbol(" ");
+                cell.set_style(Style::default());
             }
         }
     }
@@ -281,10 +291,35 @@ fn put_str(buf: &mut Buffer, x: u16, y: u16, s: &str, style: Style) {
     }
 }
 
-fn monday_of(day: CompactDate) -> CompactDate {
-    let wd = day.weekday_mon0() as i64;
-    day.checked_sub_days(wd)
-        .unwrap_or_else(|| CompactDate::new(1970, 1, 5))
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct MonthGrid {
+    first_day: CompactDate,
+    last_day: CompactDate,
+    grid_start: CompactDate,
+    weeks: usize,
+}
+
+fn month_grid(today: CompactDate) -> MonthGrid {
+    let first_day = CompactDate::new(today.year(), today.month(), 1);
+    let next_month = if today.month() == 12 {
+        CompactDate::new(today.year().saturating_add(1), 1, 1)
+    } else {
+        CompactDate::new(today.year(), today.month() + 1, 1)
+    };
+    let last_day = next_month.checked_sub_days(1).unwrap_or(first_day);
+    let grid_start = first_day
+        .checked_sub_days(first_day.weekday_mon0() as i64)
+        .unwrap_or(first_day);
+    let trailing_days = 6 - last_day.weekday_mon0() as i64;
+    let grid_end = add_days(last_day, trailing_days).unwrap_or(last_day);
+    let weeks = days_between(grid_start, grid_end) as usize / 7 + 1;
+
+    MonthGrid {
+        first_day,
+        last_day,
+        grid_start,
+        weeks,
+    }
 }
 
 fn add_days(d: CompactDate, days: i64) -> Option<CompactDate> {
@@ -296,6 +331,16 @@ fn add_days(d: CompactDate, days: i64) -> Option<CompactDate> {
         next.month() as u8,
         next.day() as u8,
     ))
+}
+
+fn days_between(a: CompactDate, b: CompactDate) -> u64 {
+    use chrono::NaiveDate;
+    let da = NaiveDate::from_ymd_opt(a.year() as i32, a.month() as u32, a.day() as u32);
+    let db = NaiveDate::from_ymd_opt(b.year() as i32, b.month() as u32, b.day() as u32);
+    match (da, db) {
+        (Some(a), Some(b)) => (b - a).num_days().unsigned_abs(),
+        _ => 0,
+    }
 }
 
 #[cfg(test)]
@@ -314,8 +359,7 @@ mod tests {
     #[test]
     fn layout_seven_columns_fill_width() {
         let area = Rect::new(0, 0, 80, 20);
-        let (weeks, base_w, extra) = layout(area);
-        assert!(weeks >= 1);
+        let (base_w, extra) = layout(area);
         assert_eq!(base_w * 7 + extra, 80);
         assert_eq!(col_x(base_w, extra, 6) + col_width(base_w, extra, 6), 80);
     }
@@ -332,11 +376,25 @@ mod tests {
     }
 
     #[test]
-    fn monday_of_aligns() {
-        // 2026-08-07 Friday → Monday 2026-08-03
-        assert_eq!(
-            monday_of(CompactDate::new(2026, 8, 7)),
-            CompactDate::new(2026, 8, 3)
-        );
+    fn month_grid_contains_every_day_and_only_current_month() {
+        let grid = month_grid(CompactDate::new(2026, 8, 7));
+        assert_eq!(grid.first_day, CompactDate::new(2026, 8, 1));
+        assert_eq!(grid.last_day, CompactDate::new(2026, 8, 31));
+        assert_eq!(grid.grid_start, CompactDate::new(2026, 7, 27));
+        assert_eq!(grid.weeks, 6);
+
+        let mut current = 0;
+        let mut outside = 0;
+        let mut day = grid.grid_start;
+        for _ in 0..grid.weeks * 7 {
+            if day.year() == 2026 && day.month() == 8 {
+                current += 1;
+            } else {
+                outside += 1;
+            }
+            day = add_days(day, 1).unwrap();
+        }
+        assert_eq!(current, 31);
+        assert_eq!(outside, 11);
     }
 }
