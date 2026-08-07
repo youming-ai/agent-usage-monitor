@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.3.0...v1.3.1) (2026-08-07)
+
+
+### Bug Fixes
+
+* show current month daily heatmap ([dd3dc43](https://github.com/youming-ai/agent-usage-monitor/commit/dd3dc437d87de9ba07989ce19c368e8cd9d4fa6d))
+* **tui:** show only current month daily heatmap ([e3b5bae](https://github.com/youming-ai/agent-usage-monitor/commit/e3b5baebfbca1077544136e78678621db35a6b27))
+
 ## [1.3.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.2.1...v1.3.0) (2026-08-07)
 
 
