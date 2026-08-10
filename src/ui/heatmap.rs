@@ -1,5 +1,6 @@
-//! GitHub-style contribution heatmap: one column per week over the trailing
-//! year, one row per weekday (Sun…Sat), month labels on top.
+//! GitHub-style contribution heatmap: one column per week, one row per weekday
+//! (Sun…Sat), month labels on top. Cells are square, so the terminal width
+//! decides how many weeks of history fit.
 
 use crate::state::{CompactDate, DayTotals};
 use chrono::{Datelike, Utc};
@@ -14,10 +15,13 @@ use std::collections::BTreeMap;
 /// Preferred height: month labels + the seven weekday rows.
 pub const HEATMAP_FULL_HEIGHT: u16 = 8;
 
-/// Minimum height the year grid needs (seven weekday rows, no month labels).
+/// Minimum height the grid needs (seven weekday rows, no month labels).
 pub const HEATMAP_MIN_HEIGHT: u16 = 7;
 
-const MAX_WEEKS: usize = 53;
+/// Two terminal columns per cell — roughly square in a monospace font.
+const CELL_W: usize = 2;
+/// Cap on history so an ultra-wide terminal does not scroll back forever.
+const MAX_WEEKS: usize = 105;
 /// Width of the Mon/Wed/Fri gutter on the left. `pub` so `ui::mod` can keep its
 /// grid-vs-strip width gate in lockstep with the render gate here.
 pub const GUTTER: u16 = 4;
@@ -28,7 +32,7 @@ const MONTHS: [&str; 12] = [
 /// Row index (Sun = 0) → weekday label, GitHub-style.
 const ROW_LABELS: [(usize, &str); 3] = [(1, "Mon"), (3, "Wed"), (5, "Fri")];
 
-/// Contribution heatmap: columns = weeks over the trailing year, rows = weekdays.
+/// Contribution heatmap: columns = weeks (newest last), rows = weekdays.
 pub fn contribution_heatmap<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     accent: Color,
@@ -63,12 +67,12 @@ impl Widget for Heatmap<'_> {
         let grid_top = area.y + u16::from(has_header);
         let gutter = if area.width > GUTTER + 10 { GUTTER } else { 0 };
         let avail = (area.width - gutter) as usize;
-        let weeks = avail.clamp(1, MAX_WEEKS);
-        // Week columns stretch to fill the width. Any remainder is spread
-        // across the grid instead of bunched at one end.
-        let edge = |col: usize| (col * avail / weeks) as u16;
-        let col_x = |col: usize| area.x + gutter + edge(col);
-        let col_w = |col: usize| edge(col + 1) - edge(col);
+        // Square cells of a fixed width; the width decides how many weeks of
+        // history fit. An odd leftover column pads the gutter so the grid ends
+        // flush with the right edge.
+        let weeks = (avail / CELL_W).clamp(1, MAX_WEEKS);
+        let pad = (avail - weeks * CELL_W).min(CELL_W - 1) as u16;
+        let col_x = |col: usize| area.x + gutter + pad + (col * CELL_W) as u16;
 
         let today = CompactDate::from_datetime(Utc::now());
         // Last column is the week containing today; walk back whole weeks.
@@ -120,7 +124,7 @@ impl Widget for Heatmap<'_> {
                     continue;
                 };
                 let level = intensity(metric, max);
-                for dx in 0..col_w(col) {
+                for dx in 0..CELL_W as u16 {
                     let Some(cell) = buf.cell_mut((x0 + dx, y)) else {
                         continue;
                     };
@@ -348,11 +352,10 @@ mod tests {
     #[test]
     fn today_is_the_last_painted_cell_and_future_days_stay_blank() {
         let today = CompactDate::from_datetime(Utc::now());
-        // 4-wide gutter + 53 single-cell week columns: the last column is one
-        // character, so today's cell is the last character of its row.
-        let out = dump(57, 8, &BTreeMap::new());
+        let out = dump(100, 8, &BTreeMap::new());
         let rows: Vec<&str> = out.lines().skip(1).collect();
-        let last_col = rows[0].chars().count() - 1;
+        // Cells are CELL_W wide and flush right; the dot sits at their start.
+        let last_col = rows[0].chars().count() - CELL_W;
         let nth = |row: usize| rows[row].chars().nth(last_col).unwrap();
         assert_eq!(nth(today.weekday_sun0() as usize), '·');
         for row in today.weekday_sun0() as usize + 1..7 {
