@@ -62,20 +62,20 @@ fn render_platform(
     let local_label_h = u16::from(remain > 0);
     let content_remain = remain.saturating_sub(local_label_h);
 
-    // Prefer the current-month calendar plus overview. Shorter terminals show
-    // fewer recent calendar rows; only extremely short areas use the day strip.
+    // Prefer the year heatmap plus overview. The grid needs all seven weekday
+    // rows, so short terminals drop the month labels and then the whole grid.
     let (heatmap_h, overview_h) =
         if content_remain >= heatmap::HEATMAP_FULL_HEIGHT + overview::OVERVIEW_LINES {
             (heatmap::HEATMAP_FULL_HEIGHT, overview::OVERVIEW_LINES)
-        } else if content_remain >= 10 {
-            (
-                content_remain
-                    .saturating_sub(overview::OVERVIEW_LINES)
-                    .max(3),
-                overview::OVERVIEW_LINES,
-            )
-        } else if content_remain >= 3 {
-            (content_remain, 0)
+        } else if content_remain >= heatmap::HEATMAP_MIN_HEIGHT + overview::OVERVIEW_LINES {
+            (heatmap::HEATMAP_MIN_HEIGHT, overview::OVERVIEW_LINES)
+        } else if content_remain >= heatmap::HEATMAP_FULL_HEIGHT {
+            (heatmap::HEATMAP_FULL_HEIGHT, 0)
+        } else if content_remain >= heatmap::HEATMAP_MIN_HEIGHT {
+            (heatmap::HEATMAP_MIN_HEIGHT, 0)
+        } else if content_remain > overview::OVERVIEW_LINES {
+            // Not enough rows for the year grid: one-line strip + stats.
+            (1, overview::OVERVIEW_LINES)
         } else if content_remain >= 1 {
             (1, 0)
         } else {
@@ -142,7 +142,7 @@ fn render_platform(
     }
 
     let heat_area = chunks[3];
-    if heat_area.height >= 3 && heat_area.width >= 7 {
+    if heat_area.height >= heatmap::HEATMAP_MIN_HEIGHT && heat_area.width > 4 {
         frame.render_widget(heatmap::contribution_heatmap(&p.daily, accent), heat_area);
     } else if heat_area.height >= 1 && heat_area.width > 0 {
         frame.render_widget(heatmap::contribution_strip(&p.daily, accent), heat_area);
@@ -257,8 +257,8 @@ mod tests {
             "local data must stay labeled"
         );
         assert!(
-            out.contains("Mon") && out.contains("Tue") && out.contains("Wed"),
-            "current-month heatmap should include weekday columns:\n{out}"
+            out.contains("Mon") && out.contains("Wed") && out.contains("Fri"),
+            "year heatmap should include weekday rows:\n{out}"
         );
         assert!(
             out.contains("Less") || out.contains("Favorite") || out.contains("local activity"),
