@@ -261,8 +261,8 @@ mod tests {
             "year heatmap should include weekday rows:\n{out}"
         );
         assert!(
-            out.contains("Less") || out.contains("Favorite") || out.contains("local activity"),
-            "legend or overview"
+            out.contains("Favorite") || out.contains("local activity"),
+            "overview or local-activity label"
         );
         assert!(!out.contains("MODEL"));
         assert!(!out.contains("SESSION"));

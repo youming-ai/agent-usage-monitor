@@ -18,7 +18,10 @@ pub const HEATMAP_FULL_HEIGHT: u16 = 8;
 pub const HEATMAP_MIN_HEIGHT: u16 = 7;
 
 const MAX_WEEKS: usize = 53;
-const GUTTER: u16 = 4;
+/// Width of the Mon/Wed/Fri gutter on the left. `pub` so `ui::mod` can keep its
+/// grid-vs-strip width gate in lockstep with the render gate here.
+pub const GUTTER: u16 = 4;
+const DIM: Style = Style::new().fg(Color::DarkGray);
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
@@ -82,8 +85,6 @@ impl Widget for Heatmap<'_> {
         }
         let max = metrics.iter().flatten().copied().max().unwrap_or(0);
 
-        let dim = Style::default().fg(Color::DarkGray);
-
         if has_header {
             let mut prev_month = None;
             let mut next_x = area.x;
@@ -95,13 +96,7 @@ impl Widget for Heatmap<'_> {
                 prev_month = Some(sunday.month());
                 let x = area.x + gutter + (col * cell_w) as u16;
                 if x >= next_x && x + 3 <= area.x + area.width {
-                    put_str(
-                        buf,
-                        x,
-                        area.y,
-                        MONTHS[(sunday.month() as usize - 1) % 12],
-                        dim,
-                    );
+                    put_str(buf, x, area.y, MONTHS[sunday.month() as usize - 1], DIM);
                     next_x = x + 4;
                 }
             }
@@ -109,7 +104,7 @@ impl Widget for Heatmap<'_> {
 
         if gutter > 0 {
             for (row, label) in ROW_LABELS {
-                put_str(buf, area.x, grid_top + row as u16, label, dim);
+                put_str(buf, area.x, grid_top + row as u16, label, DIM);
             }
         }
 
@@ -127,7 +122,7 @@ impl Widget for Heatmap<'_> {
                     };
                     if level == 0 {
                         cell.set_symbol(if dx == 0 { "·" } else { " " });
-                        cell.set_style(dim);
+                        cell.set_style(DIM);
                     } else {
                         cell.set_symbol(" ");
                         cell.set_style(Style::default().bg(levels[level]));
@@ -176,7 +171,7 @@ impl Widget for StripHeatmap<'_> {
             if let Some(cell) = buf.cell_mut((x, area.y)) {
                 if level == 0 {
                     cell.set_symbol("·");
-                    cell.set_style(Style::default().fg(Color::DarkGray));
+                    cell.set_style(DIM);
                 } else {
                     cell.set_symbol("■");
                     cell.set_style(Style::default().fg(levels[level]));
@@ -259,6 +254,9 @@ struct MonthGrid {
     weeks: usize,
 }
 
+// ponytail: month_grid / MonthGrid / days_between / weekday_mon0 are now
+// carried only by contribution_strip (the short-terminal fallback). If the
+// strip is ever simplified, all four can go with it.
 fn month_grid(today: CompactDate) -> MonthGrid {
     let first_day = CompactDate::new(today.year(), today.month(), 1);
     let next_month = if today.month() == 12 {
