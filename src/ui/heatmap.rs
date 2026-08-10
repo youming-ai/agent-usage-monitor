@@ -63,8 +63,12 @@ impl Widget for Heatmap<'_> {
         let grid_top = area.y + u16::from(has_header);
         let gutter = if area.width > GUTTER + 10 { GUTTER } else { 0 };
         let avail = (area.width - gutter) as usize;
-        let cell_w = if avail >= MAX_WEEKS * 2 { 2usize } else { 1 };
-        let weeks = (avail / cell_w).clamp(1, MAX_WEEKS);
+        let weeks = avail.clamp(1, MAX_WEEKS);
+        // Week columns stretch to fill the width. Any remainder is spread
+        // across the grid instead of bunched at one end.
+        let edge = |col: usize| (col * avail / weeks) as u16;
+        let col_x = |col: usize| area.x + gutter + edge(col);
+        let col_w = |col: usize| edge(col + 1) - edge(col);
 
         let today = CompactDate::from_datetime(Utc::now());
         // Last column is the week containing today; walk back whole weeks.
@@ -94,7 +98,7 @@ impl Widget for Heatmap<'_> {
                     continue;
                 }
                 prev_month = Some(sunday.month());
-                let x = area.x + gutter + (col * cell_w) as u16;
+                let x = col_x(col);
                 if x >= next_x && x + 3 <= area.x + area.width {
                     put_str(buf, x, area.y, MONTHS[sunday.month() as usize - 1], DIM);
                     next_x = x + 4;
@@ -109,14 +113,14 @@ impl Widget for Heatmap<'_> {
         }
 
         for col in 0..weeks {
-            let x0 = area.x + gutter + (col * cell_w) as u16;
+            let x0 = col_x(col);
             for row in 0..7 {
                 let y = grid_top + row as u16;
                 let Some(metric) = metrics[col * 7 + row] else {
                     continue;
                 };
                 let level = intensity(metric, max);
-                for dx in 0..cell_w as u16 {
+                for dx in 0..col_w(col) {
                     let Some(cell) = buf.cell_mut((x0 + dx, y)) else {
                         continue;
                     };
@@ -344,7 +348,8 @@ mod tests {
     #[test]
     fn today_is_the_last_painted_cell_and_future_days_stay_blank() {
         let today = CompactDate::from_datetime(Utc::now());
-        // 4-wide gutter + 53 one-cell week columns fills the width exactly.
+        // 4-wide gutter + 53 single-cell week columns: the last column is one
+        // character, so today's cell is the last character of its row.
         let out = dump(57, 8, &BTreeMap::new());
         let rows: Vec<&str> = out.lines().skip(1).collect();
         let last_col = rows[0].chars().count() - 1;
@@ -352,6 +357,19 @@ mod tests {
         assert_eq!(nth(today.weekday_sun0() as usize), '·');
         for row in today.weekday_sun0() as usize + 1..7 {
             assert_eq!(nth(row), ' ', "future day painted:\n{out}");
+        }
+    }
+
+    #[test]
+    fn week_columns_stretch_to_the_right_edge() {
+        let area = Rect::new(0, 0, 100, 8);
+        let mut buffer = Buffer::empty(area);
+        contribution_heatmap(&BTreeMap::new(), Color::Blue).render(area, &mut buffer);
+        // Painted cells carry a style; the cleared background does not. The
+        // rightmost column of every weekday row must belong to a week cell.
+        let today = CompactDate::from_datetime(Utc::now());
+        for row in 0..=today.weekday_sun0() as u16 {
+            assert_eq!(buffer.cell((99, 1 + row)).unwrap().style().fg, DIM.fg);
         }
     }
 
