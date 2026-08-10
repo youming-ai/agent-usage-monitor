@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.4.0...v1.5.0) (2026-08-10)
+
+
+### Features
+
+* stretch the heatmap week columns to fill the width ([#64](https://github.com/youming-ai/agent-usage-monitor/issues/64)) ([c530b2c](https://github.com/youming-ai/agent-usage-monitor/commit/c530b2c1b5f58e04ab19c7ce1034d510f9fcbb87))
+
 ## [1.4.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.3.1...v1.4.0) (2026-08-10)
 
 
