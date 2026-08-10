@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.3.1...v1.4.0) (2026-08-10)
+
+
+### Features
+
+* show a year-long GitHub-style contribution heatmap ([#63](https://github.com/youming-ai/agent-usage-monitor/issues/63)) ([176e8bc](https://github.com/youming-ai/agent-usage-monitor/commit/176e8bc060f79ac1841ab078a347eb80c77d89a6))
+
+
+### Documentation
+
+* clarify current month heatmap ([2be7f2a](https://github.com/youming-ai/agent-usage-monitor/commit/2be7f2a00b93f18149abc9013be731e90c45172e))
+* trim duplicate layout note and Windows watcher mention ([8d703e8](https://github.com/youming-ai/agent-usage-monitor/commit/8d703e8e886c6dd85ea47ffce13e2efba21c7cc2))
+
 ## [1.3.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.3.0...v1.3.1) (2026-08-07)
 
 
