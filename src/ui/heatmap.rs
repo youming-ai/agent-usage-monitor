@@ -1,6 +1,5 @@
-//! Current-month contribution heatmap with one cell for every calendar day.
-//! Weekday columns keep the month in a familiar calendar layout; days outside
-//! the current month are left blank.
+//! GitHub-style contribution heatmap: one column per week over the trailing
+//! year, one row per weekday (Sun…Sat), month labels on top.
 
 use crate::state::{CompactDate, DayTotals};
 use chrono::{Datelike, Utc};
@@ -12,13 +11,24 @@ use ratatui::{
 };
 use std::collections::BTreeMap;
 
-/// Preferred height: weekday header + the six rows a month can occupy + legend.
+/// Preferred height: month labels + the seven weekday rows.
 pub const HEATMAP_FULL_HEIGHT: u16 = 8;
 
-const WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+/// Minimum height the year grid needs (seven weekday rows, no month labels).
+pub const HEATMAP_MIN_HEIGHT: u16 = 7;
 
-/// Contribution heatmap: columns = weekdays, rows = the calendar weeks that
-/// contain the current month's days.
+const MAX_WEEKS: usize = 53;
+/// Width of the Mon/Wed/Fri gutter on the left. `pub` so `ui::mod` can keep its
+/// grid-vs-strip width gate in lockstep with the render gate here.
+pub const GUTTER: u16 = 4;
+const DIM: Style = Style::new().fg(Color::DarkGray);
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+/// Row index (Sun = 0) → weekday label, GitHub-style.
+const ROW_LABELS: [(usize, &str); 3] = [(1, "Mon"), (3, "Wed"), (5, "Fri")];
+
+/// Contribution heatmap: columns = weeks over the trailing year, rows = weekdays.
 pub fn contribution_heatmap<'a>(
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     accent: Color,
@@ -31,149 +41,94 @@ pub struct Heatmap<'a> {
     accent: Color,
 }
 
-/// How the seven weekday columns divide the width. The first `extra` columns
-/// are one cell wider, so every terminal column is used even when the width is
-/// not divisible by seven.
-fn layout(area: Rect) -> (u16, u16) {
-    let base_w = (area.width / 7).max(1);
-    let extra = area.width % 7;
-    (base_w, extra)
-}
-
-fn col_width(base_w: u16, extra: u16, col: usize) -> u16 {
-    base_w + u16::from((col as u16) < extra)
-}
-
-fn col_x(base_w: u16, extra: u16, col: usize) -> u16 {
-    let col = col as u16;
-    col * base_w + col.min(extra)
-}
-
 impl Widget for Heatmap<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.width == 0 || area.height == 0 {
+        if area.height < HEATMAP_MIN_HEIGHT || area.width <= GUTTER {
             return;
+        }
+
+        // ratatui reuses the frame buffer between draws; clear first so week
+        // columns dropped on a resize leave nothing behind.
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_symbol(" ");
+                    cell.set_style(Style::default());
+                }
+            }
         }
 
         let levels = accent_levels(self.accent);
-        let has_header = area.height >= 2;
-        let has_legend = area.height >= 3;
-        let (base_w, extra) = layout(area);
+        let has_header = area.height >= HEATMAP_FULL_HEIGHT;
+        let grid_top = area.y + u16::from(has_header);
+        let gutter = if area.width > GUTTER + 10 { GUTTER } else { 0 };
+        let avail = (area.width - gutter) as usize;
+        let cell_w = if avail >= MAX_WEEKS * 2 { 2usize } else { 1 };
+        let weeks = (avail / cell_w).clamp(1, MAX_WEEKS);
 
         let today = CompactDate::from_datetime(Utc::now());
-        let month = month_grid(today);
-        let rows_avail = area
-            .height
-            .saturating_sub(u16::from(has_header) + u16::from(has_legend))
-            .max(1) as usize;
-        // A month can span at most six calendar weeks. On a short terminal,
-        // keep the most recent rows visible so today's activity is not lost.
-        let grid_h = month.weeks.min(rows_avail);
-        let first_row = month.weeks.saturating_sub(grid_h);
+        // Last column is the week containing today; walk back whole weeks.
+        let back = today.weekday_sun0() as i64 + ((weeks - 1) * 7) as i64;
+        let start = add_days(today, -back).unwrap_or(today);
 
-        let grid_top = area.y + u16::from(has_header);
-        if grid_h == 0 {
-            return;
-        }
-
-        let start = add_days(month.grid_start, (first_row * 7) as i64).unwrap_or(month.grid_start);
-
-        // Build the visible calendar rows. `None` marks the leading/trailing
-        // cells that belong to an adjacent month and must remain blank.
-        let mut metrics = vec![None; grid_h * 7];
+        // Column-major: each column is one week, rows are Sun…Sat. Days after
+        // today stay blank.
+        let mut metrics = vec![None; weeks * 7];
         let mut d = start;
-        for row in 0..grid_h {
-            for col in 0..7 {
-                if d.year() == today.year() && d.month() == today.month() {
-                    metrics[row * 7 + col] = Some(self.daily.get(&d).map(day_metric).unwrap_or(0));
+        for col in 0..weeks {
+            for row in 0..7 {
+                if d <= today {
+                    metrics[col * 7 + row] = Some(self.daily.get(&d).map(day_metric).unwrap_or(0));
                 }
                 d = add_days(d, 1).unwrap_or(d);
             }
         }
         let max = metrics.iter().flatten().copied().max().unwrap_or(0);
 
-        // Header: Mon Tue Wed Thu Fri Sat Sun.
         if has_header {
-            for (col, label) in WEEKDAY_LABELS.iter().enumerate() {
-                let x = area.x + col_x(base_w, extra, col);
-                let cell_w = col_width(base_w, extra, col);
-                // Center short label in the cell when wide enough.
-                if cell_w >= 3 {
-                    let label_x = x + (cell_w - 3) / 2;
-                    put_str(
-                        buf,
-                        label_x,
-                        area.y,
-                        label,
-                        Style::default().fg(Color::DarkGray),
-                    );
-                } else {
-                    // Narrow cells always use one letter; writing the full
-                    // label here would overwrite adjacent weekday columns.
-                    let ch = &label[..1];
-                    put_str(buf, x, area.y, ch, Style::default().fg(Color::DarkGray));
+            let mut prev_month = None;
+            let mut next_x = area.x;
+            for col in 0..weeks {
+                let sunday = add_days(start, (col * 7) as i64).unwrap_or(start);
+                if prev_month == Some(sunday.month()) {
+                    continue;
+                }
+                prev_month = Some(sunday.month());
+                let x = area.x + gutter + (col * cell_w) as u16;
+                if x >= next_x && x + 3 <= area.x + area.width {
+                    put_str(buf, x, area.y, MONTHS[sunday.month() as usize - 1], DIM);
+                    next_x = x + 4;
                 }
             }
         }
 
-        // Body: row = calendar week, col = weekday. Only dates in the current
-        // month receive a cell; adjacent-month padding stays empty.
-        for row in 0..grid_h {
-            let y = grid_top + row as u16;
-            if y >= area.y + area.height {
-                break;
+        if gutter > 0 {
+            for (row, label) in ROW_LABELS {
+                put_str(buf, area.x, grid_top + row as u16, label, DIM);
             }
-            for col in 0..7 {
-                let x0 = area.x + col_x(base_w, extra, col);
-                let cell_w = col_width(base_w, extra, col);
-                let Some(metric) = metrics[row * 7 + col] else {
-                    // Clear padding cells explicitly because ratatui reuses
-                    // the frame buffer between draws (notably at month end).
-                    for dx in 0..cell_w {
-                        if let Some(cell) = buf.cell_mut((x0 + dx, y)) {
-                            cell.set_symbol(" ");
-                            cell.set_style(Style::default());
-                        }
-                    }
+        }
+
+        for col in 0..weeks {
+            let x0 = area.x + gutter + (col * cell_w) as u16;
+            for row in 0..7 {
+                let y = grid_top + row as u16;
+                let Some(metric) = metrics[col * 7 + row] else {
                     continue;
                 };
                 let level = intensity(metric, max);
-                for dx in 0..cell_w {
-                    let x = x0 + dx;
-                    if x >= area.x + area.width {
-                        break;
-                    }
-                    if let Some(cell) = buf.cell_mut((x, y)) {
-                        if level == 0 {
-                            if dx == 0 {
-                                cell.set_symbol("·");
-                            } else {
-                                cell.set_symbol(" ");
-                            }
-                            cell.set_style(Style::default().fg(Color::DarkGray));
-                        } else {
-                            cell.set_symbol("■");
-                            cell.set_style(Style::default().fg(levels[level]));
-                        }
+                for dx in 0..cell_w as u16 {
+                    let Some(cell) = buf.cell_mut((x0 + dx, y)) else {
+                        continue;
+                    };
+                    if level == 0 {
+                        cell.set_symbol(if dx == 0 { "·" } else { " " });
+                        cell.set_style(DIM);
+                    } else {
+                        cell.set_symbol(" ");
+                        cell.set_style(Style::default().bg(levels[level]));
                     }
                 }
             }
-        }
-
-        // Legend.
-        if has_legend {
-            let y = area.y + area.height - 1;
-            let mut x = area.x;
-            put_str(buf, x, y, "Less ", Style::default().fg(Color::DarkGray));
-            x += 5;
-            for color in levels.iter().skip(1) {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_symbol("■");
-                    cell.set_style(Style::default().fg(*color));
-                }
-                x += 1;
-            }
-            put_str(buf, x, y, " More", Style::default().fg(Color::DarkGray));
         }
     }
 }
@@ -216,7 +171,7 @@ impl Widget for StripHeatmap<'_> {
             if let Some(cell) = buf.cell_mut((x, area.y)) {
                 if level == 0 {
                     cell.set_symbol("·");
-                    cell.set_style(Style::default().fg(Color::DarkGray));
+                    cell.set_style(DIM);
                 } else {
                     cell.set_symbol("■");
                     cell.set_style(Style::default().fg(levels[level]));
@@ -299,6 +254,9 @@ struct MonthGrid {
     weeks: usize,
 }
 
+// ponytail: month_grid / MonthGrid / days_between / weekday_mon0 are now
+// carried only by contribution_strip (the short-terminal fallback). If the
+// strip is ever simplified, all four can go with it.
 fn month_grid(today: CompactDate) -> MonthGrid {
     let first_day = CompactDate::new(today.year(), today.month(), 1);
     let next_month = if today.month() == 12 {
@@ -356,23 +314,51 @@ mod tests {
         assert_eq!(intensity(90, 100), 4);
     }
 
-    #[test]
-    fn layout_seven_columns_fill_width() {
-        let area = Rect::new(0, 0, 80, 20);
-        let (base_w, extra) = layout(area);
-        assert_eq!(base_w * 7 + extra, 80);
-        assert_eq!(col_x(base_w, extra, 6) + col_width(base_w, extra, 6), 80);
+    fn dump(w: u16, h: u16, daily: &BTreeMap<CompactDate, DayTotals>) -> String {
+        let area = Rect::new(0, 0, w, h);
+        let mut buffer = Buffer::empty(area);
+        contribution_heatmap(daily, Color::Blue).render(area, &mut buffer);
+        let mut out = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                out.push_str(buffer.cell((x, y)).unwrap().symbol());
+            }
+            out.push('\n');
+        }
+        out
     }
 
     #[test]
-    fn narrow_weekday_labels_do_not_overlap() {
-        let area = Rect::new(0, 0, 7, 3);
-        let mut buffer = Buffer::empty(area);
-        contribution_heatmap(&BTreeMap::new(), Color::Blue).render(area, &mut buffer);
-        let header: String = (0..7)
-            .filter_map(|x| buffer.cell((x, 0)).map(|cell| cell.symbol()))
-            .collect();
-        assert_eq!(header, "MTWTFSS");
+    fn year_grid_has_weekday_and_month_labels() {
+        let out = dump(80, 8, &BTreeMap::new());
+        assert!(
+            out.contains("Mon") && out.contains("Wed") && out.contains("Fri"),
+            "{out}"
+        );
+        let today = CompactDate::from_datetime(Utc::now());
+        assert!(out.contains(MONTHS[today.month() as usize - 1]), "{out}");
+        // Seven weekday rows of cells, today's week in the last column.
+        assert_eq!(out.lines().filter(|l| l.contains('·')).count(), 7);
+    }
+
+    #[test]
+    fn today_is_the_last_painted_cell_and_future_days_stay_blank() {
+        let today = CompactDate::from_datetime(Utc::now());
+        // 4-wide gutter + 53 one-cell week columns fills the width exactly.
+        let out = dump(57, 8, &BTreeMap::new());
+        let rows: Vec<&str> = out.lines().skip(1).collect();
+        let last_col = rows[0].chars().count() - 1;
+        let nth = |row: usize| rows[row].chars().nth(last_col).unwrap();
+        assert_eq!(nth(today.weekday_sun0() as usize), '·');
+        for row in today.weekday_sun0() as usize + 1..7 {
+            assert_eq!(nth(row), ' ', "future day painted:\n{out}");
+        }
+    }
+
+    #[test]
+    fn too_short_area_renders_nothing() {
+        let out = dump(80, 6, &BTreeMap::new());
+        assert!(out.trim().is_empty());
     }
 
     #[test]

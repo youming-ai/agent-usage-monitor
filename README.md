@@ -160,7 +160,7 @@ Expect a JSON response with `serverInfo.name = "aum"`.
 
 All platforms whose data directory exists are stacked top to bottom in order —
 no tabs. Each section mirrors Claude Code’s Stats **Overview**: header,
-quota, a current-month daily contribution calendar, and summary stats.
+quota, a year-long daily contribution heatmap, and summary stats.
 Detailed model/session breakdowns live in `aum stats` JSON / MCP. Sections
 share the screen equally.
 
@@ -168,14 +168,14 @@ share the screen equally.
  CLAUDE                                                            ✓ you@mail.com
 ───────────────────────────────────────────────────────────────────────────────
  ✓ 5h ▓▓▓▓▓▓░░░░  82%  resets 2h30m  |  ✓ 7d ▓▓▓▓░░░░░░  54%  resets 4d6h
-       Mon Tue Wed Thu Fri Sat Sun
-        ·   ·   ·   ·   ·   ■   ■
-        ·   ■   ·   ·   ·   ·   ·
-        ■   ·   ·   ■   ·   ·   ·
-        ·   ·   ■   ·   ·   ·   ·
-        ·   ·   ·   ·   ■   ·   ·
-        ·   ·   ·   ·   ·   ·   ·
-      Less ■ ■ ■ ■ More
+    Aug Sep Oct Nov  Dec Jan Feb Mar  Apr May  Jun Jul Aug
+    ·············································██·····
+Mon ··············································█·····
+    ···········································██·······
+Wed ············································█·······
+    ·············································██·····
+Fri ··············································█·····
+    ···········································███······
  Favorite model: Opus 4      Total tokens: 9.6m
  Sessions: 12                Longest session: 2h 15m
  Active days: 40/90          Longest streak: 7 days
@@ -187,10 +187,10 @@ share the screen equally.
   and model-scoped when present), plan/org, credits/extra-usage. Prefixed
   `live` in the UI. Claude: `api.anthropic.com/api/oauth/usage` + profile;
   Codex: `chatgpt.com/backend-api/wham/usage`. No official day-by-day history.
-- **Heatmap + local overview** — from on-disk logs. The heatmap is a calendar
-  for only the **current month**, with one daily cell under the Mon…Sun
-  columns. Empty days in the month show a dot; leading and trailing cells from
-  adjacent months are blank. Overview: favorite model, streaks, token split.
+- **Heatmap + local overview** — from on-disk logs. GitHub-style: one column
+  per week over the trailing year (as many weeks as the width fits), one row
+  per weekday, month labels on top. Empty days show a dot; days after today
+  stay blank. Overview: favorite model, streaks, token split.
   Always prefixed `local activity`.
 
 Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
