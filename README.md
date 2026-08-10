@@ -186,7 +186,8 @@ Fri · · · · · · · · · · · · · · · · · · · · · · · · · �
   per week, one row per weekday, month labels on top. Cells are two columns
   wide (square in a monospace font), so the terminal width decides how much
   history fits — about a year at 110 columns, two years at most. Empty days
-  show a dot; days after today stay blank. Overview: favorite model, streaks, token split.
+  show a dot, including the rest of the current week, so the grid stays a
+  rectangle. Overview: favorite model, streaks, token split.
   Always prefixed `local activity`.
 
 Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).

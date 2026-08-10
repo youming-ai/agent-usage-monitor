@@ -79,19 +79,16 @@ impl Widget for Heatmap<'_> {
         let back = today.weekday_sun0() as i64 + ((weeks - 1) * 7) as i64;
         let start = add_days(today, -back).unwrap_or(today);
 
-        // Column-major: each column is one week, rows are Sun…Sat. Days after
-        // today stay blank.
-        let mut metrics = vec![None; weeks * 7];
+        // Column-major: each column is one week, rows are Sun…Sat. The rest of
+        // the current week is drawn as empty days so the grid stays a
+        // rectangle instead of jutting out on the last column.
+        let mut metrics = vec![0u64; weeks * 7];
         let mut d = start;
-        for col in 0..weeks {
-            for row in 0..7 {
-                if d <= today {
-                    metrics[col * 7 + row] = Some(self.daily.get(&d).map(day_metric).unwrap_or(0));
-                }
-                d = add_days(d, 1).unwrap_or(d);
-            }
+        for slot in metrics.iter_mut() {
+            *slot = self.daily.get(&d).map(day_metric).unwrap_or(0);
+            d = add_days(d, 1).unwrap_or(d);
         }
-        let max = metrics.iter().flatten().copied().max().unwrap_or(0);
+        let max = metrics.iter().copied().max().unwrap_or(0);
 
         if has_header {
             let mut prev_month = None;
@@ -120,10 +117,7 @@ impl Widget for Heatmap<'_> {
             let x0 = col_x(col);
             for row in 0..7 {
                 let y = grid_top + row as u16;
-                let Some(metric) = metrics[col * 7 + row] else {
-                    continue;
-                };
-                let level = intensity(metric, max);
+                let level = intensity(metrics[col * 7 + row], max);
                 for dx in 0..CELL_W as u16 {
                     let Some(cell) = buf.cell_mut((x0 + dx, y)) else {
                         continue;
@@ -350,16 +344,30 @@ mod tests {
     }
 
     #[test]
-    fn today_is_the_last_painted_cell_and_future_days_stay_blank() {
+    fn today_sits_in_the_last_column_and_the_grid_stays_a_rectangle() {
         let today = CompactDate::from_datetime(Utc::now());
-        let out = dump(100, 8, &BTreeMap::new());
-        let rows: Vec<&str> = out.lines().skip(1).collect();
-        // Cells are CELL_W wide and flush right; the dot sits at their start.
-        let last_col = rows[0].chars().count() - CELL_W;
-        let nth = |row: usize| rows[row].chars().nth(last_col).unwrap();
-        assert_eq!(nth(today.weekday_sun0() as usize), '·');
-        for row in today.weekday_sun0() as usize + 1..7 {
-            assert_eq!(nth(row), ' ', "future day painted:\n{out}");
+        let mut daily = BTreeMap::new();
+        daily.insert(
+            today,
+            DayTotals {
+                cost_usd: 1.0,
+                tokens: 1,
+                calls: 1,
+            },
+        );
+        let area = Rect::new(0, 0, 100, 8);
+        let mut buffer = Buffer::empty(area);
+        contribution_heatmap(&daily, Color::Blue).render(area, &mut buffer);
+        // Cells are CELL_W wide and flush right, so the last one starts here.
+        let x = area.width - CELL_W as u16;
+        for row in 0..7u16 {
+            let cell = buffer.cell((x, 1 + row)).unwrap();
+            if row == u16::from(today.weekday_sun0()) {
+                assert_ne!(cell.style().bg, Some(Color::Reset), "today unpainted");
+            } else {
+                // Empty and not-yet-happened days alike keep the grid square.
+                assert_eq!(cell.symbol(), "·", "row {row} of the last column");
+            }
         }
     }
 
@@ -370,8 +378,7 @@ mod tests {
         contribution_heatmap(&BTreeMap::new(), Color::Blue).render(area, &mut buffer);
         // Painted cells carry a style; the cleared background does not. The
         // rightmost column of every weekday row must belong to a week cell.
-        let today = CompactDate::from_datetime(Utc::now());
-        for row in 0..=today.weekday_sun0() as u16 {
+        for row in 0..7u16 {
             assert_eq!(buffer.cell((99, 1 + row)).unwrap().style().fg, DIM.fg);
         }
     }
