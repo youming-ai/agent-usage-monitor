@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.5.0...v1.6.0) (2026-08-10)
+
+
+### Features
+
+* use square heatmap cells ([#66](https://github.com/youming-ai/agent-usage-monitor/issues/66)) ([536a1a9](https://github.com/youming-ai/agent-usage-monitor/commit/536a1a9aea34f815cfb16055f58e73fdf49325b0))
+
+
+### Bug Fixes
+
+* keep the heatmap grid rectangular ([#68](https://github.com/youming-ai/agent-usage-monitor/issues/68)) ([d288f5a](https://github.com/youming-ai/agent-usage-monitor/commit/d288f5a21b28d0db9fe1f6effbfcdc9782d7441a))
+
 ## [1.5.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.4.0...v1.5.0) (2026-08-10)
 
 
