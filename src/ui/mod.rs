@@ -6,12 +6,15 @@ mod util;
 use crate::state::{AppState, Platform};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout},
+    layout::{Alignment, Constraint, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 use std::sync::{Arc, RwLock};
+
+/// Horizontal inset so the dashboard never touches the terminal edges.
+const CONTENT_PADDING: u16 = 2;
 
 pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let state = match app_state.try_read() {
@@ -33,7 +36,11 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
         .iter()
         .map(|_| Constraint::Ratio(1, available.len() as u32))
         .collect();
-    let chunks = Layout::vertical(constraints).split(frame.area());
+    let area = frame.area().inner(Margin {
+        vertical: 0,
+        horizontal: CONTENT_PADDING,
+    });
+    let chunks = Layout::vertical(constraints).split(area);
     for (i, &platform) in available.iter().enumerate() {
         render_platform(frame, chunks[i], platform, &state);
     }
@@ -149,13 +156,7 @@ fn render_platform(
         );
     }
 
-    let full_heat_area = chunks[4];
-    let heat_area = ratatui::layout::Rect::new(
-        full_heat_area.x,
-        full_heat_area.y,
-        full_heat_area.width / 2,
-        full_heat_area.height,
-    );
+    let heat_area = chunks[4];
     if activity_header_h > 0 {
         let stats = overview::OverviewStats::from_platform(p);
         frame.render_widget(
@@ -309,11 +310,11 @@ mod tests {
     }
 
     #[test]
-    fn heatmap_uses_half_of_the_platform_width() {
+    fn heatmap_fills_the_padded_platform_width() {
         let out = dump(100, 40, sample_state());
         let row = out
             .lines()
-            .find(|line| line.starts_with("Mon "))
+            .find(|line| line.trim_start().starts_with("Mon"))
             .expect("heatmap weekday row");
         let last_cell = row
             .chars()
@@ -322,11 +323,10 @@ mod tests {
             .map(|(index, _)| index)
             .max()
             .expect("heatmap cells");
-        assert!(last_cell < 50, "heatmap escaped its half-width: {row}");
-        assert!(
-            out.contains("last 23 weeks"),
-            "header range is stale:\n{out}"
-        );
+        // The grid stretches across the full (padded) width, not the old
+        // half-width mark.
+        assert!(last_cell > 80, "heatmap did not fill the width: {row}");
+        assert!(out.contains("months"), "header range is stale:\n{out}");
     }
 
     #[test]

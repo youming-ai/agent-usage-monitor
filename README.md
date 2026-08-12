@@ -187,10 +187,11 @@ Less  · ■ ■ ■ ■  More
   Codex: `chatgpt.com/backend-api/wham/usage`. No official day-by-day history.
 - **Token activity heatmap + local summary** — from on-disk logs. The header
   shows lifetime tokens, peak day, current/best streak, and longest task. The
-  grid has one column per week, all seven weekday rows, and month labels on
-  top. Each day uses one colored square plus one spacer column, so the
-  terminal width decides how much history fits, and the header reports that
-  visible range. Empty days are dim dots, including the rest of the current
+  grid has one column per week, all seven weekday rows (Mon…Sun), and month
+  labels on top. Each day uses one colored square plus one spacer column,
+  stretching across the full padded width so the terminal width decides how
+  much history fits; the header reports that visible range. Empty days are
+  dim dots, including the rest of the current
   week, while active days are separated colored squares. The legend shows the
   activity scale.
 
