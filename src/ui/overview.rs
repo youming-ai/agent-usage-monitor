@@ -102,8 +102,13 @@ pub fn activity_header(
     let range = match visible_weeks {
         0 => "recent activity".into(),
         1 => "last week".into(),
-        53.. => "last 12 months".into(),
-        weeks => format!("last {weeks} weeks"),
+        weeks => {
+            let months = ((weeks as f64) * 7.0 / 30.0).round() as u64;
+            match months {
+                0 | 1 => "last month".into(),
+                m => format!("last {m} months"),
+            }
+        }
     };
 
     Paragraph::new(vec![

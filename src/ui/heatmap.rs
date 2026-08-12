@@ -1,6 +1,6 @@
-//! Token activity heatmap: one column per week, one row per weekday (Sun…Sat),
-//! and month labels on top. Cells use a fixed one-column spacer so the grid
-//! stays compact instead of stretching across the whole terminal.
+//! Token activity heatmap: one column per week, one row per weekday
+//! (Mon…Sun), and month labels on top. Each week is one square plus a
+//! one-column spacer, and the grid stretches to fill the terminal width.
 
 use crate::state::{CompactDate, DayTotals};
 use chrono::{Datelike, Utc};
@@ -24,8 +24,6 @@ pub const LEGEND_HEIGHT: u16 = 1;
 
 /// Minimum horizontal footprint of a week: one square and one spacer.
 const CELL_W: usize = 2;
-/// Cap the visual range at roughly the twelve months named in the header.
-const MAX_WEEKS: usize = 53;
 /// Width of the weekday-label gutter on the left. `pub` so `ui::mod` can keep
 /// its grid-vs-strip width gate in lockstep with the render gate here.
 pub const GUTTER: u16 = 4;
@@ -34,7 +32,7 @@ const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 /// Sparse weekday labels keep the grid visually close to Claude Code.
-const ROW_LABELS: [(usize, &str); 3] = [(1, "Mon"), (3, "Wed"), (5, "Fri")];
+const ROW_LABELS: [(usize, &str); 3] = [(0, "Mon"), (2, "Wed"), (4, "Fri")];
 
 /// Contribution heatmap: columns = weeks (newest last), rows = weekdays.
 pub fn contribution_heatmap<'a>(
@@ -56,7 +54,7 @@ pub fn visible_weeks(width: u16) -> usize {
     }
     let gutter = if width > GUTTER + 10 { GUTTER } else { 0 };
     let avail = width.saturating_sub(gutter) as usize;
-    (avail / CELL_W).clamp(1, MAX_WEEKS)
+    (avail / CELL_W).max(1)
 }
 
 impl Widget for Heatmap<'_> {
@@ -81,19 +79,18 @@ impl Widget for Heatmap<'_> {
         let grid_top = area.y + u16::from(has_header);
         let gutter = if area.width > GUTTER + 10 { GUTTER } else { 0 };
         let avail = (area.width - gutter) as usize;
-        // Keep a fixed one-column spacer between squares. The caller limits
-        // the widget to half the platform width, so this remains compact on
-        // ultrawide terminals while still showing as much history as fits.
+        // Keep a fixed one-column spacer between squares. The caller gives the
+        // widget the full platform width, so the grid stretches to fill it.
         let weeks = visible_weeks(area.width);
         let pad = (avail - weeks * CELL_W).min(CELL_W - 1) as u16;
         let col_x = |col: usize| area.x + gutter + pad + (col * CELL_W) as u16;
 
         let today = CompactDate::from_datetime(Utc::now());
         // Last column is the week containing today; walk back whole weeks.
-        let back = today.weekday_sun0() as i64 + ((weeks - 1) * 7) as i64;
+        let back = today.weekday_mon0() as i64 + ((weeks - 1) * 7) as i64;
         let start = add_days(today, -back).unwrap_or(today);
 
-        // Column-major: each column is one week, rows are Sun…Sat. The rest of
+        // Column-major: each column is one week, rows are Mon…Sun. The rest of
         // the current week is drawn as empty days so the grid stays a
         // rectangle instead of jutting out on the last column.
         let mut metrics = vec![0u64; weeks * 7];
@@ -108,14 +105,14 @@ impl Widget for Heatmap<'_> {
             let mut prev_month = None;
             let mut next_x = area.x;
             for col in 0..weeks {
-                let sunday = add_days(start, (col * 7) as i64).unwrap_or(start);
-                if prev_month == Some(sunday.month()) {
+                let monday = add_days(start, (col * 7) as i64).unwrap_or(start);
+                if prev_month == Some(monday.month()) {
                     continue;
                 }
-                prev_month = Some(sunday.month());
+                prev_month = Some(monday.month());
                 let x = col_x(col);
                 if x >= next_x && x + 3 <= area.x + area.width {
-                    put_str(buf, x, area.y, MONTHS[sunday.month() as usize - 1], DIM);
+                    put_str(buf, x, area.y, MONTHS[monday.month() as usize - 1], DIM);
                     next_x = x + 4;
                 }
             }
@@ -401,7 +398,7 @@ mod tests {
         let x = area.width - CELL_W as u16;
         for row in 0..7u16 {
             let cell = buffer.cell((x, 1 + row)).unwrap();
-            if row == u16::from(today.weekday_sun0()) {
+            if row == u16::from(today.weekday_mon0()) {
                 assert_ne!(cell.style().fg, DIM.fg, "today unpainted");
             } else {
                 // Empty and not-yet-happened days keep the grid rectangular.
@@ -447,7 +444,7 @@ mod tests {
         }
         contribution_heatmap(&daily, Color::Blue).render(area, &mut buffer);
 
-        let y = 1 + u16::from(today.weekday_sun0());
+        let y = 1 + u16::from(today.weekday_mon0());
         let positions: Vec<u16> = (GUTTER..area.width)
             .filter(|&x| buffer.cell((x, y)).unwrap().symbol() == "■")
             .collect();
@@ -460,6 +457,9 @@ mod tests {
     fn visible_week_count_matches_available_width() {
         assert_eq!(visible_weeks(50), 23);
         assert_eq!(visible_weeks(110), 53);
+        // No hard cap: a wide terminal shows more than twelve months so the
+        // grid keeps filling the available width.
+        assert_eq!(visible_weeks(200), 98);
         assert_eq!(visible_weeks(GUTTER), 0);
     }
 
