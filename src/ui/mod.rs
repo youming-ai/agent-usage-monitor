@@ -58,35 +58,43 @@ fn render_platform(
     } else {
         0
     };
-    let remain = h.saturating_sub(header_h + quota_h);
-    let local_label_h = u16::from(remain > 0);
-    let content_remain = remain.saturating_sub(local_label_h);
+    let content_remain = h.saturating_sub(header_h + quota_h);
+    let full_activity_h = 2 + heatmap::HEATMAP_FULL_HEIGHT + heatmap::LEGEND_HEIGHT;
 
-    // Prefer the year heatmap plus overview. The grid needs all seven weekday
-    // rows, so short terminals drop the month labels and then the whole grid.
-    let (heatmap_h, overview_h) =
-        if content_remain >= heatmap::HEATMAP_FULL_HEIGHT + overview::OVERVIEW_LINES {
-            (heatmap::HEATMAP_FULL_HEIGHT, overview::OVERVIEW_LINES)
-        } else if content_remain >= heatmap::HEATMAP_MIN_HEIGHT + overview::OVERVIEW_LINES {
-            (heatmap::HEATMAP_MIN_HEIGHT, overview::OVERVIEW_LINES)
-        } else if content_remain >= heatmap::HEATMAP_FULL_HEIGHT {
-            (heatmap::HEATMAP_FULL_HEIGHT, 0)
-        } else if content_remain >= heatmap::HEATMAP_MIN_HEIGHT {
-            (heatmap::HEATMAP_MIN_HEIGHT, 0)
-        } else if content_remain > overview::OVERVIEW_LINES {
+    // The reference layout gets a two-line activity summary and a legend when
+    // there is room. Shorter sections keep the old source label and degrade
+    // from the year grid to the compact strip without clipping the header.
+    let (local_label_h, activity_header_h, heatmap_h, legend_h, overview_h) =
+        if content_remain >= full_activity_h {
+            (
+                0,
+                2,
+                heatmap::HEATMAP_FULL_HEIGHT,
+                heatmap::LEGEND_HEIGHT,
+                0,
+            )
+        } else if content_remain > heatmap::HEATMAP_FULL_HEIGHT {
+            (1, 0, heatmap::HEATMAP_FULL_HEIGHT, 0, 0)
+        } else if content_remain > heatmap::HEATMAP_MIN_HEIGHT {
+            (1, 0, heatmap::HEATMAP_MIN_HEIGHT, 0, 0)
+        } else if content_remain >= overview::OVERVIEW_LINES + 2 {
             // Not enough rows for the year grid: one-line strip + stats.
-            (1, overview::OVERVIEW_LINES)
+            (1, 0, 1, 0, overview::OVERVIEW_LINES)
+        } else if content_remain >= 2 {
+            (1, 0, 1, 0, 0)
         } else if content_remain >= 1 {
-            (1, 0)
+            (1, 0, 0, 0, 0)
         } else {
-            (0, 0)
+            (0, 0, 0, 0, 0)
         };
 
     let chunks = Layout::vertical([
         Constraint::Length(header_h),
         Constraint::Length(quota_h),
         Constraint::Length(local_label_h),
+        Constraint::Length(activity_header_h),
         Constraint::Length(heatmap_h),
+        Constraint::Length(legend_h),
         Constraint::Min(overview_h),
     ])
     .split(area);
@@ -141,16 +149,33 @@ fn render_platform(
         );
     }
 
-    let heat_area = chunks[3];
-    if heat_area.height >= heatmap::HEATMAP_MIN_HEIGHT && heat_area.width > 4 {
+    let full_heat_area = chunks[4];
+    let heat_area = ratatui::layout::Rect::new(
+        full_heat_area.x,
+        full_heat_area.y,
+        full_heat_area.width / 2,
+        full_heat_area.height,
+    );
+    if activity_header_h > 0 {
+        let stats = overview::OverviewStats::from_platform(p);
+        frame.render_widget(
+            overview::activity_header(&stats, accent, heatmap::visible_weeks(heat_area.width)),
+            chunks[3],
+        );
+    }
+    if heat_area.height >= heatmap::HEATMAP_MIN_HEIGHT && heat_area.width > heatmap::GUTTER {
         frame.render_widget(heatmap::contribution_heatmap(&p.daily, accent), heat_area);
     } else if heat_area.height >= 1 && heat_area.width > 0 {
         frame.render_widget(heatmap::contribution_strip(&p.daily, accent), heat_area);
     }
 
-    if overview_h > 0 && chunks[4].height >= 3 {
+    if legend_h > 0 {
+        frame.render_widget(heatmap::contribution_legend(accent), chunks[5]);
+    }
+
+    if overview_h > 0 && chunks[6].height >= 3 {
         let stats = overview::OverviewStats::from_platform(p);
-        frame.render_widget(overview::overview_paragraph(&stats, accent), chunks[4]);
+        frame.render_widget(overview::overview_paragraph(&stats, accent), chunks[6]);
     }
 }
 
@@ -253,17 +278,16 @@ mod tests {
         );
         assert!(out.contains('■') || out.contains('·'), "heatmap cells");
         assert!(
-            out.contains("local activity"),
+            out.contains("Token activity"),
             "local data must stay labeled"
         );
         assert!(
-            out.contains("Mon") && out.contains("Wed") && out.contains("Fri"),
+            ["Mon", "Wed", "Fri"]
+                .into_iter()
+                .all(|label| out.contains(label)),
             "year heatmap should include weekday rows:\n{out}"
         );
-        assert!(
-            out.contains("Favorite") || out.contains("local activity"),
-            "overview or local-activity label"
-        );
+        assert!(out.contains("Token activity"), "activity summary");
         assert!(!out.contains("MODEL"));
         assert!(!out.contains("SESSION"));
     }
@@ -281,6 +305,27 @@ mod tests {
         assert!(
             out.contains("local activity"),
             "local heatmaps must be labeled:\n{out}"
+        );
+    }
+
+    #[test]
+    fn heatmap_uses_half_of_the_platform_width() {
+        let out = dump(100, 40, sample_state());
+        let row = out
+            .lines()
+            .find(|line| line.starts_with("Mon "))
+            .expect("heatmap weekday row");
+        let last_cell = row
+            .chars()
+            .enumerate()
+            .filter(|(_, ch)| matches!(ch, '■' | '·'))
+            .map(|(index, _)| index)
+            .max()
+            .expect("heatmap cells");
+        assert!(last_cell < 50, "heatmap escaped its half-width: {row}");
+        assert!(
+            out.contains("last 23 weeks"),
+            "header range is stale:\n{out}"
         );
     }
 
