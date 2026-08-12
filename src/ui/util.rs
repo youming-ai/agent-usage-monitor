@@ -12,6 +12,25 @@ pub fn format_tokens(n: u64) -> String {
     }
 }
 
+/// Compact token display for the activity summary: `4.77B`, `159M`, `12.5K`.
+pub fn format_activity_tokens(n: u64) -> String {
+    let (value, suffix) = if n >= 1_000_000_000 {
+        (n as f64 / 1_000_000_000.0, "B")
+    } else if n >= 1_000_000 {
+        (n as f64 / 1_000_000.0, "M")
+    } else if n >= 1_000 {
+        (n as f64 / 1_000.0, "K")
+    } else {
+        return n.to_string();
+    };
+
+    let value = format!("{value:.2}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string();
+    format!("{value}{suffix}")
+}
+
 /// Compact duration from seconds: `45m`, `3h12m`, `9d4h`.
 pub fn format_duration_secs(secs: i64) -> String {
     let secs = secs.max(0);
@@ -61,6 +80,14 @@ mod tests {
         assert_eq!(format_tokens(1_200), "1.2k");
         assert_eq!(format_tokens(1_200_000), "1.2m");
         assert_eq!(format_tokens(17_100_000_000), "17.1b");
+    }
+
+    #[test]
+    fn activity_tokens_scale() {
+        assert_eq!(format_activity_tokens(512), "512");
+        assert_eq!(format_activity_tokens(12_500), "12.5K");
+        assert_eq!(format_activity_tokens(159_000_000), "159M");
+        assert_eq!(format_activity_tokens(4_770_000_000), "4.77B");
     }
 
     #[test]

@@ -276,6 +276,9 @@ impl ToolOps {
 #[derive(Debug)]
 pub struct PlatformState {
     pub records: VecDeque<UsageRecord>,
+    /// Tokens from every unique record ingested, independent of the bounded
+    /// record window and the ~year-long daily heatmap history.
+    pub lifetime_tokens: u64,
     /// Per-model totals for the same bounded record window represented by
     /// `records`, the TUI model table, and `window_calls`/`window_cost`.
     pub models: HashMap<InternedString, ModelTotals>,
@@ -352,6 +355,7 @@ impl AppState {
         let max_records = max_records.max(1);
         let make = || PlatformState {
             records: VecDeque::with_capacity(max_records),
+            lifetime_tokens: 0,
             models: HashMap::new(),
             sessions: HashMap::new(),
             daily: BTreeMap::new(),
@@ -394,6 +398,7 @@ impl AppState {
             if !p.seen_ids.insert(r.id) {
                 continue;
             }
+            p.lifetime_tokens = p.lifetime_tokens.saturating_add(record_tokens(&r));
             if p.records.len() >= p.max_records
                 && let Some(old) = p.records.pop_front()
             {
@@ -628,6 +633,19 @@ mod tests {
                 .models
                 .contains_key(&intern("gpt-5"))
         );
+    }
+
+    #[test]
+    fn lifetime_tokens_survive_daily_history_pruning() {
+        let mut s = AppState::with_capacity(10);
+        let mut old = rec("opus-4", 100, 50, 1.0);
+        old.timestamp = Utc::now() - chrono::Duration::days(400);
+
+        s.add_records(Platform::ClaudeCode, vec![old]);
+
+        let p = &s.platforms[claude_idx()];
+        assert!(p.daily.is_empty());
+        assert_eq!(p.lifetime_tokens, 150);
     }
 
     #[test]

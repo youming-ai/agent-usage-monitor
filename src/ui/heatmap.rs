@@ -1,6 +1,6 @@
-//! GitHub-style contribution heatmap: one column per week, one row per weekday
-//! (Sun…Sat), month labels on top. Cells are square, so the terminal width
-//! decides how many weeks of history fit.
+//! Token activity heatmap: one column per week, one row per weekday (Sun…Sat),
+//! and month labels on top. Cells use a fixed one-column spacer so the grid
+//! stays compact instead of stretching across the whole terminal.
 
 use crate::state::{CompactDate, DayTotals};
 use chrono::{Datelike, Utc};
@@ -8,7 +8,8 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    widgets::Widget,
+    text::{Line, Span},
+    widgets::{Paragraph, Widget},
 };
 use std::collections::BTreeMap;
 
@@ -18,18 +19,21 @@ pub const HEATMAP_FULL_HEIGHT: u16 = 8;
 /// Minimum height the grid needs (seven weekday rows, no month labels).
 pub const HEATMAP_MIN_HEIGHT: u16 = 7;
 
-/// Two terminal columns per cell — roughly square in a monospace font.
+/// One line for the Less/More scale.
+pub const LEGEND_HEIGHT: u16 = 1;
+
+/// Minimum horizontal footprint of a week: one square and one spacer.
 const CELL_W: usize = 2;
-/// Cap on history so an ultra-wide terminal does not scroll back forever.
-const MAX_WEEKS: usize = 105;
-/// Width of the Mon/Wed/Fri gutter on the left. `pub` so `ui::mod` can keep its
-/// grid-vs-strip width gate in lockstep with the render gate here.
+/// Cap the visual range at roughly the twelve months named in the header.
+const MAX_WEEKS: usize = 53;
+/// Width of the weekday-label gutter on the left. `pub` so `ui::mod` can keep
+/// its grid-vs-strip width gate in lockstep with the render gate here.
 pub const GUTTER: u16 = 4;
 const DIM: Style = Style::new().fg(Color::DarkGray);
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
-/// Row index (Sun = 0) → weekday label, GitHub-style.
+/// Sparse weekday labels keep the grid visually close to Claude Code.
 const ROW_LABELS: [(usize, &str); 3] = [(1, "Mon"), (3, "Wed"), (5, "Fri")];
 
 /// Contribution heatmap: columns = weeks (newest last), rows = weekdays.
@@ -43,6 +47,16 @@ pub fn contribution_heatmap<'a>(
 pub struct Heatmap<'a> {
     daily: &'a BTreeMap<CompactDate, DayTotals>,
     accent: Color,
+}
+
+/// Number of week columns that fit in a heatmap of `width` terminal cells.
+pub fn visible_weeks(width: u16) -> usize {
+    if width <= GUTTER {
+        return 0;
+    }
+    let gutter = if width > GUTTER + 10 { GUTTER } else { 0 };
+    let avail = width.saturating_sub(gutter) as usize;
+    (avail / CELL_W).clamp(1, MAX_WEEKS)
 }
 
 impl Widget for Heatmap<'_> {
@@ -67,10 +81,10 @@ impl Widget for Heatmap<'_> {
         let grid_top = area.y + u16::from(has_header);
         let gutter = if area.width > GUTTER + 10 { GUTTER } else { 0 };
         let avail = (area.width - gutter) as usize;
-        // Square cells of a fixed width; the width decides how many weeks of
-        // history fit. An odd leftover column pads the gutter so the grid ends
-        // flush with the right edge.
-        let weeks = (avail / CELL_W).clamp(1, MAX_WEEKS);
+        // Keep a fixed one-column spacer between squares. The caller limits
+        // the widget to half the platform width, so this remains compact on
+        // ultrawide terminals while still showing as much history as fits.
+        let weeks = visible_weeks(area.width);
         let pad = (avail - weeks * CELL_W).min(CELL_W - 1) as u16;
         let col_x = |col: usize| area.x + gutter + pad + (col * CELL_W) as u16;
 
@@ -118,21 +132,38 @@ impl Widget for Heatmap<'_> {
             for row in 0..7 {
                 let y = grid_top + row as u16;
                 let level = intensity(metrics[col * 7 + row], max);
-                for dx in 0..CELL_W as u16 {
-                    let Some(cell) = buf.cell_mut((x0 + dx, y)) else {
-                        continue;
-                    };
-                    if level == 0 {
-                        cell.set_symbol(if dx == 0 { "·" } else { " " });
-                        cell.set_style(DIM);
-                    } else {
-                        cell.set_symbol(" ");
-                        cell.set_style(Style::default().bg(levels[level]));
-                    }
+                let Some(cell) = buf.cell_mut((x0, y)) else {
+                    continue;
+                };
+                if level == 0 {
+                    cell.set_symbol("·");
+                    cell.set_style(DIM);
+                } else {
+                    cell.set_symbol("■");
+                    cell.set_style(Style::default().fg(levels[level]));
                 }
             }
         }
     }
+}
+
+/// Legend shown below the full activity grid.
+pub fn contribution_legend(accent: Color) -> Paragraph<'static> {
+    let levels = accent_levels(accent);
+    let dim = Style::default().fg(Color::DarkGray);
+    let square = |color| Span::styled("■", Style::default().fg(color));
+
+    Paragraph::new(Line::from(vec![
+        Span::styled("Less  · ", dim),
+        square(levels[1]),
+        Span::raw(" "),
+        square(levels[2]),
+        Span::raw(" "),
+        square(levels[3]),
+        Span::raw(" "),
+        square(levels[4]),
+        Span::styled("  More", dim),
+    ]))
 }
 
 /// Compact strip of the current month's days for short terminals. If there
@@ -172,7 +203,7 @@ impl Widget for StripHeatmap<'_> {
             let x = area.x + i as u16;
             if let Some(cell) = buf.cell_mut((x, area.y)) {
                 if level == 0 {
-                    cell.set_symbol("·");
+                    cell.set_symbol("■");
                     cell.set_style(DIM);
                 } else {
                     cell.set_symbol("■");
@@ -190,11 +221,7 @@ impl Widget for StripHeatmap<'_> {
 }
 
 pub fn day_metric(d: &DayTotals) -> u64 {
-    if d.cost_usd > 0.0 {
-        (d.cost_usd * 1_000_000.0) as u64
-    } else {
-        d.tokens
-    }
+    d.tokens
 }
 
 fn intensity(metric: u64, max: u64) -> usize {
@@ -219,7 +246,7 @@ fn accent_levels(accent: Color) -> [Color; 5] {
         _ => (217, 119, 87),
     };
     [
-        Color::Rgb(40, 40, 44),
+        Color::DarkGray,
         mix_rgb(r, g, b, 0.22),
         mix_rgb(r, g, b, 0.42),
         mix_rgb(r, g, b, 0.68),
@@ -228,9 +255,9 @@ fn accent_levels(accent: Color) -> [Color; 5] {
 }
 
 fn mix_rgb(r: u8, g: u8, b: u8, t: f64) -> Color {
-    let br = 22.0;
-    let bg = 27.0;
-    let bb = 34.0;
+    let br = 190.0;
+    let bg = 190.0;
+    let bb = 190.0;
     Color::Rgb(
         (br + (r as f64 - br) * t).round() as u8,
         (bg + (g as f64 - bg) * t).round() as u8,
@@ -316,6 +343,16 @@ mod tests {
         assert_eq!(intensity(90, 100), 4);
     }
 
+    #[test]
+    fn token_metric_uses_tokens_not_cost() {
+        let day = DayTotals {
+            cost_usd: 99.0,
+            tokens: 7,
+            calls: 1,
+        };
+        assert_eq!(day_metric(&day), 7);
+    }
+
     fn dump(w: u16, h: u16, daily: &BTreeMap<CompactDate, DayTotals>) -> String {
         let area = Rect::new(0, 0, w, h);
         let mut buffer = Buffer::empty(area);
@@ -334,12 +371,14 @@ mod tests {
     fn year_grid_has_weekday_and_month_labels() {
         let out = dump(80, 8, &BTreeMap::new());
         assert!(
-            out.contains("Mon") && out.contains("Wed") && out.contains("Fri"),
+            ["Mon", "Wed", "Fri"]
+                .into_iter()
+                .all(|label| out.contains(label)),
             "{out}"
         );
         let today = CompactDate::from_datetime(Utc::now());
         assert!(out.contains(MONTHS[today.month() as usize - 1]), "{out}");
-        // Seven weekday rows of cells, today's week in the last column.
+        // Seven weekday rows of empty-day dots.
         assert_eq!(out.lines().filter(|l| l.contains('·')).count(), 7);
     }
 
@@ -358,14 +397,14 @@ mod tests {
         let area = Rect::new(0, 0, 100, 8);
         let mut buffer = Buffer::empty(area);
         contribution_heatmap(&daily, Color::Blue).render(area, &mut buffer);
-        // Cells are CELL_W wide and flush right, so the last one starts here.
+        // Fixed-width columns leave the final spacer at the right edge.
         let x = area.width - CELL_W as u16;
         for row in 0..7u16 {
             let cell = buffer.cell((x, 1 + row)).unwrap();
             if row == u16::from(today.weekday_sun0()) {
-                assert_ne!(cell.style().bg, Some(Color::Reset), "today unpainted");
+                assert_ne!(cell.style().fg, DIM.fg, "today unpainted");
             } else {
-                // Empty and not-yet-happened days alike keep the grid square.
+                // Empty and not-yet-happened days keep the grid rectangular.
                 assert_eq!(cell.symbol(), "·", "row {row} of the last column");
             }
         }
@@ -376,11 +415,52 @@ mod tests {
         let area = Rect::new(0, 0, 100, 8);
         let mut buffer = Buffer::empty(area);
         contribution_heatmap(&BTreeMap::new(), Color::Blue).render(area, &mut buffer);
-        // Painted cells carry a style; the cleared background does not. The
-        // rightmost column of every weekday row must belong to a week cell.
+        // The final square is followed by one spacer column.
         for row in 0..7u16 {
-            assert_eq!(buffer.cell((99, 1 + row)).unwrap().style().fg, DIM.fg);
+            assert_eq!(
+                buffer
+                    .cell((area.width - CELL_W as u16, 1 + row))
+                    .unwrap()
+                    .symbol(),
+                "·"
+            );
+            assert_eq!(buffer.cell((99, 1 + row)).unwrap().symbol(), " ");
         }
+    }
+
+    #[test]
+    fn week_squares_keep_a_blank_column_between_neighbors() {
+        let area = Rect::new(0, 0, 100, 8);
+        let mut buffer = Buffer::empty(area);
+        let today = CompactDate::from_datetime(Utc::now());
+        let previous_week = add_days(today, -7).unwrap();
+        let mut daily = BTreeMap::new();
+        for day in [previous_week, today] {
+            daily.insert(
+                day,
+                DayTotals {
+                    cost_usd: 0.0,
+                    tokens: 1,
+                    calls: 1,
+                },
+            );
+        }
+        contribution_heatmap(&daily, Color::Blue).render(area, &mut buffer);
+
+        let y = 1 + u16::from(today.weekday_sun0());
+        let positions: Vec<u16> = (GUTTER..area.width)
+            .filter(|&x| buffer.cell((x, y)).unwrap().symbol() == "■")
+            .collect();
+        assert_eq!(positions.len(), 2);
+        assert_eq!(positions[1] - positions[0], CELL_W as u16);
+        assert_eq!(positions.last().copied(), Some(area.width - CELL_W as u16));
+    }
+
+    #[test]
+    fn visible_week_count_matches_available_width() {
+        assert_eq!(visible_weeks(50), 23);
+        assert_eq!(visible_weeks(110), 53);
+        assert_eq!(visible_weeks(GUTTER), 0);
     }
 
     #[test]

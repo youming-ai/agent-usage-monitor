@@ -1,6 +1,6 @@
 //! Claude Code–style overview stats under the contribution heatmap.
 
-use super::util::{format_duration_secs, format_month_day, format_tokens};
+use super::util::{format_activity_tokens, format_duration_secs, format_month_day, format_tokens};
 use crate::state::{CompactDate, DayTotals, PlatformState, resolve};
 use chrono::Utc;
 use ratatui::{
@@ -17,6 +17,8 @@ pub const OVERVIEW_LINES: u16 = 5;
 pub struct OverviewStats {
     pub favorite_model: String,
     pub total_tokens: u64,
+    pub lifetime_tokens: u64,
+    pub peak_tokens: u64,
     pub sessions: u64,
     pub longest_session_secs: i64,
     pub active_days: u64,
@@ -59,10 +61,13 @@ impl OverviewStats {
 
         let (active_days, span_days, longest_streak, current_streak, most_active) =
             day_stats(&p.daily);
+        let peak_tokens = p.daily.values().map(|d| d.tokens).max().unwrap_or(0);
 
         Self {
             favorite_model: favorite,
             total_tokens: input + output + cache_read + cache_write,
+            lifetime_tokens: p.lifetime_tokens,
+            peak_tokens,
             sessions: p.sessions.len() as u64,
             longest_session_secs,
             active_days,
@@ -76,6 +81,50 @@ impl OverviewStats {
             cache_write,
         }
     }
+}
+
+/// Header used by the activity heatmap, matching the compact stats style of
+/// the reference dashboard while keeping the values sourced from local logs.
+pub fn activity_header(
+    stats: &OverviewStats,
+    accent: Color,
+    visible_weeks: usize,
+) -> Paragraph<'static> {
+    let title = Style::default().add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(Color::DarkGray);
+    let value = Style::default().fg(accent);
+    let longest = if stats.longest_session_secs > 0 {
+        format_duration_secs(stats.longest_session_secs)
+    } else {
+        "—".into()
+    };
+
+    let range = match visible_weeks {
+        0 => "recent activity".into(),
+        1 => "last week".into(),
+        53.. => "last 12 months".into(),
+        weeks => format!("last {weeks} weeks"),
+    };
+
+    Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Token activity", title),
+            Span::styled(format!("    {range}"), dim),
+        ]),
+        Line::from(vec![
+            Span::styled("Lifetime ", dim),
+            Span::styled(format_activity_tokens(stats.lifetime_tokens), value),
+            Span::styled("  ·  Peak ", dim),
+            Span::styled(format_activity_tokens(stats.peak_tokens), value),
+            Span::styled("  ·  Streak ", dim),
+            Span::styled(
+                format!("{}d (best {}d)", stats.current_streak, stats.longest_streak),
+                value,
+            ),
+            Span::styled("  ·  Longest task ", dim),
+            Span::styled(longest, value),
+        ]),
+    ])
 }
 
 /// Two-column overview as a multi-line Paragraph.
@@ -288,6 +337,8 @@ mod tests {
         assert_eq!(ov.sessions, 1);
         assert!(ov.favorite_model.to_lowercase().contains("opus"));
         assert_eq!(ov.active_days, 1);
+        assert_eq!(ov.lifetime_tokens, 3_430);
+        assert_eq!(ov.peak_tokens, 3_430);
         assert!(ov.total_tokens > 0);
     }
 }
