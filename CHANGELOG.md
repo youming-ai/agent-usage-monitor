@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.6.0...v1.7.0) (2026-08-12)
+
+
+### Features
+
+* **ui:** add token-activity header and legend to heatmap ([#69](https://github.com/youming-ai/agent-usage-monitor/issues/69)) ([21e5a8f](https://github.com/youming-ai/agent-usage-monitor/commit/21e5a8f6a3454f0da918a3d358d43c9d1ac46b88))
+
 ## [1.6.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.5.0...v1.6.0) (2026-08-10)
 
 
