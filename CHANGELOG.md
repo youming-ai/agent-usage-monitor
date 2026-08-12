@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.7.0...v1.8.0) (2026-08-12)
+
+
+### Features
+
+* **ui:** start heatmap on Monday, fill width, and pad the dashboard ([#71](https://github.com/youming-ai/agent-usage-monitor/issues/71)) ([a274c94](https://github.com/youming-ai/agent-usage-monitor/commit/a274c944cb191c295a9f5d2cf8f761cd792f3c68))
+
 ## [1.7.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.6.0...v1.7.0) (2026-08-12)
 
 
