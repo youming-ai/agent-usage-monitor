@@ -98,7 +98,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .await
                 .expect("reader discovery task panicked");
             if let Ok(mut state) = app_state.write() {
-                state.set_available_platforms(readers.platforms());
+                state.set_available_platforms(platforms::displayable_platforms(
+                    readers.platforms(),
+                    &agent_paths,
+                ));
             }
             let (mut platform_watchers, mut watcher_rx) = watcher::start_watchers(&agent_paths);
             let mut fallback = tokio::time::interval(fallback_interval);
@@ -148,7 +151,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .expect("reader discovery task panicked");
                         readers = updated_readers;
                         if let Ok(mut state) = app_state.write() {
-                            state.set_available_platforms(readers.platforms());
+                            state.set_available_platforms(platforms::displayable_platforms(
+                                readers.platforms(),
+                                &agent_paths,
+                            ));
                         }
                         for platform in readers.platforms() {
                             platform_watchers

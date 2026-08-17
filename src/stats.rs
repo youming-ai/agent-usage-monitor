@@ -390,7 +390,18 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
             continue;
         }
         let path = paths.path_for(entry.platform);
-        let mut reader = entry.build_reader(path.clone());
+        // Quota-API-only platforms (Grok) have no local session reader; keep
+        // them in the report as an empty (available) platform row.
+        let Some(mut reader) = entry.build_reader(path.clone()) else {
+            entries.push((
+                key,
+                entry.platform,
+                path,
+                Vec::new(),
+                ToolOpsView::from(crate::state::ToolOps::default()),
+            ));
+            continue;
+        };
         let (records, tool_ops) = tokio::task::spawn_blocking(move || {
             let records = reader.scan_all();
             let ops = reader.take_tool_ops_delta();

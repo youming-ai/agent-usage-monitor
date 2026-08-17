@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod grok;
 pub(crate) mod util;
 
 use serde::{Deserialize, Serialize};

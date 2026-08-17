@@ -21,7 +21,9 @@ pub struct RegistryEntry {
     config_path: fn(&Config) -> PathBuf,
     cli_path: fn(&Cli) -> Option<PathBuf>,
     set_config_path: fn(&mut Config, PathBuf),
-    create_reader: fn(PathBuf) -> Box<dyn UsageSource>,
+    /// Log reader for this platform's local session files. `None` for
+    /// platforms that expose quota/usage only via an API (e.g. Grok).
+    create_reader: Option<fn(PathBuf) -> Box<dyn UsageSource>>,
     pub quota_fetcher: Option<quota::Fetcher>,
     pub account_fetcher: Option<quota::AccountFetcher>,
 }
@@ -38,7 +40,7 @@ static REGISTRY: &[RegistryEntry] = &[
         config_path: |c| c.claude_path.clone(),
         cli_path: |cli| cli.claude_path.clone(),
         set_config_path: |c, p| c.claude_path = p,
-        create_reader: |p| Box::new(ClaudeReader::new(p)),
+        create_reader: Some(|p| Box::new(ClaudeReader::new(p))),
         quota_fetcher: Some(quota::claude::fetch_quota),
         account_fetcher: None,
     },
@@ -53,8 +55,26 @@ static REGISTRY: &[RegistryEntry] = &[
         config_path: |c| c.codex_path.clone(),
         cli_path: |cli| cli.codex_path.clone(),
         set_config_path: |c, p| c.codex_path = p,
-        create_reader: |p| Box::new(CodexReader::new(p)),
+        create_reader: Some(|p| Box::new(CodexReader::new(p))),
         quota_fetcher: Some(quota::codex::fetch_quota),
+        account_fetcher: None,
+    },
+    RegistryEntry {
+        platform: Platform::Grok,
+        config_key: "grok_path",
+        log_name: "Grok",
+        label: "GROK",
+        primary_color: Color::Rgb(148, 163, 184),
+        default_path_suffix: ".grok",
+        is_available: Path::exists,
+        config_path: |c| c.grok_path.clone(),
+        cli_path: |cli| cli.grok_path.clone(),
+        set_config_path: |c, p| c.grok_path = p,
+        // No local session-log reader yet: Grok usage comes from the billing
+        // API below. `~/.grok/sessions/**/updates.jsonl` exists but carries no
+        // per-request cost, so a reader would fabricate $0 records.
+        create_reader: None,
+        quota_fetcher: Some(quota::grok::fetch_quota),
         account_fetcher: None,
     },
 ];
@@ -62,6 +82,27 @@ static REGISTRY: &[RegistryEntry] = &[
 /// All registered platforms in UI order.
 pub fn entries() -> &'static [RegistryEntry] {
     REGISTRY
+}
+
+/// Platforms to show in the TUI: platforms with a live reader, plus
+/// quota-only platforms (no local log reader, e.g. Grok) whose data path
+/// exists. `readers::PlatformReaders` only tracks platforms with readers, so
+/// quota-only platforms must be added here or their panel never renders.
+pub fn displayable_platforms(
+    reader_platforms: impl IntoIterator<Item = Platform>,
+    paths: &AgentPaths,
+) -> Vec<Platform> {
+    let mut set: std::collections::HashSet<_> = reader_platforms.into_iter().collect();
+    for entry in REGISTRY {
+        if entry.create_reader.is_none() && entry.is_available_at(&paths.path_for(entry.platform)) {
+            set.insert(entry.platform);
+        }
+    }
+    Platform::all()
+        .iter()
+        .copied()
+        .filter(|p| set.contains(p))
+        .collect()
 }
 
 /// Look up the registry row for a platform.
@@ -73,9 +114,10 @@ pub fn entry_for_platform(platform: Platform) -> &'static RegistryEntry {
 }
 
 impl RegistryEntry {
-    /// Construct a usage reader for this platform at `path`.
-    pub fn build_reader(&self, path: PathBuf) -> Box<dyn UsageSource> {
-        (self.create_reader)(path)
+    /// Construct a usage reader for this platform at `path`, or `None` for
+    /// platforms with no local log format (quota-API-only).
+    pub fn build_reader(&self, path: PathBuf) -> Option<Box<dyn UsageSource>> {
+        self.create_reader.map(|f| f(path))
     }
 
     pub fn has_quota(&self) -> bool {
@@ -172,9 +214,9 @@ mod tests {
     }
 
     #[test]
-    fn both_platforms_have_quota() {
-        for platform in [Platform::ClaudeCode, Platform::Codex] {
-            let entry = entry_for_platform(platform);
+    fn every_registered_platform_has_quota() {
+        for platform in Platform::all() {
+            let entry = entry_for_platform(*platform);
             assert!(entry.has_quota());
             assert!(entry.account_fetcher.is_none());
         }
@@ -193,7 +235,8 @@ mod tests {
         assert!(apply_config_key(&mut config, "nope", "x").is_err());
         assert!(apply_config_key(&mut config, "refresh", "0").is_err());
         assert!(apply_config_key(&mut config, "cursor_path", "/tmp/x").is_err());
-        assert!(apply_config_key(&mut config, "grok_path", "/tmp/x").is_err());
+        assert!(apply_config_key(&mut config, "grok_path", "/tmp/grok").is_ok());
+        assert_eq!(config.grok_path, PathBuf::from("/tmp/grok"));
     }
 
     #[test]
@@ -203,6 +246,7 @@ mod tests {
             command: None,
             claude_path: Some(PathBuf::from("/cli/claude")),
             codex_path: None,
+            grok_path: None,
             refresh: None,
         };
         let paths = resolve_paths(&cli, &config);

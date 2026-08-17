@@ -59,10 +59,11 @@ impl PlatformReaders {
             if !entry.is_available_at(&path) {
                 continue;
             }
-            self.readers.insert(
-                entry.platform,
-                Arc::new(Mutex::new(entry.build_reader(path))),
-            );
+            let Some(reader) = entry.build_reader(path) else {
+                continue;
+            };
+            self.readers
+                .insert(entry.platform, Arc::new(Mutex::new(reader)));
             added.push(entry.platform);
         }
         added
