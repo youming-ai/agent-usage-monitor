@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.9.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.8.0...v1.9.0) (2026-08-18)
+
+
+### Features
+
+* **quota:** add Grok platform with live weekly usage quota ([4f0dab3](https://github.com/youming-ai/agent-usage-monitor/commit/4f0dab3893214939dea89159d3d915e9365c9a3a))
+* **quota:** add Grok platform with live weekly usage quota ([1c1e03e](https://github.com/youming-ai/agent-usage-monitor/commit/1c1e03e949ca17295d42dc93a5e4e0c3c0b000ca))
+
+
+### Bug Fixes
+
+* **quota:** address review findings for Grok platform ([bdd1967](https://github.com/youming-ai/agent-usage-monitor/commit/bdd1967c0df977b915742d36ffea22e43389f7fd))
+* **quota:** harden Grok auth cache and respect grok_path ([6c1520b](https://github.com/youming-ai/agent-usage-monitor/commit/6c1520b58e7baf109a390863254df5bbb4279e7b))
+
 ## [1.8.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.7.0...v1.8.0) (2026-08-12)
 
 
