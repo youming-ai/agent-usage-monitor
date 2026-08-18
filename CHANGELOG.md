@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.9.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.9.0...v1.9.1) (2026-08-18)
+
+
+### Refactors
+
+* **ui:** drop heatmap legend and space out platform panels ([3623a7d](https://github.com/youming-ai/agent-usage-monitor/commit/3623a7d5b4289a4b961a6e3a46301c9ae659a058))
+* **ui:** drop heatmap legend and space out platform panels ([b853a62](https://github.com/youming-ai/agent-usage-monitor/commit/b853a62fbd5edd386a8bb63c09f9497fc3f44801))
+
 ## [1.9.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.8.0...v1.9.0) (2026-08-18)
 
 
