@@ -124,6 +124,12 @@ impl RegistryEntry {
         self.quota_fetcher.is_some()
     }
 
+    /// True if this platform has a local session-log reader (and therefore
+    /// participates in the watcher/reader pipeline).
+    pub fn has_reader(&self) -> bool {
+        self.create_reader.is_some()
+    }
+
     pub fn default_path(&self) -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))

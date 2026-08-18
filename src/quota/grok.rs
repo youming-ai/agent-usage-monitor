@@ -31,7 +31,15 @@ const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=cre
 /// refresh later in this process doesn't replay a revoked token; `auth.json`
 /// is never written (the CLI owns that file, with its own lock) — on the next
 /// process start we re-read whatever the CLI last persisted.
-static REFRESHED: Mutex<Option<(String, String)>> = Mutex::new(None); // (access, refresh)
+static REFRESHED: Mutex<Option<TokenPair>> = Mutex::new(None);
+
+/// A (access, refresh) OIDC token pair. Refresh tokens rotate on every use,
+/// so the pair is kept together and cached as a unit.
+#[derive(Clone)]
+struct TokenPair {
+    access: String,
+    refresh: String,
+}
 
 /// Session-scoped OIDC credential from `~/.grok/auth.json`.
 struct GrokAuth {
@@ -101,7 +109,7 @@ fn refresh_access_token(
     oidc_issuer: &str,
     oidc_client_id: &str,
     refresh_token: &str,
-) -> Option<(String, String)> {
+) -> Option<TokenPair> {
     let resp = ureq::post(&format!("{oidc_issuer}/oauth2/token"))
         .set("Accept", "application/json")
         .timeout(Duration::from_secs(10))
@@ -122,26 +130,55 @@ fn refresh_access_token(
         .and_then(|v| v.as_str())
         .unwrap_or(refresh_token)
         .to_string();
-    Some((access, refresh))
+    Some(TokenPair { access, refresh })
 }
 
-/// Fetch the billing config. Returns `Ok(Some(json))` on success,
-/// `Ok(None)` when the token was rejected (caller should report re-auth),
-/// and `Err(())` on transport failures (treated as transient).
-fn fetch_billing(token: &str, user_id: &str) -> Result<Option<Value>, ()> {
+/// The CLI's own version, sent as `x-grok-client-version` (a proxy gate
+/// input). Read from `~/.grok/version.json` so we track the installed CLI
+/// instead of impersonating one fixed version forever; fall back to a
+/// known-good constant when the file is missing.
+fn grok_client_version() -> String {
+    let path = grok_auth_path().with_file_name("version.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(String::from))
+        .unwrap_or_else(|| "0.1.210".to_string())
+}
+
+/// Result of a billing HTTP call, distinguishing the three outcomes the
+/// caller must handle differently.
+enum BillingOutcome {
+    /// 2xx with a parseable JSON body.
+    Ok(Value),
+    /// 401/403 — the session token was rejected; the user must re-login.
+    AuthRejected,
+    /// 2xx with an unparseable body — the endpoint shape changed.
+    Parse,
+    /// Transport failure (timeout, DNS, TLS) — transient, retry later.
+    Transport,
+}
+
+/// Fetch the billing config.
+fn fetch_billing(token: &str, user_id: &str, client_version: &str) -> BillingOutcome {
     let result = ureq::get(BILLING_URL)
         .set("Authorization", &format!("Bearer {token}"))
         .set("X-XAI-Token-Auth", "xai-grok-cli")
         .set("x-userid", user_id)
-        .set("x-grok-client-version", "0.1.210")
+        .set("x-grok-client-version", client_version)
         .set("x-grok-client-mode", "headless")
         .set("Accept", "application/json")
         .timeout(Duration::from_secs(8))
         .call();
     match result {
-        Ok(resp) => Ok(resp.into_json().ok()),
-        Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => Ok(None),
-        Err(_) => Err(()),
+        Ok(resp) => match resp.into_json() {
+            Ok(data) => BillingOutcome::Ok(data),
+            Err(_) => BillingOutcome::Parse,
+        },
+        Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
+            BillingOutcome::AuthRejected
+        }
+        Err(_) => BillingOutcome::Transport,
     }
 }
 
@@ -166,8 +203,18 @@ fn parse_billing_response(data: &Value, email: Option<String>) -> Option<QuotaIn
 
     let mut windows = Vec::new();
     if let Some(pct) = credit_pct {
+        // The pool period can be weekly or monthly (unified billing users);
+        // label it from the API instead of assuming weekly.
+        let label = match config
+            .get("currentPeriod")
+            .and_then(|p| p.get("type"))
+            .and_then(|v| v.as_str())
+        {
+            Some("USAGE_PERIOD_TYPE_MONTHLY") => "monthly",
+            _ => "weekly",
+        };
         windows.push(QuotaWindow {
-            label: "weekly".into(),
+            label: label.into(),
             remaining_percent: Some(((100.0 - pct) / 100.0).clamp(0.0, 1.0)),
             resets_at: period_end.clone(),
             reset_in: period_end.as_deref().and_then(parse_rfc3339_end),
@@ -189,9 +236,13 @@ fn parse_billing_response(data: &Value, email: Option<String>) -> Option<QuotaIn
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
     if on_demand_cap > 0 {
-        summary_bits.push(format!("on-demand {on_demand_used}/{on_demand_cap}"));
+        summary_bits.push(format!(
+            "on-demand ${:.0}/${:.0}",
+            on_demand_used as f64 / 100.0,
+            on_demand_cap as f64 / 100.0
+        ));
     } else if on_demand_used > 0 {
-        summary_bits.push("on-demand on".into());
+        summary_bits.push(format!("on-demand ${:.0}", on_demand_used as f64 / 100.0));
     }
     if let Some(val) = config
         .get("prepaidBalance")
@@ -221,6 +272,22 @@ fn parse_billing_response(data: &Value, email: Option<String>) -> Option<QuotaIn
     })
 }
 
+/// A `QuotaInfo` carrying only an error (no windows) — shared by the
+/// auth-rejected and parse-failure arms of `fetch_quota`.
+fn quota_info_with_error(email: Option<String>, error: QuotaError) -> QuotaInfo {
+    QuotaInfo {
+        tool_name: "Grok".to_string(),
+        email,
+        account_id: None,
+        plan: None,
+        org: None,
+        windows: Vec::new(),
+        live_summary: None,
+        fetched_at: Instant::now(),
+        error: Some(error),
+    }
+}
+
 /// Main entry point: read credentials (refreshing the token if needed) and
 /// fetch Grok subscription quota.
 pub fn fetch_quota() -> Option<QuotaInfo> {
@@ -228,39 +295,37 @@ pub fn fetch_quota() -> Option<QuotaInfo> {
 
     // Prefer a pair refreshed earlier in this process; else fall back to the
     // file's stored tokens.
-    let (mut access, mut refresh) = REFRESHED
+    let mut pair = REFRESHED
         .lock()
         .ok()
         .and_then(|c| c.clone())
-        .unwrap_or_else(|| (auth.key.clone(), auth.refresh_token.clone()));
+        .unwrap_or_else(|| TokenPair {
+            access: auth.key.clone(),
+            refresh: auth.refresh_token.clone(),
+        });
 
-    if is_token_expiring(&access)
-        && let Some((new_access, new_refresh)) =
-            refresh_access_token(&auth.oidc_issuer, &auth.oidc_client_id, &refresh)
+    if is_token_expiring(&pair.access)
+        && let Some(new_pair) =
+            refresh_access_token(&auth.oidc_issuer, &auth.oidc_client_id, &pair.refresh)
     {
-        access = new_access;
-        refresh = new_refresh;
+        pair = new_pair;
         if let Ok(mut cache) = REFRESHED.lock() {
-            *cache = Some((access.clone(), refresh.clone()));
+            *cache = Some(pair.clone());
         }
     }
 
-    match fetch_billing(&access, &auth.user_id) {
-        Ok(Some(data)) => parse_billing_response(&data, auth.email),
-        Ok(None) => Some(QuotaInfo {
-            tool_name: "Grok".to_string(),
-            email: auth.email,
-            account_id: None,
-            plan: None,
-            org: None,
-            windows: Vec::new(),
-            live_summary: None,
-            fetched_at: Instant::now(),
-            error: Some(QuotaError::Auth(
-                "session rejected — run `grok login`".into(),
-            )),
-        }),
-        Err(()) => None,
+    let client_version = grok_client_version();
+    match fetch_billing(&pair.access, &auth.user_id, &client_version) {
+        BillingOutcome::Ok(data) => parse_billing_response(&data, auth.email),
+        BillingOutcome::AuthRejected => Some(quota_info_with_error(
+            auth.email,
+            QuotaError::Auth("session rejected — run `grok login`".into()),
+        )),
+        BillingOutcome::Parse => Some(quota_info_with_error(
+            auth.email,
+            QuotaError::Parse("unexpected billing response".into()),
+        )),
+        BillingOutcome::Transport => None,
     }
 }
 
@@ -298,6 +363,21 @@ mod tests {
         assert_eq!(q.live_summary.as_deref(), Some("42% used"));
         assert_eq!(q.email.as_deref(), Some("a@b.c"));
         assert!(q.error.is_none());
+    }
+
+    #[test]
+    fn monthly_period_is_labeled_monthly() {
+        let q = parse(json!({
+            "config": {
+                "creditUsagePercent": 10.0,
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_MONTHLY",
+                    "start": "2026-08-01T00:00:00Z",
+                    "end": "2026-09-01T00:00:00Z"
+                }
+            }
+        }));
+        assert_eq!(q.windows[0].label, "monthly");
     }
 
     #[test]

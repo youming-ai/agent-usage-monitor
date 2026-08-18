@@ -94,14 +94,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let app_state = app_state.clone();
         async move {
             let build_paths = agent_paths.clone();
-            let mut readers = task::spawn_blocking(move || PlatformReaders::build(&build_paths))
-                .await
-                .expect("reader discovery task panicked");
+            let (mut readers, displayable) = task::spawn_blocking(move || {
+                let readers = PlatformReaders::build(&build_paths);
+                // `displayable_platforms` stats paths (Path::exists) — keep
+                // the disk I/O off the async runtime with the reader build.
+                let displayable =
+                    platforms::displayable_platforms(readers.platforms(), &build_paths);
+                (readers, displayable)
+            })
+            .await
+            .expect("reader discovery task panicked");
             if let Ok(mut state) = app_state.write() {
-                state.set_available_platforms(platforms::displayable_platforms(
-                    readers.platforms(),
-                    &agent_paths,
-                ));
+                state.set_available_platforms(displayable);
             }
             let (mut platform_watchers, mut watcher_rx) = watcher::start_watchers(&agent_paths);
             let mut fallback = tokio::time::interval(fallback_interval);
@@ -142,19 +146,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         // Pick up paths that appeared after launch, then give
                         // every live reader a coalesced incremental refresh.
                         let discovery_paths = agent_paths.clone();
-                        let (updated_readers, newly) = task::spawn_blocking(move || {
+                        let (updated_readers, newly, displayable) = task::spawn_blocking(move || {
                             let mut readers = readers;
                             let newly = readers.discover_new(&discovery_paths);
-                            (readers, newly)
+                            let displayable = platforms::displayable_platforms(
+                                readers.platforms(),
+                                &discovery_paths,
+                            );
+                            (readers, newly, displayable)
                         })
                         .await
                         .expect("reader discovery task panicked");
                         readers = updated_readers;
                         if let Ok(mut state) = app_state.write() {
-                            state.set_available_platforms(platforms::displayable_platforms(
-                                readers.platforms(),
-                                &agent_paths,
-                            ));
+                            state.set_available_platforms(displayable);
                         }
                         for platform in readers.platforms() {
                             platform_watchers
