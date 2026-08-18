@@ -21,7 +21,7 @@ use crate::quota::util::{decode_jwt_payload, format_duration_short};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
@@ -32,6 +32,33 @@ const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=cre
 /// is never written (the CLI owns that file, with its own lock) — on the next
 /// process start we re-read whatever the CLI last persisted.
 static REFRESHED: Mutex<Option<TokenPair>> = Mutex::new(None);
+
+/// Resolved Grok data directory (`auth.json`, `version.json`). Set via
+/// `set_data_dir` after `platforms::resolve_paths` so quota fetch matches
+/// `grok_path` / `--grok-path`.
+static DATA_DIR: OnceLock<Mutex<PathBuf>> = OnceLock::new();
+
+fn default_data_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".grok")
+}
+
+fn data_dir() -> PathBuf {
+    DATA_DIR
+        .get_or_init(|| Mutex::new(default_data_dir()))
+        .lock()
+        .map(|p| p.clone())
+        .unwrap_or_else(|_| default_data_dir())
+}
+
+/// Override the Grok data directory used for auth and client-version lookup.
+pub fn set_data_dir(path: PathBuf) {
+    let lock = DATA_DIR.get_or_init(|| Mutex::new(default_data_dir()));
+    if let Ok(mut guard) = lock.lock() {
+        *guard = path;
+    }
+}
 
 /// A (access, refresh) OIDC token pair. Refresh tokens rotate on every use,
 /// so the pair is kept together and cached as a unit.
@@ -52,10 +79,7 @@ struct GrokAuth {
 }
 
 fn grok_auth_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-        .join("auth.json")
+    data_dir().join("auth.json")
 }
 
 /// Read the first usable OIDC session entry from `~/.grok/auth.json`.
@@ -134,11 +158,11 @@ fn refresh_access_token(
 }
 
 /// The CLI's own version, sent as `x-grok-client-version` (a proxy gate
-/// input). Read from `~/.grok/version.json` so we track the installed CLI
+/// input). Read from `<grok_path>/version.json` so we track the installed CLI
 /// instead of impersonating one fixed version forever; fall back to a
 /// known-good constant when the file is missing.
 fn grok_client_version() -> String {
-    let path = grok_auth_path().with_file_name("version.json");
+    let path = data_dir().join("version.json");
     std::fs::read_to_string(path)
         .ok()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
@@ -272,6 +296,88 @@ fn parse_billing_response(data: &Value, email: Option<String>) -> Option<QuotaIn
     })
 }
 
+fn store_refreshed_pair(pair: TokenPair) {
+    if let Ok(mut cache) = REFRESHED.lock() {
+        *cache = Some(pair);
+    }
+}
+
+fn clear_refreshed_cache() {
+    if let Ok(mut cache) = REFRESHED.lock() {
+        *cache = None;
+    }
+}
+
+fn cached_token_pair() -> Option<TokenPair> {
+    REFRESHED.lock().ok().and_then(|c| c.clone())
+}
+
+/// Prefer an in-process refreshed pair only when it matches the refresh token
+/// still on disk — so `grok login` updates are picked up without restarting.
+fn effective_token_pair(auth: &GrokAuth, cached: Option<&TokenPair>) -> TokenPair {
+    let from_file = TokenPair {
+        access: auth.key.clone(),
+        refresh: auth.refresh_token.clone(),
+    };
+    if let Some(cached) = cached
+        && cached.refresh == from_file.refresh
+    {
+        return cached.clone();
+    }
+    from_file
+}
+
+fn maybe_refresh_pair(auth: &GrokAuth, pair: &TokenPair) -> TokenPair {
+    if !is_token_expiring(&pair.access) {
+        return pair.clone();
+    }
+    if let Some(new_pair) =
+        refresh_access_token(&auth.oidc_issuer, &auth.oidc_client_id, &pair.refresh)
+    {
+        store_refreshed_pair(new_pair.clone());
+        new_pair
+    } else {
+        pair.clone()
+    }
+}
+
+enum QuotaFetchOutcome {
+    Ok(QuotaInfo),
+    Err(QuotaError),
+    Transport,
+}
+
+fn quota_from_billing(
+    auth: &GrokAuth,
+    pair: &TokenPair,
+    client_version: &str,
+    allow_auth_refresh: bool,
+) -> QuotaFetchOutcome {
+    match fetch_billing(&pair.access, &auth.user_id, client_version) {
+        BillingOutcome::Ok(data) => match parse_billing_response(&data, auth.email.clone()) {
+            Some(info) => QuotaFetchOutcome::Ok(info),
+            None => QuotaFetchOutcome::Err(QuotaError::Parse("unexpected billing response".into())),
+        },
+        BillingOutcome::AuthRejected => {
+            if allow_auth_refresh
+                && let Some(new_pair) =
+                    refresh_access_token(&auth.oidc_issuer, &auth.oidc_client_id, &pair.refresh)
+            {
+                store_refreshed_pair(new_pair.clone());
+                return quota_from_billing(auth, &new_pair, client_version, false);
+            }
+            clear_refreshed_cache();
+            QuotaFetchOutcome::Err(QuotaError::Auth(
+                "session rejected — run `grok login`".into(),
+            ))
+        }
+        BillingOutcome::Parse => {
+            QuotaFetchOutcome::Err(QuotaError::Parse("unexpected billing response".into()))
+        }
+        BillingOutcome::Transport => QuotaFetchOutcome::Transport,
+    }
+}
+
 /// A `QuotaInfo` carrying only an error (no windows) — shared by the
 /// auth-rejected and parse-failure arms of `fetch_quota`.
 fn quota_info_with_error(email: Option<String>, error: QuotaError) -> QuotaInfo {
@@ -292,40 +398,14 @@ fn quota_info_with_error(email: Option<String>, error: QuotaError) -> QuotaInfo 
 /// fetch Grok subscription quota.
 pub fn fetch_quota() -> Option<QuotaInfo> {
     let auth = read_auth()?;
-
-    // Prefer a pair refreshed earlier in this process; else fall back to the
-    // file's stored tokens.
-    let mut pair = REFRESHED
-        .lock()
-        .ok()
-        .and_then(|c| c.clone())
-        .unwrap_or_else(|| TokenPair {
-            access: auth.key.clone(),
-            refresh: auth.refresh_token.clone(),
-        });
-
-    if is_token_expiring(&pair.access)
-        && let Some(new_pair) =
-            refresh_access_token(&auth.oidc_issuer, &auth.oidc_client_id, &pair.refresh)
-    {
-        pair = new_pair;
-        if let Ok(mut cache) = REFRESHED.lock() {
-            *cache = Some(pair.clone());
-        }
-    }
-
+    let pair = effective_token_pair(&auth, cached_token_pair().as_ref());
+    let pair = maybe_refresh_pair(&auth, &pair);
     let client_version = grok_client_version();
-    match fetch_billing(&pair.access, &auth.user_id, &client_version) {
-        BillingOutcome::Ok(data) => parse_billing_response(&data, auth.email),
-        BillingOutcome::AuthRejected => Some(quota_info_with_error(
-            auth.email,
-            QuotaError::Auth("session rejected — run `grok login`".into()),
-        )),
-        BillingOutcome::Parse => Some(quota_info_with_error(
-            auth.email,
-            QuotaError::Parse("unexpected billing response".into()),
-        )),
-        BillingOutcome::Transport => None,
+
+    match quota_from_billing(&auth, &pair, &client_version, true) {
+        QuotaFetchOutcome::Ok(info) => Some(info),
+        QuotaFetchOutcome::Err(error) => Some(quota_info_with_error(auth.email, error)),
+        QuotaFetchOutcome::Transport => None,
     }
 }
 
@@ -402,6 +482,50 @@ mod tests {
         assert!(q.windows.is_empty());
         assert!(q.live_summary.is_none());
         assert!(q.error.is_none());
+    }
+
+    #[test]
+    fn effective_token_pair_prefers_cache_when_refresh_matches_file() {
+        let auth = GrokAuth {
+            key: "access-from-file".into(),
+            refresh_token: "refresh-on-disk".into(),
+            user_id: "u".into(),
+            email: None,
+            oidc_issuer: "https://auth.x.ai".into(),
+            oidc_client_id: "client".into(),
+        };
+        let cached = TokenPair {
+            access: "access-refreshed".into(),
+            refresh: "refresh-on-disk".into(),
+        };
+        let pair = effective_token_pair(&auth, Some(&cached));
+        assert_eq!(pair.access, "access-refreshed");
+    }
+
+    #[test]
+    fn effective_token_pair_ignores_cache_after_external_relogin() {
+        let auth = GrokAuth {
+            key: "new-access".into(),
+            refresh_token: "new-refresh".into(),
+            user_id: "u".into(),
+            email: None,
+            oidc_issuer: "https://auth.x.ai".into(),
+            oidc_client_id: "client".into(),
+        };
+        let cached = TokenPair {
+            access: "stale-access".into(),
+            refresh: "old-refresh".into(),
+        };
+        let pair = effective_token_pair(&auth, Some(&cached));
+        assert_eq!(pair.access, "new-access");
+        assert_eq!(pair.refresh, "new-refresh");
+    }
+
+    #[test]
+    fn set_data_dir_changes_auth_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        set_data_dir(tmp.path().to_path_buf());
+        assert_eq!(grok_auth_path(), tmp.path().join("auth.json"));
     }
 
     #[test]

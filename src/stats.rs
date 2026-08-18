@@ -382,6 +382,8 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
 
     use std::collections::HashMap;
 
+    crate::quota::grok::set_data_dir(paths.path_for(Platform::Grok));
+
     // 第一遍：scan_all 收集记录（顺序，task::spawn_blocking 包 I/O）
     let mut entries: Vec<(String, Platform, PathBuf, Vec<UsageRecord>, ToolOpsView)> = Vec::new();
     for entry in platforms::entries() {
