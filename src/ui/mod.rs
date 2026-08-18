@@ -32,17 +32,23 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
         return;
     }
 
-    let constraints: Vec<Constraint> = available
-        .iter()
-        .map(|_| Constraint::Ratio(1, available.len() as u32))
-        .collect();
+    // One blank row between platform panels so adjacent headers don't touch.
+    let mut constraints: Vec<Constraint> = Vec::with_capacity(available.len() * 2);
+    for (i, _) in available.iter().enumerate() {
+        if i > 0 {
+            constraints.push(Constraint::Length(1));
+        }
+        constraints.push(Constraint::Ratio(1, available.len() as u32));
+    }
     let area = frame.area().inner(Margin {
         vertical: 0,
         horizontal: CONTENT_PADDING,
     });
     let chunks = Layout::vertical(constraints).split(area);
+    // Constraints interleave platform blocks with one-row spacers, so the
+    // platform for index `i` lives at chunk `i * 2`.
     for (i, &platform) in available.iter().enumerate() {
-        render_platform(frame, chunks[i], platform, &state);
+        render_platform(frame, chunks[i * 2], platform, &state);
     }
 }
 
@@ -66,33 +72,28 @@ fn render_platform(
         0
     };
     let content_remain = h.saturating_sub(header_h + quota_h);
-    let full_activity_h = 2 + heatmap::HEATMAP_FULL_HEIGHT + heatmap::LEGEND_HEIGHT;
+    let full_activity_h = 2 + heatmap::HEATMAP_FULL_HEIGHT;
 
-    // The reference layout gets a two-line activity summary and a legend when
-    // there is room. Shorter sections keep the old source label and degrade
-    // from the year grid to the compact strip without clipping the header.
-    let (local_label_h, activity_header_h, heatmap_h, legend_h, overview_h) =
+    // The reference layout gets a two-line activity summary above the year
+    // grid when there is room. Shorter sections keep the old source label and
+    // degrade from the year grid to the compact strip without clipping the
+    // header.
+    let (local_label_h, activity_header_h, heatmap_h, overview_h) =
         if content_remain >= full_activity_h {
-            (
-                0,
-                2,
-                heatmap::HEATMAP_FULL_HEIGHT,
-                heatmap::LEGEND_HEIGHT,
-                0,
-            )
+            (0, 2, heatmap::HEATMAP_FULL_HEIGHT, 0)
         } else if content_remain > heatmap::HEATMAP_FULL_HEIGHT {
-            (1, 0, heatmap::HEATMAP_FULL_HEIGHT, 0, 0)
+            (1, 0, heatmap::HEATMAP_FULL_HEIGHT, 0)
         } else if content_remain > heatmap::HEATMAP_MIN_HEIGHT {
-            (1, 0, heatmap::HEATMAP_MIN_HEIGHT, 0, 0)
+            (1, 0, heatmap::HEATMAP_MIN_HEIGHT, 0)
         } else if content_remain >= overview::OVERVIEW_LINES + 2 {
             // Not enough rows for the year grid: one-line strip + stats.
-            (1, 0, 1, 0, overview::OVERVIEW_LINES)
+            (1, 0, 1, overview::OVERVIEW_LINES)
         } else if content_remain >= 2 {
-            (1, 0, 1, 0, 0)
+            (1, 0, 1, 0)
         } else if content_remain >= 1 {
-            (1, 0, 0, 0, 0)
+            (1, 0, 0, 0)
         } else {
-            (0, 0, 0, 0, 0)
+            (0, 0, 0, 0)
         };
 
     let chunks = Layout::vertical([
@@ -101,7 +102,6 @@ fn render_platform(
         Constraint::Length(local_label_h),
         Constraint::Length(activity_header_h),
         Constraint::Length(heatmap_h),
-        Constraint::Length(legend_h),
         Constraint::Min(overview_h),
     ])
     .split(area);
@@ -170,13 +170,9 @@ fn render_platform(
         frame.render_widget(heatmap::contribution_strip(&p.daily, accent), heat_area);
     }
 
-    if legend_h > 0 {
-        frame.render_widget(heatmap::contribution_legend(accent), chunks[5]);
-    }
-
-    if overview_h > 0 && chunks[6].height >= 3 {
+    if overview_h > 0 && chunks[5].height >= 3 {
         let stats = overview::OverviewStats::from_platform(p);
-        frame.render_widget(overview::overview_paragraph(&stats, accent), chunks[6]);
+        frame.render_widget(overview::overview_paragraph(&stats, accent), chunks[5]);
     }
 }
 

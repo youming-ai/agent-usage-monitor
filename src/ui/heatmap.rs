@@ -8,8 +8,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Widget},
+    widgets::Widget,
 };
 use std::collections::BTreeMap;
 
@@ -18,9 +17,6 @@ pub const HEATMAP_FULL_HEIGHT: u16 = 8;
 
 /// Minimum height the grid needs (seven weekday rows, no month labels).
 pub const HEATMAP_MIN_HEIGHT: u16 = 7;
-
-/// One line for the Less/More scale.
-pub const LEGEND_HEIGHT: u16 = 1;
 
 /// Minimum horizontal footprint of a week: one square and one spacer.
 const CELL_W: usize = 2;
@@ -142,25 +138,6 @@ impl Widget for Heatmap<'_> {
             }
         }
     }
-}
-
-/// Legend shown below the full activity grid.
-pub fn contribution_legend(accent: Color) -> Paragraph<'static> {
-    let levels = accent_levels(accent);
-    let dim = Style::default().fg(Color::DarkGray);
-    let square = |color| Span::styled("■", Style::default().fg(color));
-
-    Paragraph::new(Line::from(vec![
-        Span::styled("Less  · ", dim),
-        square(levels[1]),
-        Span::raw(" "),
-        square(levels[2]),
-        Span::raw(" "),
-        square(levels[3]),
-        Span::raw(" "),
-        square(levels[4]),
-        Span::styled("  More", dim),
-    ]))
 }
 
 /// Compact strip of the current month's days for short terminals. If there
