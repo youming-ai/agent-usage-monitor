@@ -148,6 +148,12 @@ pub fn start_watchers(paths: &AgentPaths) -> (PlatformWatchers, mpsc::Receiver<W
         recent: Arc::new(Mutex::new(HashMap::new())),
     };
     for entry in platforms::entries() {
+        // Quota-only platforms (no local log reader) have nothing to watch;
+        // registering them would flood the event channel with session writes
+        // that no reader consumes.
+        if !entry.has_reader() {
+            continue;
+        }
         watchers.watch_platform(entry.platform, paths.path_for(entry.platform));
     }
     (watchers, rx)
@@ -203,7 +209,12 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = synthetic_paths(tmp.path());
         let (watchers, _rx) = start_watchers(&paths);
-        assert_eq!(watchers.watchers.len(), crate::platforms::entries().len());
+        // Quota-only platforms (Grok) have no reader and are not watched.
+        let reader_platforms = crate::platforms::entries()
+            .iter()
+            .filter(|e| e.has_reader())
+            .count();
+        assert_eq!(watchers.watchers.len(), reader_platforms);
     }
 
     #[tokio::test]

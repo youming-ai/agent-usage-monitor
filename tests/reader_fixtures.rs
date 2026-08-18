@@ -42,6 +42,8 @@ fn expected_fixture_records(platform: Platform) -> usize {
     match platform {
         Platform::ClaudeCode => 2,
         Platform::Codex => 1,
+        // No fixture: Grok has no local log reader (quota-API only).
+        Platform::Grok => 0,
     }
 }
 
@@ -57,7 +59,16 @@ fn registry_rows_build_the_reader_that_parses_their_own_fixture() {
         if !path.exists() {
             continue;
         }
-        let mut reader = entry.build_reader(path);
+        let Some(mut reader) = entry.build_reader(path) else {
+            checked += 1;
+            assert_eq!(
+                expected_fixture_records(entry.platform),
+                0,
+                "{:?} has no reader but expects fixture records",
+                entry.platform
+            );
+            continue;
+        };
         let records = reader.scan_all().unwrap();
         assert_eq!(
             records.len(),

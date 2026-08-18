@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(long)]
     pub codex_path: Option<PathBuf>,
 
+    /// Path to Grok data directory
+    #[arg(long)]
+    pub grok_path: Option<PathBuf>,
+
     /// Fallback polling interval in seconds (minimum: 1)
     #[arg(short, long, value_parser = clap::value_parser!(u64).range(1..))]
     pub refresh: Option<u64>,
