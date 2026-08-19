@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    AnnotateAble, Implementation, ListResourcesResult, PaginatedRequestParam, ProtocolVersion,
-    RawResource, ReadResourceRequestParam, ReadResourceResult, ResourceContents,
+    AnnotateAble, Implementation, ListResourcesResult, PaginatedRequestParams, ProtocolVersion,
+    RawResource, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
     ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
@@ -337,34 +337,29 @@ fn select_tool_ops<'a>(
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for AumMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
-            server_info: Implementation {
-                name: "aum".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: Some("agent-usage-monitor".to_string()),
-                website_url: None,
-                icons: None,
-            },
-            instructions: Some(
-                "aum is a usage monitor for AI coding agents. Use get_daily_stats, \
-                 get_model_usage, get_cost_breakdown, get_file_operations, get_session_stats \
-                 for usage queries. get_quota returns live quota for Claude Code and Codex."
-                    .to_string(),
-            ),
-        }
+        )
+        .with_protocol_version(ProtocolVersion::V_2024_11_05)
+        .with_server_info(
+            Implementation::new("aum", env!("CARGO_PKG_VERSION")).with_title("agent-usage-monitor"),
+        )
+        .with_instructions(
+            "aum is a usage monitor for AI coding agents. Use get_daily_stats, \
+             get_model_usage, get_cost_breakdown, get_file_operations, get_session_stats \
+             for usage queries. get_quota returns live quota for Claude Code, Codex, and Grok.",
+        )
     }
 
     async fn list_resources(
         &self,
-        _req: Option<PaginatedRequestParam>,
+        _req: Option<PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         Ok(ListResourcesResult {
@@ -402,7 +397,7 @@ impl ServerHandler for AumMcpServer {
 
     async fn read_resource(
         &self,
-        req: ReadResourceRequestParam,
+        req: ReadResourceRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         match req.uri.as_str() {
@@ -410,14 +405,9 @@ impl ServerHandler for AumMcpServer {
                 let report = self.collect(false).await?;
                 let body = serde_json::to_string(&report.totals)
                     .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::TextResourceContents {
-                        uri: req.uri,
-                        mime_type: Some("application/json".to_string()),
-                        text: body,
-                        meta: None,
-                    }],
-                })
+                Ok(ReadResourceResult::new(vec![
+                    ResourceContents::text(body, req.uri).with_mime_type("application/json"),
+                ]))
             }
             resource_uris::PLATFORMS => {
                 let _report = self.collect(false).await?;
@@ -436,14 +426,9 @@ impl ServerHandler for AumMcpServer {
                     .collect();
                 let body = serde_json::to_string(&serde_json::json!({ "platforms": platforms }))
                     .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::TextResourceContents {
-                        uri: req.uri,
-                        mime_type: Some("application/json".to_string()),
-                        text: body,
-                        meta: None,
-                    }],
-                })
+                Ok(ReadResourceResult::new(vec![
+                    ResourceContents::text(body, req.uri).with_mime_type("application/json"),
+                ]))
             }
             _ => Err(McpError::resource_not_found(
                 format!("unknown resource: {}", req.uri),
@@ -567,7 +552,7 @@ mod tests {
     }
 
     // Resource tests require constructing a `RequestContext`, which has no
-    // `Default` impl in rmcp 0.12 and requires Peer/CancellationToken setup.
+    // `Default` impl in rmcp and requires Peer/CancellationToken setup.
     // Resources are verified end-to-end by the black-box integration test
     // in `tests/mcp.rs` (Task 7).
 }
