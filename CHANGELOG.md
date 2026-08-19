@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.10.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.9.1...v1.10.0) (2026-08-19)
+
+
+### Features
+
+* **mcp:** Honor the date filter in get_session_stats ([a6d17dc](https://github.com/youming-ai/agent-usage-monitor/commit/a6d17dc5ad80464374155592870275ce9cb58e8b))
+
+
+### Bug Fixes
+
+* **grok:** Pin the OIDC issuer for token refresh ([97e045e](https://github.com/youming-ai/agent-usage-monitor/commit/97e045e6f2afd91e40af617d913f827ee41425a0))
+* **install:** Fail closed on unsigned or off-origin downloads ([54608e6](https://github.com/youming-ai/agent-usage-monitor/commit/54608e6225071d6ded8067c3bbbff8c4b4bf5452))
+* **install:** Restore missing-asset errors and check minisign first ([f11aed8](https://github.com/youming-ai/agent-usage-monitor/commit/f11aed8e8c0819bf17d328b972419b3b029d2496))
+* **mcp:** Cache filtered session stats and mention Grok in get_quota ([f8af679](https://github.com/youming-ai/agent-usage-monitor/commit/f8af679b19479050eadbad96c3269f1a13dcabd7))
+* **reader:** Skip directory symlinks in recursive scans ([eb22b81](https://github.com/youming-ai/agent-usage-monitor/commit/eb22b813c466ed1493357faf520821ef184fccae))
+* **reader:** Skip vanished entries and follow file symlinks ([5545a91](https://github.com/youming-ai/agent-usage-monitor/commit/5545a9120712c61f8e46fbac8e09da50f7aff27b))
+
+
+### Refactors
+
+* **grok:** Drop the dead oidc_issuer field ([ac6ba34](https://github.com/youming-ai/agent-usage-monitor/commit/ac6ba34da96be2e601ecf7d8209cf210ebb604eb))
+* **mcp:** Parse date params once for every tool ([4eb4280](https://github.com/youming-ai/agent-usage-monitor/commit/4eb42805f20a406bdc0c58b1b4a29c60df85f27b))
+
+
+### Build System
+
+* **deps:** Upgrade rmcp from 0.12 to 1.x ([94f820b](https://github.com/youming-ai/agent-usage-monitor/commit/94f820b530e8776ea5bcb644718b72f82479bfc4))
+
+
+### Documentation
+
+* **cli:** Point Grok quota help at its credentials ([1e80224](https://github.com/youming-ai/agent-usage-monitor/commit/1e802245bd573f02805785cb91fe9e970d6b1d0a))
+* Document Grok quota support and minisign prerequisite ([4a425e0](https://github.com/youming-ai/agent-usage-monitor/commit/4a425e0ebc1d7520c8defb7a2f90414580a7761b))
+
 ## [1.9.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.9.0...v1.9.1) (2026-08-18)
 
 
