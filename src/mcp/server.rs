@@ -38,18 +38,74 @@ pub struct AumMcpServer {
 
 const SNAPSHOT_TTL: Duration = Duration::from_secs(2);
 
+/// Cache identity for a collected snapshot. The two hot unfiltered slots are
+/// shared by every tool; one extra slot remembers the last filtered collect
+/// (e.g. a dated `get_session_stats`) so repeated dated queries in a burst
+/// don't each rescan the on-disk history.
+#[derive(PartialEq, Eq)]
+enum CacheKey {
+    Usage,
+    WithQuota,
+    Filtered {
+        include_quota: bool,
+        platforms: Option<std::collections::BTreeSet<String>>,
+        since: Option<NaiveDate>,
+        until: Option<NaiveDate>,
+    },
+}
+
+impl CacheKey {
+    fn of(opts: &stats::CollectOptions) -> Self {
+        let stats::Filters {
+            platforms,
+            since,
+            until,
+        } = &opts.filters;
+        match (opts.include_quota, platforms, since, until) {
+            (false, None, None, None) => Self::Usage,
+            (true, None, None, None) => Self::WithQuota,
+            (include_quota, platforms, since, until) => Self::Filtered {
+                include_quota,
+                platforms: platforms.clone(),
+                since: *since,
+                until: *until,
+            },
+        }
+    }
+}
+
 #[derive(Default)]
 struct SnapshotCache {
     usage: Option<(Instant, Arc<stats::StatsReport>)>,
     with_quota: Option<(Instant, Arc<stats::StatsReport>)>,
+    filtered: Option<(CacheKey, Instant, Arc<stats::StatsReport>)>,
 }
 
 impl SnapshotCache {
-    fn slot(&mut self, include_quota: bool) -> &mut Option<(Instant, Arc<stats::StatsReport>)> {
-        if include_quota {
-            &mut self.with_quota
-        } else {
-            &mut self.usage
+    fn lookup(&self, key: &CacheKey) -> Option<Arc<stats::StatsReport>> {
+        let slot = match key {
+            CacheKey::Usage => &self.usage,
+            CacheKey::WithQuota => &self.with_quota,
+            CacheKey::Filtered { .. } => {
+                return self
+                    .filtered
+                    .as_ref()
+                    .filter(|(k, created, _)| k == key && created.elapsed() < SNAPSHOT_TTL)
+                    .map(|(_, _, report)| report.clone());
+            }
+        };
+        slot.as_ref()
+            .filter(|(created, _)| created.elapsed() < SNAPSHOT_TTL)
+            .map(|(_, report)| report.clone())
+    }
+
+    fn store(&mut self, key: CacheKey, report: Arc<stats::StatsReport>) {
+        match key {
+            CacheKey::Usage => self.usage = Some((Instant::now(), report)),
+            CacheKey::WithQuota => self.with_quota = Some((Instant::now(), report)),
+            key @ CacheKey::Filtered { .. } => {
+                self.filtered = Some((key, Instant::now(), report));
+            }
         }
     }
 }
@@ -71,14 +127,24 @@ impl AumMcpServer {
     /// been an instant hit on the other slot. Two concurrent misses can both
     /// collect; duplicating that work is cheaper than serialising every tool.
     async fn collect(&self, include_quota: bool) -> Result<Arc<stats::StatsReport>, McpError> {
-        if let Some(fresh) = self.cached(include_quota).await {
+        self.collect_opts(stats::CollectOptions {
+            include_quota,
+            filters: stats::Filters::default(),
+        })
+        .await
+    }
+
+    /// Like [`collect`](Self::collect) for a filtered report; cached per
+    /// filter key under the same TTL, so a burst of dated queries scans once.
+    async fn collect_opts(
+        &self,
+        opts: stats::CollectOptions,
+    ) -> Result<Arc<stats::StatsReport>, McpError> {
+        let key = CacheKey::of(&opts);
+        if let Some(fresh) = self.cached(&key).await {
             return Ok(fresh);
         }
 
-        let opts = stats::CollectOptions {
-            include_quota,
-            filters: stats::Filters::default(),
-        };
         let report = Arc::new(
             stats::collect(&self.paths, opts)
                 .await
@@ -86,17 +152,13 @@ impl AumMcpServer {
         );
 
         let mut snapshots = self.snapshots.lock().await;
-        *snapshots.slot(include_quota) = Some((Instant::now(), report.clone()));
+        snapshots.store(key, report.clone());
         Ok(report)
     }
 
-    async fn cached(&self, include_quota: bool) -> Option<Arc<stats::StatsReport>> {
-        let mut snapshots = self.snapshots.lock().await;
-        snapshots
-            .slot(include_quota)
-            .as_ref()
-            .filter(|(created, _)| created.elapsed() < SNAPSHOT_TTL)
-            .map(|(_, report)| report.clone())
+    async fn cached(&self, key: &CacheKey) -> Option<Arc<stats::StatsReport>> {
+        let snapshots = self.snapshots.lock().await;
+        snapshots.lookup(key)
     }
 }
 
@@ -272,25 +334,19 @@ impl AumMcpServer {
         let report = if let Some(date_str) = req.date.as_deref() {
             let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
                 .map_err(|e| format!("date must be YYYY-MM-DD: {e}"))?;
-            let platforms = req
-                .analyzer
-                .clone()
-                .map(|analyzer| std::collections::BTreeSet::from([analyzer]));
-            Arc::new(
-                stats::collect(
-                    &self.paths,
-                    stats::CollectOptions {
-                        include_quota: false,
-                        filters: stats::Filters {
-                            platforms,
-                            since: Some(date),
-                            until: Some(date),
-                        },
-                    },
-                )
-                .await
-                .map_err(|e| format!("collect failed: {e}"))?,
-            )
+            self.collect_opts(stats::CollectOptions {
+                include_quota: false,
+                filters: stats::Filters {
+                    platforms: req
+                        .analyzer
+                        .clone()
+                        .map(|analyzer| std::collections::BTreeSet::from([analyzer])),
+                    since: Some(date),
+                    until: Some(date),
+                },
+            })
+            .await
+            .map_err(|e| e.to_string())?
         } else {
             self.collect(false).await.map_err(|e| e.to_string())?
         };
@@ -321,7 +377,7 @@ impl AumMcpServer {
 
     #[tool(
         name = "get_quota",
-        description = "Get live quota (Claude Code, Codex) and account identity for all platforms."
+        description = "Get live quota (Claude Code, Codex, Grok) and account identity for all platforms."
     )]
     async fn get_quota(&self) -> Result<Json<QuotaResponse>, String> {
         let report = self.collect(true).await.map_err(|e| e.to_string())?;
