@@ -27,9 +27,8 @@ use std::time::{Duration, Instant};
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const OIDC_ISSUER: &str = "https://auth.x.ai";
 
-fn trusted_oidc_issuer(value: &str) -> Option<String> {
-    let normalized = value.trim_end_matches('/');
-    (normalized == OIDC_ISSUER).then(|| OIDC_ISSUER.to_string())
+fn is_trusted_oidc_issuer(value: &str) -> bool {
+    value.trim_end_matches('/') == OIDC_ISSUER
 }
 
 /// OIDC refresh tokens rotate on every use (each refresh mints a new pair and
@@ -80,7 +79,6 @@ struct GrokAuth {
     user_id: String,
     email: Option<String>,
     refresh_token: String,
-    oidc_issuer: String,
     oidc_client_id: String,
 }
 
@@ -93,7 +91,8 @@ fn grok_auth_path() -> PathBuf {
 /// The file is keyed by `"<issuer>::<client_id>"`; session entries carry a
 /// `key` (access token), `refresh_token`, `user_id`, and `email`. API-key
 /// entries (no `refresh_token`) are skipped — the billing proxy needs a CLI
-/// session token.
+/// session token. Entries whose `oidc_issuer` is not Grok's fixed issuer are
+/// rejected, so a tampered file cannot redirect the refresh token.
 fn read_auth() -> Option<GrokAuth> {
     let raw = std::fs::read_to_string(grok_auth_path()).ok()?;
     let data: Value = serde_json::from_str(&raw).ok()?;
@@ -104,6 +103,15 @@ fn read_auth() -> Option<GrokAuth> {
         let key = e.get("key")?.as_str()?.to_string();
         let refresh_token = e.get("refresh_token")?.as_str()?.to_string();
         let oidc_client_id = e.get("oidc_client_id")?.as_str()?.to_string();
+        // The issuer comes from a mutable local file — never trust it to
+        // route the refresh token. Grok's CLI uses one fixed OIDC issuer.
+        let issuer = e
+            .get("oidc_issuer")
+            .and_then(|v| v.as_str())
+            .unwrap_or(OIDC_ISSUER);
+        if !is_trusted_oidc_issuer(issuer) {
+            return None;
+        }
         Some(GrokAuth {
             user_id: e
                 .get("user_id")
@@ -113,12 +121,6 @@ fn read_auth() -> Option<GrokAuth> {
             email: e.get("email").and_then(|v| v.as_str()).map(String::from),
             key,
             refresh_token,
-            oidc_issuer: trusted_oidc_issuer(
-                e.get("oidc_issuer")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(OIDC_ISSUER),
-            )?,
-
             oidc_client_id,
         })
     })
@@ -136,15 +138,8 @@ fn is_token_expiring(access_token: &str) -> bool {
 /// Exchange the refresh token for a fresh (access, refresh) pair via OIDC.
 /// Returns the rotated pair so the caller can cache it — the old refresh
 /// token is already revoked server-side.
-fn refresh_access_token(
-    oidc_issuer: &str,
-    oidc_client_id: &str,
-    refresh_token: &str,
-) -> Option<TokenPair> {
-    // Never send a refresh token to an issuer supplied by a mutable local
-    // auth file. Grok's CLI uses one fixed OIDC issuer.
-    let issuer = trusted_oidc_issuer(oidc_issuer)?;
-    let resp = ureq::post(&format!("{issuer}/oauth2/token"))
+fn refresh_access_token(oidc_client_id: &str, refresh_token: &str) -> Option<TokenPair> {
+    let resp = ureq::post(&format!("{OIDC_ISSUER}/oauth2/token"))
         .set("Accept", "application/json")
         .timeout(Duration::from_secs(10))
         .send_form(&[
@@ -341,9 +336,7 @@ fn maybe_refresh_pair(auth: &GrokAuth, pair: &TokenPair) -> TokenPair {
     if !is_token_expiring(&pair.access) {
         return pair.clone();
     }
-    if let Some(new_pair) =
-        refresh_access_token(&auth.oidc_issuer, &auth.oidc_client_id, &pair.refresh)
-    {
+    if let Some(new_pair) = refresh_access_token(&auth.oidc_client_id, &pair.refresh) {
         store_refreshed_pair(new_pair.clone());
         new_pair
     } else {
@@ -370,8 +363,7 @@ fn quota_from_billing(
         },
         BillingOutcome::AuthRejected => {
             if allow_auth_refresh
-                && let Some(new_pair) =
-                    refresh_access_token(&auth.oidc_issuer, &auth.oidc_client_id, &pair.refresh)
+                && let Some(new_pair) = refresh_access_token(&auth.oidc_client_id, &pair.refresh)
             {
                 store_refreshed_pair(new_pair.clone());
                 return quota_from_billing(auth, &new_pair, client_version, false);
@@ -496,11 +488,9 @@ mod tests {
 
     #[test]
     fn rejects_untrusted_oidc_issuer() {
-        assert_eq!(trusted_oidc_issuer("https://evil.example"), None);
-        assert_eq!(
-            trusted_oidc_issuer("https://auth.x.ai/"),
-            Some(OIDC_ISSUER.to_string())
-        );
+        assert!(!is_trusted_oidc_issuer("https://evil.example"));
+        assert!(is_trusted_oidc_issuer("https://auth.x.ai"));
+        assert!(is_trusted_oidc_issuer("https://auth.x.ai/"));
     }
 
     #[test]
@@ -510,7 +500,6 @@ mod tests {
             refresh_token: "refresh-on-disk".into(),
             user_id: "u".into(),
             email: None,
-            oidc_issuer: "https://auth.x.ai".into(),
             oidc_client_id: "client".into(),
         };
         let cached = TokenPair {
@@ -528,7 +517,6 @@ mod tests {
             refresh_token: "new-refresh".into(),
             user_id: "u".into(),
             email: None,
-            oidc_issuer: "https://auth.x.ai".into(),
             oidc_client_id: "client".into(),
         };
         let cached = TokenPair {
