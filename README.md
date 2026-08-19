@@ -1,6 +1,6 @@
 # Agent Usage Monitor
 
-Real-time terminal dashboard for **Claude Code** & **Codex** usage — quota windows, token usage, and cost, read straight from local log files. No API keys required. The command is `aum`.
+Real-time terminal dashboard for **Claude Code** & **Codex** local usage, plus live quota for **Claude Code**, **Codex**, and **Grok**. No API keys required for local usage records; vendor credentials are used only for live quota. The command is `aum`.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -10,6 +10,9 @@ Real-time terminal dashboard for **Claude Code** & **Codex** usage — quota win
 ```bash
 curl -fsSL https://raw.githubusercontent.com/youming-ai/agent-usage-monitor/main/install.sh | sh
 ```
+
+The installer verifies release signatures with `minisign`; install it first
+(`brew install minisign` or `apt install minisign`).
 
 Also available from [Releases](https://github.com/youming-ai/agent-usage-monitor/releases), or build from source with `cargo build --release`.
 
@@ -178,24 +181,23 @@ Wed · · · · · · · · · · · · · · · · · · · · · · · · · �
     · · · · · · · · · · · · · · · · · · · · · · · · · · ■ ■ ■ ■
 Fri · · · · · · · · · · · · · · · · · · · · · · · · · ■ ■ ■ ■
     · · · · · · · · · · · · · · · · · · · · · · · · · ■ ■ ■ ■
-Less  · ■ ■ ■ ■  More
 ```
 
 - **Live quota** (network) — vendor APIs using your local login: windows (5h/7d
   and model-scoped when present), plan/org, credits/extra-usage. Prefixed
-  `live` in the UI. Claude: `api.anthropic.com/api/oauth/usage` + profile;
-  Codex: `chatgpt.com/backend-api/wham/usage`. No official day-by-day history.
+  `live` in the UI. Claude: `api.anthropic.com/api/oauth/usage`; Codex:
+  `chatgpt.com/backend-api/wham/usage`; Grok: `cli-chat-proxy.grok.com`.
+  No official day-by-day quota history is available.
 - **Token activity heatmap + local summary** — from on-disk logs. The header
   shows lifetime tokens, peak day, current/best streak, and longest task. The
   grid has one column per week, all seven weekday rows (Mon…Sun), and month
   labels on top. Each day uses one colored square plus one spacer column,
   stretching across the full padded width so the terminal width decides how
   much history fits; the header reports that visible range. Empty days are
-  dim dots, including the rest of the current
-  week, while active days are separated colored squares. The legend shows the
-  activity scale.
+  dim dots, including the rest of the current week, while active days are
+  separated colored squares; activity intensity is encoded by color.
 
-Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
+Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue, Grok gray); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
 
 ## How it works
 
@@ -204,7 +206,13 @@ Each platform uses an accent color matched to its official CLI theme or brand pa
 - **Claude Code** — `~/.claude/projects/**/*.jsonl`
 - **Codex** — `~/.codex/sessions/**/rollout-*.jsonl`
 
-Quota percentages come from the official endpoints, authenticated with your existing local credentials (Claude: macOS Keychain or `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`). Cost is computed from built-in pricing tables for Anthropic & OpenAI models; unknown models show `$0.00`.
+Grok is quota-only: it has no local usage reader and uses the official billing
+endpoint with the session credentials in `~/.grok/auth.json`. Quota percentages
+for Claude Code and Codex also come from official endpoints, authenticated with
+their existing local credentials (Claude: macOS Keychain or
+`~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`). Cost is computed
+from built-in pricing tables for Anthropic & OpenAI models; unknown models show
+`$0.00`.
 
 ### Adding a new agent
 
