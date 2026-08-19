@@ -54,21 +54,50 @@ SIG_URL=$(printf '%s\n' "$RELEASE_JSON" \
     | head -1 \
     | cut -d '"' -f 4)
 
+if [ -z "$DOWNLOAD_URL" ]; then
+    echo "Error: Could not find release asset for ${OS_NAME}/${ARCH_NAME}" >&2
+    echo "Check https://github.com/${REPO}/releases for available downloads" >&2
+    exit 1
+fi
+if [ -z "$SIG_URL" ]; then
+    echo "Error: Could not find release signature for ${OS_NAME}/${ARCH_NAME}" >&2
+    echo "Check https://github.com/${REPO}/releases for available downloads" >&2
+    exit 1
+fi
+
+# Every download must stay on the repository's GitHub release origin; the
+# compiled updater applies the same allowlist and the installer must not
+# be weaker.
 EXPECTED_URL_PREFIX="https://github.com/${REPO}/releases/download/"
-case "$DOWNLOAD_URL" in
-    "${EXPECTED_URL_PREFIX}"*) ;;
-    *)
-        echo "Error: release asset URL is not from the official repository" >&2
-        exit 1
-        ;;
-esac
-case "$SIG_URL" in
-    "${EXPECTED_URL_PREFIX}"*) ;;
-    *)
-        echo "Error: release signature URL is not from the official repository" >&2
-        exit 1
-        ;;
-esac
+require_official_url() {
+    case "$1" in
+        "${EXPECTED_URL_PREFIX}"*) ;;
+        *)
+            echo "Error: $2 is not from the official repository" >&2
+            exit 1
+            ;;
+    esac
+}
+require_official_url "$DOWNLOAD_URL" "Release asset URL"
+require_official_url "$SIG_URL" "Release signature URL"
+
+# Installation must fail closed. Without a verified detached signature, a
+# compromised release or download path could replace the binary users
+# execute. Checked before any download so a missing verifier wastes no
+# bandwidth.
+if ! command -v minisign >/dev/null 2>&1; then
+    echo "Error: 'minisign' is required to verify the release signature." >&2
+    echo "  Install it first: brew install minisign or apt install minisign" >&2
+    exit 1
+fi
+
+download() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$1" -o "$2"
+    else
+        wget -qO "$2" "$1"
+    fi
+}
 
 echo "Downloading ${BINARY_NAME} from ${DOWNLOAD_URL}..."
 
@@ -78,26 +107,10 @@ echo "Downloading ${BINARY_NAME} from ${DOWNLOAD_URL}..."
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$DOWNLOAD_URL" -o "$WORK_DIR/${ASSET_NAME}"
-else
-    wget -qO "$WORK_DIR/${ASSET_NAME}" "$DOWNLOAD_URL"
-fi
-
-# Installation must fail closed. Without a verified detached signature, a
-# compromised release or download path could replace the binary users execute.
-if ! command -v minisign >/dev/null 2>&1; then
-    echo "Error: 'minisign' is required to verify the release signature." >&2
-    echo "  Install it first: brew install minisign or apt install minisign" >&2
-    exit 1
-fi
+download "$DOWNLOAD_URL" "$WORK_DIR/${ASSET_NAME}"
 
 echo "Verifying signature..."
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$SIG_URL" -o "$WORK_DIR/${ASSET_NAME}.minisig"
-else
-    wget -qO "$WORK_DIR/${ASSET_NAME}.minisig" "$SIG_URL"
-fi
+download "$SIG_URL" "$WORK_DIR/${ASSET_NAME}.minisig"
 if ! minisign -Vm "$WORK_DIR/${ASSET_NAME}" -P "$MINISIGN_PUBLIC_KEY"; then
     echo "Error: signature verification FAILED — refusing to install a tampered or corrupted download." >&2
     exit 1
