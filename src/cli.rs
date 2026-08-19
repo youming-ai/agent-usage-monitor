@@ -17,7 +17,7 @@ pub struct Cli {
     #[arg(long)]
     pub codex_path: Option<PathBuf>,
 
-    /// Path to Grok data directory
+    /// Path to Grok data directory (quota reads its auth.json)
     #[arg(long)]
     pub grok_path: Option<PathBuf>,
 
@@ -40,7 +40,7 @@ pub struct StatsArgs {
     #[arg(long)]
     pub until: Option<String>,
 
-    /// 拉取 quota (Claude/Codex 需本地凭据)
+    /// 拉取 quota (Claude/Codex/Grok 需本地凭据; Grok 读取 ~/.grok/auth.json)
     #[arg(long)]
     pub include_quota: bool,
 
