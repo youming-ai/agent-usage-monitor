@@ -214,9 +214,10 @@ pub(crate) fn find_recursive(
             Err(e) => return Err(ReaderError::io(dir, e)),
         };
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = entry.file_type().map_err(|e| ReaderError::io(&path, e))?;
+        if file_type.is_dir() {
             find_recursive(&path, files, keep)?;
-        } else if keep(&path) {
+        } else if file_type.is_file() && keep(&path) {
             files.push(path);
         }
     }
@@ -513,5 +514,24 @@ mod tests {
         assert_eq!(ops.files_deleted, 1);
         assert_eq!(ops.files_edited, 1);
         assert_eq!(ops.lines_edited, 4);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn recursive_scan_skips_directory_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let file = real.join("record.jsonl");
+        std::fs::write(&file, "{}\n").unwrap();
+        std::os::unix::fs::symlink(root.path(), real.join("cycle")).unwrap();
+
+        let mut files = Vec::new();
+        find_recursive(root.path(), &mut files, &|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .unwrap();
+
+        assert_eq!(files, vec![file]);
     }
 }
