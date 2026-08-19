@@ -214,11 +214,29 @@ pub(crate) fn find_recursive(
             Err(e) => return Err(ReaderError::io(dir, e)),
         };
         let path = entry.path();
-        let file_type = entry.file_type().map_err(|e| ReaderError::io(&path, e))?;
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            // Same race as above: the entry can vanish between `read_dir`
+            // and `file_type` (the type may need an extra `lstat`).
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(ReaderError::io(&path, e)),
+        };
         if file_type.is_dir() {
             find_recursive(&path, files, keep)?;
-        } else if file_type.is_file() && keep(&path) {
-            files.push(path);
+        } else {
+            // Symlinked directories fall through here and are skipped, so a
+            // malicious link can neither cycle nor escape the scan root.
+            // Symlinks to regular files are still followed — symlinked log
+            // files are a legitimate setup; dangling ones read as metadata
+            // failures and are skipped like any other vanished entry.
+            let is_usable_file = if file_type.is_symlink() {
+                fs::metadata(&path).is_ok_and(|m| m.is_file())
+            } else {
+                file_type.is_file()
+            };
+            if is_usable_file && keep(&path) {
+                files.push(path);
+            }
         }
     }
     Ok(())
@@ -533,5 +551,42 @@ mod tests {
         .unwrap();
 
         assert_eq!(files, vec![file]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_scan_follows_file_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("record.jsonl");
+        std::fs::write(&file, "{}\n").unwrap();
+        std::os::unix::fs::symlink(&file, root.path().join("linked.jsonl")).unwrap();
+
+        let mut files = Vec::new();
+        find_recursive(root.path(), &mut files, &|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .unwrap();
+
+        files.sort();
+        let mut expected = vec![file, root.path().join("linked.jsonl")];
+        expected.sort();
+        assert_eq!(files, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_scan_skips_dangling_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(
+            root.path().join("missing.jsonl"),
+            root.path().join("dangling.jsonl"),
+        )
+        .unwrap();
+
+        let mut files = Vec::new();
+        find_recursive(root.path(), &mut files, &|_| true).unwrap();
+
+        assert!(files.is_empty());
     }
 }
