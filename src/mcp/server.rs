@@ -3,14 +3,15 @@
 //! Wraps `stats::collect()` behind 6 tools + 2 resources per the spec.
 #![allow(clippy::collapsible_if)]
 
+use chrono::{Datelike, NaiveDate};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    AnnotateAble, Implementation, ListResourcesResult, PaginatedRequestParam, ProtocolVersion,
-    RawResource, ReadResourceRequestParam, ReadResourceResult, ResourceContents,
+    AnnotateAble, Implementation, ListResourcesResult, PaginatedRequestParams, ProtocolVersion,
+    RawResource, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
     ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
@@ -37,18 +38,74 @@ pub struct AumMcpServer {
 
 const SNAPSHOT_TTL: Duration = Duration::from_secs(2);
 
+/// Cache identity for a collected snapshot. The two hot unfiltered slots are
+/// shared by every tool; one extra slot remembers the last filtered collect
+/// (e.g. a dated `get_session_stats`) so repeated dated queries in a burst
+/// don't each rescan the on-disk history.
+#[derive(PartialEq, Eq)]
+enum CacheKey {
+    Usage,
+    WithQuota,
+    Filtered {
+        include_quota: bool,
+        platforms: Option<std::collections::BTreeSet<String>>,
+        since: Option<NaiveDate>,
+        until: Option<NaiveDate>,
+    },
+}
+
+impl CacheKey {
+    fn of(opts: &stats::CollectOptions) -> Self {
+        let stats::Filters {
+            platforms,
+            since,
+            until,
+        } = &opts.filters;
+        match (opts.include_quota, platforms, since, until) {
+            (false, None, None, None) => Self::Usage,
+            (true, None, None, None) => Self::WithQuota,
+            (include_quota, platforms, since, until) => Self::Filtered {
+                include_quota,
+                platforms: platforms.clone(),
+                since: *since,
+                until: *until,
+            },
+        }
+    }
+}
+
 #[derive(Default)]
 struct SnapshotCache {
     usage: Option<(Instant, Arc<stats::StatsReport>)>,
     with_quota: Option<(Instant, Arc<stats::StatsReport>)>,
+    filtered: Option<(CacheKey, Instant, Arc<stats::StatsReport>)>,
 }
 
 impl SnapshotCache {
-    fn slot(&mut self, include_quota: bool) -> &mut Option<(Instant, Arc<stats::StatsReport>)> {
-        if include_quota {
-            &mut self.with_quota
-        } else {
-            &mut self.usage
+    fn lookup(&self, key: &CacheKey) -> Option<Arc<stats::StatsReport>> {
+        let slot = match key {
+            CacheKey::Usage => &self.usage,
+            CacheKey::WithQuota => &self.with_quota,
+            CacheKey::Filtered { .. } => {
+                return self
+                    .filtered
+                    .as_ref()
+                    .filter(|(k, created, _)| k == key && created.elapsed() < SNAPSHOT_TTL)
+                    .map(|(_, _, report)| report.clone());
+            }
+        };
+        slot.as_ref()
+            .filter(|(created, _)| created.elapsed() < SNAPSHOT_TTL)
+            .map(|(_, report)| report.clone())
+    }
+
+    fn store(&mut self, key: CacheKey, report: Arc<stats::StatsReport>) {
+        match key {
+            CacheKey::Usage => self.usage = Some((Instant::now(), report)),
+            CacheKey::WithQuota => self.with_quota = Some((Instant::now(), report)),
+            key @ CacheKey::Filtered { .. } => {
+                self.filtered = Some((key, Instant::now(), report));
+            }
         }
     }
 }
@@ -70,14 +127,24 @@ impl AumMcpServer {
     /// been an instant hit on the other slot. Two concurrent misses can both
     /// collect; duplicating that work is cheaper than serialising every tool.
     async fn collect(&self, include_quota: bool) -> Result<Arc<stats::StatsReport>, McpError> {
-        if let Some(fresh) = self.cached(include_quota).await {
+        self.collect_opts(stats::CollectOptions {
+            include_quota,
+            filters: stats::Filters::default(),
+        })
+        .await
+    }
+
+    /// Like [`collect`](Self::collect) for a filtered report; cached per
+    /// filter key under the same TTL, so a burst of dated queries scans once.
+    async fn collect_opts(
+        &self,
+        opts: stats::CollectOptions,
+    ) -> Result<Arc<stats::StatsReport>, McpError> {
+        let key = CacheKey::of(&opts);
+        if let Some(fresh) = self.cached(&key).await {
             return Ok(fresh);
         }
 
-        let opts = stats::CollectOptions {
-            include_quota,
-            filters: stats::Filters::default(),
-        };
         let report = Arc::new(
             stats::collect(&self.paths, opts)
                 .await
@@ -85,17 +152,13 @@ impl AumMcpServer {
         );
 
         let mut snapshots = self.snapshots.lock().await;
-        *snapshots.slot(include_quota) = Some((Instant::now(), report.clone()));
+        snapshots.store(key, report.clone());
         Ok(report)
     }
 
-    async fn cached(&self, include_quota: bool) -> Option<Arc<stats::StatsReport>> {
-        let mut snapshots = self.snapshots.lock().await;
-        snapshots
-            .slot(include_quota)
-            .as_ref()
-            .filter(|(created, _)| created.elapsed() < SNAPSHOT_TTL)
-            .map(|(_, report)| report.clone())
+    async fn cached(&self, key: &CacheKey) -> Option<Arc<stats::StatsReport>> {
+        let snapshots = self.snapshots.lock().await;
+        snapshots.lookup(key)
     }
 }
 
@@ -111,6 +174,7 @@ impl AumMcpServer {
     ) -> Result<Json<DailyStatsResponse>, String> {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
         let limit = req.limit.unwrap_or(30) as usize;
+        let date = parse_date_param(req.date.as_deref())?.map(compact_date);
         let mut results: Vec<DailyStat> = Vec::new();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer {
@@ -118,13 +182,11 @@ impl AumMcpServer {
                     continue;
                 }
             }
-            for (date, bucket) in &pr.dates {
-                let date_str = date.to_string();
-                if let Some(d) = &req.date {
-                    if &date_str != d {
-                        continue;
-                    }
+            for (d, bucket) in &pr.dates {
+                if date.is_some_and(|filter| d != &filter) {
+                    continue;
                 }
+                let date_str = d.to_string();
                 let mut resolved_models = std::collections::BTreeMap::new();
                 for (k, v) in &bucket.models {
                     resolved_models.insert(crate::state::resolve(*k).to_string(), *v);
@@ -155,6 +217,7 @@ impl AumMcpServer {
         Parameters(req): Parameters<GetModelUsageRequest>,
     ) -> Result<Json<ModelUsageResponse>, String> {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let date = parse_date_param(req.date.as_deref())?.map(compact_date);
         let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer {
@@ -162,12 +225,9 @@ impl AumMcpServer {
                     continue;
                 }
             }
-            for (date, bucket) in &pr.dates {
-                let date_str = date.to_string();
-                if let Some(d) = &req.date {
-                    if &date_str != d {
-                        continue;
-                    }
+            for (d, bucket) in &pr.dates {
+                if date.is_some_and(|filter| d != &filter) {
+                    continue;
                 }
                 for (model_spur, count) in &bucket.models {
                     let model_name = crate::state::resolve(*model_spur).to_string();
@@ -199,6 +259,8 @@ impl AumMcpServer {
         Parameters(req): Parameters<GetCostBreakRequest>,
     ) -> Result<Json<CostBreakdownResponse>, String> {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let start = parse_date_param(req.start_date.as_deref())?.map(compact_date);
+        let end = parse_date_param(req.end_date.as_deref())?.map(compact_date);
         let mut daily: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer {
@@ -206,18 +268,11 @@ impl AumMcpServer {
                     continue;
                 }
             }
-            for (date, bucket) in &pr.dates {
-                let date_str = date.to_string();
-                if let Some(s) = &req.start_date {
-                    if &date_str < s {
-                        continue;
-                    }
+            for (d, bucket) in &pr.dates {
+                if start.is_some_and(|s| d < &s) || end.is_some_and(|e| d > &e) {
+                    continue;
                 }
-                if let Some(e) = &req.end_date {
-                    if &date_str > e {
-                        continue;
-                    }
-                }
+                let date_str = d.to_string();
                 *daily.entry(date_str).or_insert(0.0) += bucket.cost_usd;
             }
         }
@@ -243,6 +298,7 @@ impl AumMcpServer {
         Parameters(req): Parameters<GetFileOpsRequest>,
     ) -> Result<Json<FileOpsResponse>, String> {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let date = parse_date_param(req.date.as_deref())?.map(compact_date);
         let mut out = FileOpsResponse::default();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer
@@ -250,7 +306,7 @@ impl AumMcpServer {
             {
                 continue;
             }
-            let ops = select_tool_ops(&pr.tool_ops, req.date.as_deref());
+            let ops = select_tool_ops(&pr.tool_ops, date);
             let Some(ops) = ops else { continue };
             out.files_read += ops.files_read;
             out.files_edited += ops.files_edited;
@@ -268,7 +324,23 @@ impl AumMcpServer {
         &self,
         Parameters(req): Parameters<GetSessionStatsRequest>,
     ) -> Result<Json<SessionStatsResponse>, String> {
-        let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let report = if let Some(date) = parse_date_param(req.date.as_deref())? {
+            self.collect_opts(stats::CollectOptions {
+                include_quota: false,
+                filters: stats::Filters {
+                    platforms: req
+                        .analyzer
+                        .clone()
+                        .map(|analyzer| std::collections::BTreeSet::from([analyzer])),
+                    since: Some(date),
+                    until: Some(date),
+                },
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        } else {
+            self.collect(false).await.map_err(|e| e.to_string())?
+        };
         let mut sessions: Vec<SessionEntry> = Vec::new();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer {
@@ -296,7 +368,7 @@ impl AumMcpServer {
 
     #[tool(
         name = "get_quota",
-        description = "Get live quota (Claude Code, Codex) and account identity for all platforms."
+        description = "Get live quota (Claude Code, Codex, Grok) and account identity for all platforms."
     )]
     async fn get_quota(&self) -> Result<Json<QuotaResponse>, String> {
         let report = self.collect(true).await.map_err(|e| e.to_string())?;
@@ -323,48 +395,57 @@ impl AumMcpServer {
     }
 }
 
-fn select_tool_ops<'a>(
-    ops: &'a stats::ToolOpsView,
-    date: Option<&str>,
-) -> Option<&'a stats::ToolOpsView> {
-    match date {
-        Some(date) => ops
-            .by_date
-            .iter()
-            .find(|(day, _)| day.to_string() == date)
-            .map(|(_, ops)| ops),
-        None => Some(ops),
-    }
+/// Parse an optional `YYYY-MM-DD` tool parameter, rejecting malformed input
+/// with a descriptive error instead of silently matching nothing.
+fn parse_date_param(date: Option<&str>) -> Result<Option<NaiveDate>, String> {
+    date.map(|s| {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .map_err(|e| format!("date must be YYYY-MM-DD: {e}"))
+    })
+    .transpose()
 }
 
-#[tool_handler]
+/// Report date keys are compacted; convert a parsed parameter once.
+fn compact_date(date: NaiveDate) -> crate::state::CompactDate {
+    crate::state::CompactDate::new(date.year() as u16, date.month() as u8, date.day() as u8)
+}
+
+fn select_tool_ops(
+    ops: &stats::ToolOpsView,
+    date: Option<crate::state::CompactDate>,
+) -> Option<&stats::ToolOpsView> {
+    let Some(date) = date else {
+        return Some(ops);
+    };
+    ops.by_date
+        .iter()
+        .find(|(day, _)| **day == date)
+        .map(|(_, ops)| ops)
+}
+
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for AumMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
-            server_info: Implementation {
-                name: "aum".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: Some("agent-usage-monitor".to_string()),
-                website_url: None,
-                icons: None,
-            },
-            instructions: Some(
-                "aum is a usage monitor for AI coding agents. Use get_daily_stats, \
-                 get_model_usage, get_cost_breakdown, get_file_operations, get_session_stats \
-                 for usage queries. get_quota returns live quota for Claude Code and Codex."
-                    .to_string(),
-            ),
-        }
+        )
+        .with_protocol_version(ProtocolVersion::V_2024_11_05)
+        .with_server_info(
+            Implementation::new("aum", env!("CARGO_PKG_VERSION")).with_title("agent-usage-monitor"),
+        )
+        .with_instructions(
+            "aum is a usage monitor for AI coding agents. Use get_daily_stats, \
+             get_model_usage, get_cost_breakdown, get_file_operations, get_session_stats \
+             for usage queries. get_quota returns live quota for Claude Code, Codex, and Grok.",
+        )
     }
 
     async fn list_resources(
         &self,
-        _req: Option<PaginatedRequestParam>,
+        _req: Option<PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         Ok(ListResourcesResult {
@@ -402,7 +483,7 @@ impl ServerHandler for AumMcpServer {
 
     async fn read_resource(
         &self,
-        req: ReadResourceRequestParam,
+        req: ReadResourceRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         match req.uri.as_str() {
@@ -410,14 +491,9 @@ impl ServerHandler for AumMcpServer {
                 let report = self.collect(false).await?;
                 let body = serde_json::to_string(&report.totals)
                     .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::TextResourceContents {
-                        uri: req.uri,
-                        mime_type: Some("application/json".to_string()),
-                        text: body,
-                        meta: None,
-                    }],
-                })
+                Ok(ReadResourceResult::new(vec![
+                    ResourceContents::text(body, req.uri).with_mime_type("application/json"),
+                ]))
             }
             resource_uris::PLATFORMS => {
                 let _report = self.collect(false).await?;
@@ -436,14 +512,9 @@ impl ServerHandler for AumMcpServer {
                     .collect();
                 let body = serde_json::to_string(&serde_json::json!({ "platforms": platforms }))
                     .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::TextResourceContents {
-                        uri: req.uri,
-                        mime_type: Some("application/json".to_string()),
-                        text: body,
-                        meta: None,
-                    }],
-                })
+                Ok(ReadResourceResult::new(vec![
+                    ResourceContents::text(body, req.uri).with_mime_type("application/json"),
+                ]))
             }
             _ => Err(McpError::resource_not_found(
                 format!("unknown resource: {}", req.uri),
@@ -530,13 +601,29 @@ mod tests {
             },
         );
         assert_eq!(select_tool_ops(&all, None).unwrap().files_read, 9);
-        assert_eq!(
-            select_tool_ops(&all, Some("2026-08-07"))
-                .unwrap()
-                .files_read,
-            2
-        );
-        assert!(select_tool_ops(&all, Some("2026-08-06")).is_none());
+        let hit = parse_date_param(Some("2026-08-07"))
+            .unwrap()
+            .map(compact_date);
+        assert_eq!(select_tool_ops(&all, hit).unwrap().files_read, 2);
+        let miss = parse_date_param(Some("2026-08-06"))
+            .unwrap()
+            .map(compact_date);
+        assert!(select_tool_ops(&all, miss).is_none());
+    }
+
+    #[tokio::test]
+    async fn get_daily_stats_rejects_invalid_date() {
+        let server = AumMcpServer::new(empty_paths());
+        let req = GetDailyStatsRequest {
+            analyzer: None,
+            date: Some("2026/08/02".into()),
+            limit: None,
+        };
+        let err = match server.get_daily_stats(Parameters(req)).await {
+            Err(e) => e,
+            Ok(_) => panic!("expected invalid-date error"),
+        };
+        assert!(err.contains("YYYY-MM-DD"), "unexpected error: {err}");
     }
 
     #[tokio::test]
@@ -546,6 +633,50 @@ mod tests {
         let result = server.get_session_stats(Parameters(req)).await.unwrap();
         assert_eq!(result.0.sessions.len(), 0);
         assert_eq!(result.0.total_sessions, 0);
+    }
+
+    #[tokio::test]
+    async fn get_session_stats_filters_by_date() {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("session.jsonl");
+        let line = |date: &str, id: &str| {
+            serde_json::json!({
+                "type": "assistant",
+                "timestamp": format!("{date}T12:00:00Z"),
+                "sessionId": "session-1",
+                "cwd": "/tmp/project",
+                "message": {
+                    "id": id,
+                    "model": "claude-sonnet-4",
+                    "usage": { "input_tokens": 10, "output_tokens": 5 }
+                },
+                "cost_usd": 0.01
+            })
+            .to_string()
+        };
+        std::fs::write(
+            &log,
+            format!(
+                "{}\n{}\n",
+                line("2026-08-01", "message-1"),
+                line("2026-08-02", "message-2")
+            ),
+        )
+        .unwrap();
+
+        let paths = synthetic_paths(root.path());
+        let server = AumMcpServer::new(paths);
+        let result = server
+            .get_session_stats(Parameters(GetSessionStatsRequest {
+                analyzer: Some("claude_code".into()),
+                date: Some("2026-08-02".into()),
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(result.0.total_sessions, 1);
+        assert_eq!(result.0.sessions[0].calls, 1);
+        assert_eq!(result.0.sessions[0].cost_usd, 0.01);
     }
 
     #[tokio::test]
@@ -567,7 +698,7 @@ mod tests {
     }
 
     // Resource tests require constructing a `RequestContext`, which has no
-    // `Default` impl in rmcp 0.12 and requires Peer/CancellationToken setup.
+    // `Default` impl in rmcp and requires Peer/CancellationToken setup.
     // Resources are verified end-to-end by the black-box integration test
     // in `tests/mcp.rs` (Task 7).
 }

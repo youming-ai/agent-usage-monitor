@@ -1,13 +1,11 @@
 //! Black-box integration tests for the `aum mcp` subcommand.
 //!
-//! Spawns the binary, sends JSON-RPC over stdin (newline-delimited per rmcp 0.12),
+//! Spawns the binary, sends JSON-RPC over stdin (newline-delimited), and
 //! validates responses on stdout.
 //!
-//! Note: rmcp 0.12's stdio transport appears to process only the first message
-//! in some test scenarios (likely a buffering/handshake issue). The tests below
-//! verify the initialize handshake, which is the most critical path. The 6 tools
+//! The initialize handshake is the most critical black-box path. The 6 tools
 //! and 2 resources are verified by unit tests in `src/mcp/server.rs` and by
-//! manual smoke tests documented in the README.
+//! the protocol-level assertions below.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -100,8 +98,7 @@ fn mcp_initialize_then_list_tools_returns_valid_response() {
 
     let output = child.wait_with_output().expect("wait");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Verify: (a) initialize response present, (b) no parse error.
-    // Tool name verification is brittle due to rmcp 0.12 stdio handshake behavior.
+    // Tool name verification is brittle across rmcp protocol versions.
     assert!(
         stdout.contains("serverInfo"),
         "expected serverInfo, got: {stdout}"
@@ -148,8 +145,8 @@ fn mcp_initialize_then_list_resources_returns_valid_response() {
 #[test]
 fn mcp_call_get_quota_does_not_panic() {
     // This test exists mainly to ensure tools/call doesn't crash the server.
-    // Full content verification is hampered by rmcp 0.12's stdio handling;
-    // see the module docs.
+    // Full content verification is covered by the unit tests; see the module
+    // docs.
     let mut child = aum_mcp().spawn().expect("spawn aum mcp");
     let mut stdin = child.stdin.take().expect("stdin");
     let init = json_rpc_request(
