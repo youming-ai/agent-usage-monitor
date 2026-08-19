@@ -3,7 +3,7 @@
 //! Wraps `stats::collect()` behind 6 tools + 2 resources per the spec.
 #![allow(clippy::collapsible_if)]
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -174,6 +174,7 @@ impl AumMcpServer {
     ) -> Result<Json<DailyStatsResponse>, String> {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
         let limit = req.limit.unwrap_or(30) as usize;
+        let date = parse_date_param(req.date.as_deref())?.map(compact_date);
         let mut results: Vec<DailyStat> = Vec::new();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer {
@@ -181,13 +182,11 @@ impl AumMcpServer {
                     continue;
                 }
             }
-            for (date, bucket) in &pr.dates {
-                let date_str = date.to_string();
-                if let Some(d) = &req.date {
-                    if &date_str != d {
-                        continue;
-                    }
+            for (d, bucket) in &pr.dates {
+                if date.is_some_and(|filter| d != &filter) {
+                    continue;
                 }
+                let date_str = d.to_string();
                 let mut resolved_models = std::collections::BTreeMap::new();
                 for (k, v) in &bucket.models {
                     resolved_models.insert(crate::state::resolve(*k).to_string(), *v);
@@ -218,6 +217,7 @@ impl AumMcpServer {
         Parameters(req): Parameters<GetModelUsageRequest>,
     ) -> Result<Json<ModelUsageResponse>, String> {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let date = parse_date_param(req.date.as_deref())?.map(compact_date);
         let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer {
@@ -225,12 +225,9 @@ impl AumMcpServer {
                     continue;
                 }
             }
-            for (date, bucket) in &pr.dates {
-                let date_str = date.to_string();
-                if let Some(d) = &req.date {
-                    if &date_str != d {
-                        continue;
-                    }
+            for (d, bucket) in &pr.dates {
+                if date.is_some_and(|filter| d != &filter) {
+                    continue;
                 }
                 for (model_spur, count) in &bucket.models {
                     let model_name = crate::state::resolve(*model_spur).to_string();
@@ -262,6 +259,8 @@ impl AumMcpServer {
         Parameters(req): Parameters<GetCostBreakRequest>,
     ) -> Result<Json<CostBreakdownResponse>, String> {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let start = parse_date_param(req.start_date.as_deref())?.map(compact_date);
+        let end = parse_date_param(req.end_date.as_deref())?.map(compact_date);
         let mut daily: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer {
@@ -269,18 +268,11 @@ impl AumMcpServer {
                     continue;
                 }
             }
-            for (date, bucket) in &pr.dates {
-                let date_str = date.to_string();
-                if let Some(s) = &req.start_date {
-                    if &date_str < s {
-                        continue;
-                    }
+            for (d, bucket) in &pr.dates {
+                if start.is_some_and(|s| d < &s) || end.is_some_and(|e| d > &e) {
+                    continue;
                 }
-                if let Some(e) = &req.end_date {
-                    if &date_str > e {
-                        continue;
-                    }
-                }
+                let date_str = d.to_string();
                 *daily.entry(date_str).or_insert(0.0) += bucket.cost_usd;
             }
         }
@@ -306,6 +298,7 @@ impl AumMcpServer {
         Parameters(req): Parameters<GetFileOpsRequest>,
     ) -> Result<Json<FileOpsResponse>, String> {
         let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let date = parse_date_param(req.date.as_deref())?.map(compact_date);
         let mut out = FileOpsResponse::default();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer
@@ -313,7 +306,7 @@ impl AumMcpServer {
             {
                 continue;
             }
-            let ops = select_tool_ops(&pr.tool_ops, req.date.as_deref());
+            let ops = select_tool_ops(&pr.tool_ops, date);
             let Some(ops) = ops else { continue };
             out.files_read += ops.files_read;
             out.files_edited += ops.files_edited;
@@ -331,9 +324,7 @@ impl AumMcpServer {
         &self,
         Parameters(req): Parameters<GetSessionStatsRequest>,
     ) -> Result<Json<SessionStatsResponse>, String> {
-        let report = if let Some(date_str) = req.date.as_deref() {
-            let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-                .map_err(|e| format!("date must be YYYY-MM-DD: {e}"))?;
+        let report = if let Some(date) = parse_date_param(req.date.as_deref())? {
             self.collect_opts(stats::CollectOptions {
                 include_quota: false,
                 filters: stats::Filters {
@@ -404,18 +395,32 @@ impl AumMcpServer {
     }
 }
 
-fn select_tool_ops<'a>(
-    ops: &'a stats::ToolOpsView,
-    date: Option<&str>,
-) -> Option<&'a stats::ToolOpsView> {
-    match date {
-        Some(date) => ops
-            .by_date
-            .iter()
-            .find(|(day, _)| day.to_string() == date)
-            .map(|(_, ops)| ops),
-        None => Some(ops),
-    }
+/// Parse an optional `YYYY-MM-DD` tool parameter, rejecting malformed input
+/// with a descriptive error instead of silently matching nothing.
+fn parse_date_param(date: Option<&str>) -> Result<Option<NaiveDate>, String> {
+    date.map(|s| {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .map_err(|e| format!("date must be YYYY-MM-DD: {e}"))
+    })
+    .transpose()
+}
+
+/// Report date keys are compacted; convert a parsed parameter once.
+fn compact_date(date: NaiveDate) -> crate::state::CompactDate {
+    crate::state::CompactDate::new(date.year() as u16, date.month() as u8, date.day() as u8)
+}
+
+fn select_tool_ops(
+    ops: &stats::ToolOpsView,
+    date: Option<crate::state::CompactDate>,
+) -> Option<&stats::ToolOpsView> {
+    let Some(date) = date else {
+        return Some(ops);
+    };
+    ops.by_date
+        .iter()
+        .find(|(day, _)| **day == date)
+        .map(|(_, ops)| ops)
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -596,13 +601,29 @@ mod tests {
             },
         );
         assert_eq!(select_tool_ops(&all, None).unwrap().files_read, 9);
-        assert_eq!(
-            select_tool_ops(&all, Some("2026-08-07"))
-                .unwrap()
-                .files_read,
-            2
-        );
-        assert!(select_tool_ops(&all, Some("2026-08-06")).is_none());
+        let hit = parse_date_param(Some("2026-08-07"))
+            .unwrap()
+            .map(compact_date);
+        assert_eq!(select_tool_ops(&all, hit).unwrap().files_read, 2);
+        let miss = parse_date_param(Some("2026-08-06"))
+            .unwrap()
+            .map(compact_date);
+        assert!(select_tool_ops(&all, miss).is_none());
+    }
+
+    #[tokio::test]
+    async fn get_daily_stats_rejects_invalid_date() {
+        let server = AumMcpServer::new(empty_paths());
+        let req = GetDailyStatsRequest {
+            analyzer: None,
+            date: Some("2026/08/02".into()),
+            limit: None,
+        };
+        let err = match server.get_daily_stats(Parameters(req)).await {
+            Err(e) => e,
+            Ok(_) => panic!("expected invalid-date error"),
+        };
+        assert!(err.contains("YYYY-MM-DD"), "unexpected error: {err}");
     }
 
     #[tokio::test]

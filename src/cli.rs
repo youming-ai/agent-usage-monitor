@@ -40,7 +40,7 @@ pub struct StatsArgs {
     #[arg(long)]
     pub until: Option<String>,
 
-    /// 拉取 quota (Claude/Codex/Grok 需本地凭据; Grok 读取 ~/.grok/auth.json)
+    /// 拉取 quota (Claude/Codex/Grok 需本地凭据; Grok 用 ~/.grok/auth.json 查 cli-chat-proxy.grok.com)
     #[arg(long)]
     pub include_quota: bool,
 
