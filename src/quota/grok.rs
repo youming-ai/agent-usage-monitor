@@ -25,6 +25,12 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+const OIDC_ISSUER: &str = "https://auth.x.ai";
+
+fn trusted_oidc_issuer(value: &str) -> Option<String> {
+    let normalized = value.trim_end_matches('/');
+    (normalized == OIDC_ISSUER).then(|| OIDC_ISSUER.to_string())
+}
 
 /// OIDC refresh tokens rotate on every use (each refresh mints a new pair and
 /// revokes the old one). We keep the refreshed pair in memory so a second
@@ -107,11 +113,12 @@ fn read_auth() -> Option<GrokAuth> {
             email: e.get("email").and_then(|v| v.as_str()).map(String::from),
             key,
             refresh_token,
-            oidc_issuer: e
-                .get("oidc_issuer")
-                .and_then(|v| v.as_str())
-                .unwrap_or("https://auth.x.ai")
-                .to_string(),
+            oidc_issuer: trusted_oidc_issuer(
+                e.get("oidc_issuer")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(OIDC_ISSUER),
+            )?,
+
             oidc_client_id,
         })
     })
@@ -134,7 +141,10 @@ fn refresh_access_token(
     oidc_client_id: &str,
     refresh_token: &str,
 ) -> Option<TokenPair> {
-    let resp = ureq::post(&format!("{oidc_issuer}/oauth2/token"))
+    // Never send a refresh token to an issuer supplied by a mutable local
+    // auth file. Grok's CLI uses one fixed OIDC issuer.
+    let issuer = trusted_oidc_issuer(oidc_issuer)?;
+    let resp = ureq::post(&format!("{issuer}/oauth2/token"))
         .set("Accept", "application/json")
         .timeout(Duration::from_secs(10))
         .send_form(&[
@@ -482,6 +492,15 @@ mod tests {
         assert!(q.windows.is_empty());
         assert!(q.live_summary.is_none());
         assert!(q.error.is_none());
+    }
+
+    #[test]
+    fn rejects_untrusted_oidc_issuer() {
+        assert_eq!(trusted_oidc_issuer("https://evil.example"), None);
+        assert_eq!(
+            trusted_oidc_issuer("https://auth.x.ai/"),
+            Some(OIDC_ISSUER.to_string())
+        );
     }
 
     #[test]
