@@ -3,6 +3,7 @@
 //! Wraps `stats::collect()` behind 6 tools + 2 resources per the spec.
 #![allow(clippy::collapsible_if)]
 
+use chrono::NaiveDate;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -268,7 +269,31 @@ impl AumMcpServer {
         &self,
         Parameters(req): Parameters<GetSessionStatsRequest>,
     ) -> Result<Json<SessionStatsResponse>, String> {
-        let report = self.collect(false).await.map_err(|e| e.to_string())?;
+        let report = if let Some(date_str) = req.date.as_deref() {
+            let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+                .map_err(|e| format!("date must be YYYY-MM-DD: {e}"))?;
+            let platforms = req
+                .analyzer
+                .clone()
+                .map(|analyzer| std::collections::BTreeSet::from([analyzer]));
+            Arc::new(
+                stats::collect(
+                    &self.paths,
+                    stats::CollectOptions {
+                        include_quota: false,
+                        filters: stats::Filters {
+                            platforms,
+                            since: Some(date),
+                            until: Some(date),
+                        },
+                    },
+                )
+                .await
+                .map_err(|e| format!("collect failed: {e}"))?,
+            )
+        } else {
+            self.collect(false).await.map_err(|e| e.to_string())?
+        };
         let mut sessions: Vec<SessionEntry> = Vec::new();
         for (key, pr) in &report.platforms {
             if let Some(a) = &req.analyzer {
@@ -531,6 +556,50 @@ mod tests {
         let result = server.get_session_stats(Parameters(req)).await.unwrap();
         assert_eq!(result.0.sessions.len(), 0);
         assert_eq!(result.0.total_sessions, 0);
+    }
+
+    #[tokio::test]
+    async fn get_session_stats_filters_by_date() {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("session.jsonl");
+        let line = |date: &str, id: &str| {
+            serde_json::json!({
+                "type": "assistant",
+                "timestamp": format!("{date}T12:00:00Z"),
+                "sessionId": "session-1",
+                "cwd": "/tmp/project",
+                "message": {
+                    "id": id,
+                    "model": "claude-sonnet-4",
+                    "usage": { "input_tokens": 10, "output_tokens": 5 }
+                },
+                "cost_usd": 0.01
+            })
+            .to_string()
+        };
+        std::fs::write(
+            &log,
+            format!(
+                "{}\n{}\n",
+                line("2026-08-01", "message-1"),
+                line("2026-08-02", "message-2")
+            ),
+        )
+        .unwrap();
+
+        let paths = synthetic_paths(root.path());
+        let server = AumMcpServer::new(paths);
+        let result = server
+            .get_session_stats(Parameters(GetSessionStatsRequest {
+                analyzer: Some("claude_code".into()),
+                date: Some("2026-08-02".into()),
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(result.0.total_sessions, 1);
+        assert_eq!(result.0.sessions[0].calls, 1);
+        assert_eq!(result.0.sessions[0].cost_usd, 0.01);
     }
 
     #[tokio::test]
