@@ -21,7 +21,7 @@ use crate::quota::util::{decode_jwt_payload, format_duration_short};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
@@ -38,20 +38,19 @@ fn is_trusted_oidc_issuer(value: &str) -> bool {
 /// process start we re-read whatever the CLI last persisted.
 static REFRESHED: Mutex<Option<TokenPair>> = Mutex::new(None);
 
-/// Resolved Grok data directory (`auth.json`, `version.json`). Set via
-/// `set_data_dir` after `platforms::resolve_paths` so quota fetch matches
-/// `grok_path` / `--grok-path`.
-static DATA_DIR: OnceLock<Mutex<PathBuf>> = OnceLock::new();
-
 fn default_data_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".grok")
 }
 
+/// Resolved Grok data directory (`auth.json`, `version.json`). Set via
+/// `set_data_dir` after `platforms::resolve_paths` so quota fetch matches
+/// `grok_path` / `--grok-path`.
+static DATA_DIR: LazyLock<Mutex<PathBuf>> = LazyLock::new(|| Mutex::new(default_data_dir()));
+
 fn data_dir() -> PathBuf {
     DATA_DIR
-        .get_or_init(|| Mutex::new(default_data_dir()))
         .lock()
         .map(|p| p.clone())
         .unwrap_or_else(|_| default_data_dir())
@@ -59,8 +58,7 @@ fn data_dir() -> PathBuf {
 
 /// Override the Grok data directory used for auth and client-version lookup.
 pub fn set_data_dir(path: PathBuf) {
-    let lock = DATA_DIR.get_or_init(|| Mutex::new(default_data_dir()));
-    if let Ok(mut guard) = lock.lock() {
+    if let Ok(mut guard) = DATA_DIR.lock() {
         *guard = path;
     }
 }

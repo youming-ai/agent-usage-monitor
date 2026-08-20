@@ -7,7 +7,11 @@ struct PricingEntry {
     cache_creation: f64,
 }
 
-const ANTHROPIC_PRICING: &[PricingEntry] = &[
+// Single unified table — previously 5 vendor tables with heavy duplication
+// (e.g. claude-sonnet-4 appeared in 3 tables with identical pricing).
+// Longest-pattern-wins matching makes vendor grouping unnecessary.
+const PRICING: &[PricingEntry] = &[
+    // Anthropic
     PricingEntry {
         pattern: "claude-opus-4",
         input: 15.0,
@@ -50,11 +54,7 @@ const ANTHROPIC_PRICING: &[PricingEntry] = &[
         cache_read: 0.03,
         cache_creation: 0.25,
     },
-    // Old-style ids (version-before-family, e.g. "claude-3-5-sonnet-20241022")
-    // match none of the patterns above (which use family-then-version, e.g.
-    // "claude-sonnet-3"). Some agents (notably Cursor) still pass these
-    // through verbatim, which otherwise silently prices at $0. Alias them to
-    // the equivalent family/version pricing above.
+    // Old-style ids (version-before-family, e.g. "claude-3-5-sonnet-20241022") — aliases
     PricingEntry {
         pattern: "claude-3-5-sonnet",
         input: 3.0,
@@ -83,9 +83,7 @@ const ANTHROPIC_PRICING: &[PricingEntry] = &[
         cache_read: 1.50,
         cache_creation: 15.00,
     },
-];
-
-const KIMI_PRICING: &[PricingEntry] = &[
+    // Kimi / Xiaomi
     PricingEntry {
         pattern: "mimo-v2.5-pro",
         input: 0.60,
@@ -114,15 +112,34 @@ const KIMI_PRICING: &[PricingEntry] = &[
         cache_read: 0.06,
         cache_creation: 0.60,
     },
-];
-
-const GITHUB_PRICING: &[PricingEntry] = &[
+    // OpenAI / Codex / GitHub / Google (deduped)
     PricingEntry {
-        pattern: "gpt-4.1",
-        input: 2.00,
-        output: 8.00,
-        cache_read: 0.20,
-        cache_creation: 2.00,
+        pattern: "gpt-5.5",
+        input: 1.25,
+        output: 5.00,
+        cache_read: 0.125,
+        cache_creation: 1.25,
+    },
+    PricingEntry {
+        pattern: "gpt-5.4-mini",
+        input: 0.15,
+        output: 0.60,
+        cache_read: 0.015,
+        cache_creation: 0.15,
+    },
+    PricingEntry {
+        pattern: "gpt-5.4",
+        input: 0.15,
+        output: 0.60,
+        cache_read: 0.015,
+        cache_creation: 0.15,
+    },
+    PricingEntry {
+        pattern: "gpt-5.3-codex",
+        input: 2.50,
+        output: 10.0,
+        cache_read: 0.25,
+        cache_creation: 2.50,
     },
     PricingEntry {
         pattern: "gpt-4.1-mini",
@@ -132,29 +149,12 @@ const GITHUB_PRICING: &[PricingEntry] = &[
         cache_creation: 0.40,
     },
     PricingEntry {
-        pattern: "claude-sonnet-4",
-        input: 3.0,
-        output: 15.0,
-        cache_read: 0.30,
-        cache_creation: 3.0,
+        pattern: "gpt-4.1",
+        input: 2.00,
+        output: 8.00,
+        cache_read: 0.20,
+        cache_creation: 2.00,
     },
-    PricingEntry {
-        pattern: "claude-opus-4",
-        input: 15.0,
-        output: 75.0,
-        cache_read: 1.50,
-        cache_creation: 15.0,
-    },
-    PricingEntry {
-        pattern: "gemini-3",
-        input: 1.25,
-        output: 5.00,
-        cache_read: 0.125,
-        cache_creation: 1.25,
-    },
-];
-
-const GOOGLE_PRICING: &[PricingEntry] = &[
     PricingEntry {
         pattern: "gemini-3.5-flash",
         input: 0.15,
@@ -175,79 +175,6 @@ const GOOGLE_PRICING: &[PricingEntry] = &[
         output: 5.00,
         cache_read: 0.125,
         cache_creation: 1.25,
-    },
-    PricingEntry {
-        pattern: "claude-sonnet-4",
-        input: 3.0,
-        output: 15.0,
-        cache_read: 0.30,
-        cache_creation: 3.0,
-    },
-    PricingEntry {
-        pattern: "claude-opus-4",
-        input: 15.0,
-        output: 75.0,
-        cache_read: 1.50,
-        cache_creation: 15.0,
-    },
-    PricingEntry {
-        pattern: "gpt-4.1",
-        input: 2.00,
-        output: 8.00,
-        cache_read: 0.20,
-        cache_creation: 2.00,
-    },
-];
-
-const OPENAI_PRICING: &[PricingEntry] = &[
-    PricingEntry {
-        pattern: "gpt-5.5",
-        input: 1.25,
-        output: 5.00,
-        cache_read: 0.125,
-        cache_creation: 1.25,
-    },
-    PricingEntry {
-        pattern: "gpt-5.4",
-        input: 0.15,
-        output: 0.60,
-        cache_read: 0.015,
-        cache_creation: 0.15,
-    },
-    PricingEntry {
-        pattern: "gpt-5.3-codex",
-        input: 2.50,
-        output: 10.0,
-        cache_read: 0.25,
-        cache_creation: 2.50,
-    },
-    PricingEntry {
-        pattern: "gpt-5.4-mini",
-        input: 0.15,
-        output: 0.60,
-        cache_read: 0.015,
-        cache_creation: 0.15,
-    },
-    PricingEntry {
-        pattern: "gpt-4.1",
-        input: 2.00,
-        output: 8.00,
-        cache_read: 0.20,
-        cache_creation: 2.00,
-    },
-    PricingEntry {
-        pattern: "gpt-4.1-mini",
-        input: 0.40,
-        output: 1.60,
-        cache_read: 0.04,
-        cache_creation: 0.40,
-    },
-    PricingEntry {
-        pattern: "kimi-k2",
-        input: 0.60,
-        output: 3.00,
-        cache_read: 0.06,
-        cache_creation: 0.60,
     },
 ];
 
@@ -280,11 +207,7 @@ pub fn calculate_cost(
     cache_read_tokens: u64,
     cache_creation_tokens: u64,
 ) -> f64 {
-    let entry = find_price(model, ANTHROPIC_PRICING)
-        .or_else(|| find_price(model, KIMI_PRICING))
-        .or_else(|| find_price(model, OPENAI_PRICING))
-        .or_else(|| find_price(model, GITHUB_PRICING))
-        .or_else(|| find_price(model, GOOGLE_PRICING));
+    let entry = find_price(model, PRICING);
 
     let Some(e) = entry else {
         return 0.0;

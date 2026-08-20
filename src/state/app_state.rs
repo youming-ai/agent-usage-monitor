@@ -94,6 +94,33 @@ impl CompactDate {
                 .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
         date.weekday().num_days_from_monday() as u8
     }
+
+    pub fn checked_add_days(self, days: i64) -> Option<Self> {
+        use chrono::NaiveDate;
+        let date =
+            NaiveDate::from_ymd_opt(self.year() as i32, self.month() as u32, self.day() as u32)?;
+        let next = date.checked_add_signed(chrono::Duration::days(days))?;
+        use chrono::Datelike;
+        Some(Self::new(
+            next.year() as u16,
+            next.month() as u8,
+            next.day() as u8,
+        ))
+    }
+
+    pub fn days_between(self, other: Self) -> u64 {
+        use chrono::NaiveDate;
+        let a = NaiveDate::from_ymd_opt(self.year() as i32, self.month() as u32, self.day() as u32);
+        let b = NaiveDate::from_ymd_opt(
+            other.year() as i32,
+            other.month() as u32,
+            other.day() as u32,
+        );
+        match (a, b) {
+            (Some(a), Some(b)) => (b - a).num_days().unsigned_abs(),
+            _ => 0,
+        }
+    }
 }
 impl std::fmt::Display for CompactDate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
