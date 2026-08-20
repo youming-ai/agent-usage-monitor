@@ -230,7 +230,7 @@ fn day_stats(
     let today = CompactDate::from_datetime(Utc::now());
     let first = *daily.keys().next().unwrap();
     let last = *daily.keys().next_back().unwrap();
-    let span = days_between(first, last).saturating_add(1);
+    let span = first.distance_days(last).saturating_add(1);
 
     let active: Vec<CompactDate> = daily
         .iter()
@@ -255,7 +255,7 @@ fn day_stats(
     let mut prev: Option<CompactDate> = None;
     for day in &active {
         if let Some(p) = prev {
-            if days_between(p, *day) == 1 {
+            if p.distance_days(*day) == 1 {
                 run += 1;
             } else {
                 run = 1;
@@ -294,16 +294,6 @@ fn is_active(daily: &BTreeMap<CompactDate, DayTotals>, day: CompactDate) -> bool
     daily
         .get(&day)
         .is_some_and(|d| d.calls > 0 || d.tokens > 0 || d.cost_usd > 0.0)
-}
-
-fn days_between(a: CompactDate, b: CompactDate) -> u64 {
-    use chrono::NaiveDate;
-    let da = NaiveDate::from_ymd_opt(a.year() as i32, a.month() as u32, a.day() as u32);
-    let db = NaiveDate::from_ymd_opt(b.year() as i32, b.month() as u32, b.day() as u32);
-    match (da, db) {
-        (Some(a), Some(b)) => (b - a).num_days().unsigned_abs(),
-        _ => 0,
-    }
 }
 
 #[cfg(test)]

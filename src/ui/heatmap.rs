@@ -3,7 +3,7 @@
 //! one-column spacer, and the grid stretches to fill the terminal width.
 
 use crate::state::{CompactDate, DayTotals};
-use chrono::{Datelike, Utc};
+use chrono::Utc;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -84,7 +84,7 @@ impl Widget for Heatmap<'_> {
         let today = CompactDate::from_datetime(Utc::now());
         // Last column is the week containing today; walk back whole weeks.
         let back = today.weekday_mon0() as i64 + ((weeks - 1) * 7) as i64;
-        let start = add_days(today, -back).unwrap_or(today);
+        let start = today.checked_add_days(-back).unwrap_or(today);
 
         // Column-major: each column is one week, rows are Mon…Sun. The rest of
         // the current week is drawn as empty days so the grid stays a
@@ -93,7 +93,7 @@ impl Widget for Heatmap<'_> {
         let mut d = start;
         for slot in metrics.iter_mut() {
             *slot = self.daily.get(&d).map(day_metric).unwrap_or(0);
-            d = add_days(d, 1).unwrap_or(d);
+            d = d.checked_add_days(1).unwrap_or(d);
         }
         let max = metrics.iter().copied().max().unwrap_or(0);
 
@@ -101,7 +101,7 @@ impl Widget for Heatmap<'_> {
             let mut prev_month = None;
             let mut next_x = area.x;
             for col in 0..weeks {
-                let monday = add_days(start, (col * 7) as i64).unwrap_or(start);
+                let monday = start.checked_add_days((col * 7) as i64).unwrap_or(start);
                 if prev_month == Some(monday.month()) {
                     continue;
                 }
@@ -167,7 +167,10 @@ impl Widget for StripHeatmap<'_> {
         let start_day = days_in_month.saturating_sub(visible_days);
         let days: Vec<u64> = (start_day..days_in_month)
             .map(|offset| {
-                let d = add_days(month.first_day, offset as i64).unwrap_or(month.first_day);
+                let d = month
+                    .first_day
+                    .checked_add_days(offset as i64)
+                    .unwrap_or(month.first_day);
                 self.daily.get(&d).map(day_metric).unwrap_or(0)
             })
             .collect();
@@ -257,9 +260,6 @@ struct MonthGrid {
     weeks: usize,
 }
 
-// ponytail: month_grid / MonthGrid / days_between / weekday_mon0 are now
-// carried only by contribution_strip (the short-terminal fallback). If the
-// strip is ever simplified, all four can go with it.
 fn month_grid(today: CompactDate) -> MonthGrid {
     let first_day = CompactDate::new(today.year(), today.month(), 1);
     let next_month = if today.month() == 12 {
@@ -272,35 +272,14 @@ fn month_grid(today: CompactDate) -> MonthGrid {
         .checked_sub_days(first_day.weekday_mon0() as i64)
         .unwrap_or(first_day);
     let trailing_days = 6 - last_day.weekday_mon0() as i64;
-    let grid_end = add_days(last_day, trailing_days).unwrap_or(last_day);
-    let weeks = days_between(grid_start, grid_end) as usize / 7 + 1;
+    let grid_end = last_day.checked_add_days(trailing_days).unwrap_or(last_day);
+    let weeks = grid_start.distance_days(grid_end) as usize / 7 + 1;
 
     MonthGrid {
         first_day,
         last_day,
         grid_start,
         weeks,
-    }
-}
-
-fn add_days(d: CompactDate, days: i64) -> Option<CompactDate> {
-    use chrono::NaiveDate;
-    let date = NaiveDate::from_ymd_opt(d.year() as i32, d.month() as u32, d.day() as u32)?;
-    let next = date.checked_add_signed(chrono::Duration::days(days))?;
-    Some(CompactDate::new(
-        next.year() as u16,
-        next.month() as u8,
-        next.day() as u8,
-    ))
-}
-
-fn days_between(a: CompactDate, b: CompactDate) -> u64 {
-    use chrono::NaiveDate;
-    let da = NaiveDate::from_ymd_opt(a.year() as i32, a.month() as u32, a.day() as u32);
-    let db = NaiveDate::from_ymd_opt(b.year() as i32, b.month() as u32, b.day() as u32);
-    match (da, db) {
-        (Some(a), Some(b)) => (b - a).num_days().unsigned_abs(),
-        _ => 0,
     }
 }
 
@@ -407,7 +386,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 8);
         let mut buffer = Buffer::empty(area);
         let today = CompactDate::from_datetime(Utc::now());
-        let previous_week = add_days(today, -7).unwrap();
+        let previous_week = today.checked_add_days(-7).unwrap();
         let mut daily = BTreeMap::new();
         for day in [previous_week, today] {
             daily.insert(
@@ -463,7 +442,7 @@ mod tests {
             } else {
                 outside += 1;
             }
-            day = add_days(day, 1).unwrap();
+            day = day.checked_add_days(1).unwrap();
         }
         assert_eq!(current, 31);
         assert_eq!(outside, 11);

@@ -6,8 +6,6 @@
 //! non-UTF-8 paths. The new path uses `ureq` + `tar` + `flate2`, all pure
 //! Rust.
 
-mod platform;
-
 use flate2::read::GzDecoder;
 use minisign_verify::{PublicKey, Signature};
 use serde::Deserialize;
@@ -97,7 +95,7 @@ pub fn check_and_update(force: bool, dry_run: bool) -> Result<UpdateResult, Stri
     }
 
     // Find the correct asset for current platform
-    let asset_name = platform::asset_name()?;
+    let asset_name = asset_name()?;
     let asset = find_asset(&release.assets, &asset_name)
         .ok_or_else(|| format!("No release asset found for {asset_name}"))?;
     validate_asset_url(&asset.browser_download_url)?;
@@ -374,6 +372,22 @@ impl<R: io::Read> io::Read for CappedReader<R> {
         self.remaining -= n as u64;
         Ok(n)
     }
+}
+
+fn asset_name() -> Result<String, String> {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let os_name = match os {
+        "macos" => "darwin",
+        "linux" => "linux",
+        _ => return Err(format!("Unsupported OS: {}", os)),
+    };
+    let arch_name = match arch {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        _ => return Err(format!("Unsupported architecture: {}", arch)),
+    };
+    Ok(format!("aum-{}-{}.tar.gz", os_name, arch_name))
 }
 
 #[cfg(unix)]

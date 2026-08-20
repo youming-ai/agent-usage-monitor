@@ -44,10 +44,21 @@ impl CompactDate {
         Self(((year as u32) << 16) | ((month as u32) << 8) | day as u32)
     }
 
-    pub fn from_datetime(dt: chrono::DateTime<chrono::Utc>) -> Self {
+    /// Pack a `chrono` date into its compact form. Dates originating from
+    /// `CompactDate` fields round-trip exactly; wider years would truncate.
+    fn from_naive(date: chrono::NaiveDate) -> Self {
         use chrono::Datelike;
-        let naive = dt.date_naive();
-        Self::new(naive.year() as u16, naive.month() as u8, naive.day() as u8)
+        Self::new(date.year() as u16, date.month() as u8, date.day() as u8)
+    }
+
+    /// Unpack into a `chrono` date, or `None` when the packed fields do not
+    /// form a valid calendar date.
+    fn to_naive(self) -> Option<chrono::NaiveDate> {
+        chrono::NaiveDate::from_ymd_opt(self.year() as i32, self.month() as u32, self.day() as u32)
+    }
+
+    pub fn from_datetime(dt: chrono::DateTime<chrono::Utc>) -> Self {
+        Self::from_naive(dt.date_naive())
     }
 
     pub fn year(self) -> u16 {
@@ -65,34 +76,47 @@ impl CompactDate {
     /// Calendar date `days` before this one, or `None` if the date is invalid
     /// / would underflow the proleptic Gregorian range we care about.
     pub fn checked_sub_days(self, days: i64) -> Option<Self> {
-        use chrono::NaiveDate;
-        let date =
-            NaiveDate::from_ymd_opt(self.year() as i32, self.month() as u32, self.day() as u32)?;
-        let earlier = date.checked_sub_signed(chrono::Duration::days(days))?;
-        use chrono::Datelike;
-        Some(Self::new(
-            earlier.year() as u16,
-            earlier.month() as u8,
-            earlier.day() as u8,
+        Some(Self::from_naive(
+            self.to_naive()?
+                .checked_sub_signed(chrono::Duration::days(days))?,
+        ))
+    }
+
+    /// Calendar date `days` after this one, or `None` under the same rules.
+    pub fn checked_add_days(self, days: i64) -> Option<Self> {
+        Some(Self::from_naive(
+            self.to_naive()?
+                .checked_add_signed(chrono::Duration::days(days))?,
         ))
     }
 
     /// Weekday where Sunday = 0 … Saturday = 6 (GitHub contribution graph).
+    /// An invalid packed date falls back to the 1970-01-01 weekday.
     pub fn weekday_sun0(self) -> u8 {
         use chrono::{Datelike, NaiveDate};
-        let date =
-            NaiveDate::from_ymd_opt(self.year() as i32, self.month() as u32, self.day() as u32)
-                .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
+        let date = self
+            .to_naive()
+            .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
         date.weekday().num_days_from_sunday() as u8
     }
 
     /// Weekday where Monday = 0 … Sunday = 6 (Claude Code Stats graph).
+    /// An invalid packed date falls back to the 1970-01-01 weekday.
     pub fn weekday_mon0(self) -> u8 {
         use chrono::{Datelike, NaiveDate};
-        let date =
-            NaiveDate::from_ymd_opt(self.year() as i32, self.month() as u32, self.day() as u32)
-                .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
+        let date = self
+            .to_naive()
+            .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
         date.weekday().num_days_from_monday() as u8
+    }
+
+    /// Absolute distance in calendar days between the two dates
+    /// (order-independent), or 0 if either packed date is invalid.
+    pub fn distance_days(self, other: Self) -> u64 {
+        match (self.to_naive(), other.to_naive()) {
+            (Some(a), Some(b)) => (b - a).num_days().unsigned_abs(),
+            _ => 0,
+        }
     }
 }
 impl std::fmt::Display for CompactDate {
