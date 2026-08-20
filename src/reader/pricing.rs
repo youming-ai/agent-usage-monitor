@@ -9,7 +9,12 @@ struct PricingEntry {
 
 // Single unified table — previously 5 vendor tables with heavy duplication
 // (e.g. claude-sonnet-4 appeared in 3 tables with identical pricing).
-// Longest-pattern-wins matching makes vendor grouping unnecessary.
+// Semantic delta vs. the old code, which fell back across tables in vendor
+// order (Anthropic → Kimi → OpenAI → GitHub → Google): the unified lookup
+// picks the globally longest word-boundary-matched pattern instead. Every
+// cross-vendor duplicate priced identically, so this only diverges for a
+// model id embedding two different vendors' patterns with different prices
+// (e.g. "claude-opus-4/gemini-3.5-flash"), which no real log line contains.
 const PRICING: &[PricingEntry] = &[
     // Anthropic
     PricingEntry {

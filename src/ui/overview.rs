@@ -230,7 +230,7 @@ fn day_stats(
     let today = CompactDate::from_datetime(Utc::now());
     let first = *daily.keys().next().unwrap();
     let last = *daily.keys().next_back().unwrap();
-    let span = first.days_between(last).saturating_add(1);
+    let span = first.distance_days(last).saturating_add(1);
 
     let active: Vec<CompactDate> = daily
         .iter()
@@ -255,7 +255,7 @@ fn day_stats(
     let mut prev: Option<CompactDate> = None;
     for day in &active {
         if let Some(p) = prev {
-            if p.days_between(*day) == 1 {
+            if p.distance_days(*day) == 1 {
                 run += 1;
             } else {
                 run = 1;

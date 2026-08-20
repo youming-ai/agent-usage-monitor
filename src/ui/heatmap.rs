@@ -273,7 +273,7 @@ fn month_grid(today: CompactDate) -> MonthGrid {
         .unwrap_or(first_day);
     let trailing_days = 6 - last_day.weekday_mon0() as i64;
     let grid_end = last_day.checked_add_days(trailing_days).unwrap_or(last_day);
-    let weeks = grid_start.days_between(grid_end) as usize / 7 + 1;
+    let weeks = grid_start.distance_days(grid_end) as usize / 7 + 1;
 
     MonthGrid {
         first_day,
