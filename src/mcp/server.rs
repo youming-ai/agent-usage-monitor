@@ -243,7 +243,7 @@ impl AumMcpServer {
                 message_count,
             })
             .collect();
-        models.sort_by(|a, b| b.message_count.cmp(&a.message_count));
+        models.sort_by_key(|a| std::cmp::Reverse(a.message_count));
         Ok(Json(ModelUsageResponse {
             models,
             total_messages: total,
