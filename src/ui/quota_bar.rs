@@ -42,8 +42,8 @@ fn status_glyph(remaining: Option<f64>) -> &'static str {
 
 /// Build one compact quota-window segment: `▓▓▓▓░░  ✓ 5h  82% resets 2h30m`.
 /// `bar_width` is computed from the available panel width so the bar stretches
-/// to fill the row (铺满). Bar is leading and left-aligned, the whole
-/// `✓ 5h 96% resets…` block is trailing on the right of the bar as requested.
+/// to fill the row. The bar is leading and left-aligned; the whole
+/// `✓ 5h 96% resets…` block trails on the right.
 fn mini_window_spans(
     accent: Color,
     label: &str,
