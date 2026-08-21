@@ -42,8 +42,6 @@ fn expected_fixture_records(platform: Platform) -> usize {
     match platform {
         Platform::ClaudeCode => 2,
         Platform::Codex => 1,
-        // No fixture: Grok has no local log reader (quota-API only).
-        Platform::Grok => 0,
     }
 }
 

@@ -368,7 +368,7 @@ impl AumMcpServer {
 
     #[tool(
         name = "get_quota",
-        description = "Get live quota (Claude Code, Codex, Grok) and account identity for all platforms."
+        description = "Get live quota (Claude Code, Codex) and account identity for all platforms."
     )]
     async fn get_quota(&self) -> Result<Json<QuotaResponse>, String> {
         let report = self.collect(true).await.map_err(|e| e.to_string())?;
@@ -439,7 +439,7 @@ impl ServerHandler for AumMcpServer {
         .with_instructions(
             "aum is a usage monitor for AI coding agents. Use get_daily_stats, \
              get_model_usage, get_cost_breakdown, get_file_operations, get_session_stats \
-             for usage queries. get_quota returns live quota for Claude Code, Codex, and Grok.",
+             for usage queries. get_quota returns live quota for Claude Code and Codex.",
         )
     }
 

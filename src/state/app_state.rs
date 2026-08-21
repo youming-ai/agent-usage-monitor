@@ -164,19 +164,17 @@ impl AgentPaths {
 pub enum Platform {
     ClaudeCode,
     Codex,
-    Grok,
 }
 
 impl Platform {
     /// Number of platform variants — used to size the fixed array in `AppState`.
-    pub const COUNT: usize = 3;
+    pub const COUNT: usize = 2;
 
     /// Zero-based index for array access.
     pub const fn index(self) -> usize {
         match self {
             Self::ClaudeCode => 0,
             Self::Codex => 1,
-            Self::Grok => 2,
         }
     }
 
@@ -191,7 +189,7 @@ impl Platform {
     }
 
     pub fn all() -> &'static [Self] {
-        &[Self::ClaudeCode, Self::Codex, Self::Grok]
+        &[Self::ClaudeCode, Self::Codex]
     }
 
     pub fn default_path(self) -> std::path::PathBuf {

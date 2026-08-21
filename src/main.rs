@@ -67,7 +67,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // CLI `Option` paths override config; see `platforms::resolve_paths`.
     let agent_paths = platforms::resolve_paths(&args, &config);
-    agent_usage_monitor::quota::grok::set_data_dir(agent_paths.path_for(Platform::Grok));
     let fallback_seconds = args.refresh.unwrap_or(config.refresh);
     if fallback_seconds == 0 {
         warn!("refresh must be at least 1 second; using 1 second");
@@ -394,7 +393,6 @@ async fn handle_stats(
     // consumed CLI args, so the global parse is cheap and safe.
     let cli = cli::Cli::parse();
     let paths = platforms::resolve_paths(&cli, config);
-    agent_usage_monitor::quota::grok::set_data_dir(paths.path_for(Platform::Grok));
 
     let opts = stats::CollectOptions {
         include_quota: args.include_quota,
@@ -414,7 +412,6 @@ async fn handle_stats(
 async fn handle_mcp(config: &Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = cli::Cli::parse();
     let paths = platforms::resolve_paths(&cli, config);
-    agent_usage_monitor::quota::grok::set_data_dir(paths.path_for(Platform::Grok));
     mcp::server::run_mcp_server(paths).await?;
     Ok(())
 }

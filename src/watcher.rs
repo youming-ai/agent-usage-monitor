@@ -209,7 +209,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = synthetic_paths(tmp.path());
         let (watchers, _rx) = start_watchers(&paths);
-        // Quota-only platforms (Grok) have no reader and are not watched.
+        // Platforms without a local reader are not watched.
         let reader_platforms = crate::platforms::entries()
             .iter()
             .filter(|e| e.has_reader())

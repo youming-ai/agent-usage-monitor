@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "aum")]
 #[command(version)]
-#[command(about = "Real-time usage monitor for Claude Code, Codex, and Grok quota")]
+#[command(about = "Real-time usage monitor for Claude Code and Codex")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -16,10 +16,6 @@ pub struct Cli {
     /// Path to Codex data directory
     #[arg(long)]
     pub codex_path: Option<PathBuf>,
-
-    /// Path to Grok data directory (quota reads its auth.json)
-    #[arg(long)]
-    pub grok_path: Option<PathBuf>,
 
     /// Fallback polling interval in seconds (minimum: 1)
     #[arg(short, long, value_parser = clap::value_parser!(u64).range(1..))]
@@ -40,7 +36,7 @@ pub struct StatsArgs {
     #[arg(long)]
     pub until: Option<String>,
 
-    /// 拉取 quota (Claude/Codex/Grok 需本地凭据; Grok 用 ~/.grok/auth.json 查 cli-chat-proxy.grok.com)
+    /// 拉取 quota (Claude/Codex 需本地凭据)
     #[arg(long)]
     pub include_quota: bool,
 
