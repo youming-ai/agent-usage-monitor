@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.10.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.10.0...v1.10.1) (2026-08-21)
+
+
+### Refactors
+
+* dedup CompactDate date math, document pricing merge ([c720281](https://github.com/youming-ai/agent-usage-monitor/commit/c72028155115456d13456df6d8f8297148e5a284))
+* drop the Grok module and polish the stacked TUI layout ([57a7034](https://github.com/youming-ai/agent-usage-monitor/commit/57a70345a6191707f76cc2d340e97a77a2bc0371))
+* drop the Grok module and polish the stacked TUI layout ([bb90c88](https://github.com/youming-ai/agent-usage-monitor/commit/bb90c888392fadfd0aef481b6008b8f162245be7))
+* ponytail audit cleanup — unify pricing, dedup date helpers, simplify grok/updater ([b2f4197](https://github.com/youming-ai/agent-usage-monitor/commit/b2f41979dbb9ff80d6034e09b6ad5e9a9b1bc718))
+* ponytail audit cleanup — unify pricing, dedup date helpers, simplify grok/updater ([6a95071](https://github.com/youming-ai/agent-usage-monitor/commit/6a950714b575adca0d987cce5e3ab835fd7d9373))
+
 ## [1.10.0](https://github.com/youming-ai/agent-usage-monitor/compare/v1.9.1...v1.10.0) (2026-08-19)
 
 
