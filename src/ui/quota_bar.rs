@@ -5,8 +5,25 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-
 const BAR_WIDTH: usize = 6;
+const BAR_MAX_WIDTH: usize = 80;
+const BAR_MIN_WIDTH: usize = 10;
+
+/// Compute a bar width that stretches to fill `available_width` while
+/// leaving room for the fixed glyph/label/pct/reset text.
+fn bar_width_for(available_width: u16, reset_in: Option<&str>) -> usize {
+    if available_width == 0 {
+        return BAR_WIDTH;
+    }
+    // fixed overhead per window row:
+    //   prefix " live "/"      " (6) + glyph " x " (3) + label "xxx " (4)
+    //   + pct "  82%" (5) + optional " resets 2h30m" (8+len) + bar + 2 breathing cols.
+    let reset_len = reset_in.map(|s| 8 + s.len()).unwrap_or(0);
+    let fixed = 6 + 3 + 4 + 5 + reset_len + 2;
+    let avail = available_width as usize;
+    let w = avail.saturating_sub(fixed);
+    w.clamp(BAR_MIN_WIDTH, BAR_MAX_WIDTH).min(avail)
+}
 
 /// Number of filled cells for a remaining fraction across `width` cells.
 fn filled_cells(remaining: f64, width: usize) -> usize {
@@ -23,26 +40,29 @@ fn status_glyph(remaining: Option<f64>) -> &'static str {
     }
 }
 
-/// Build one compact quota-window segment: `✓ 5h ▓▓▓▓░░  82% resets 2h30m`.
+/// Build one compact quota-window segment: `▓▓▓▓░░  ✓ 5h  82% resets 2h30m`.
+/// `bar_width` is computed from the available panel width so the bar stretches
+/// to fill the row. The bar is leading and left-aligned; the whole
+/// `✓ 5h 96% resets…` block trails on the right.
 fn mini_window_spans(
     accent: Color,
     label: &str,
     remaining: Option<f64>,
     reset_in: Option<&str>,
+    bar_width: usize,
 ) -> Vec<Span<'static>> {
-    let filled = remaining.map(|r| filled_cells(r, BAR_WIDTH)).unwrap_or(0);
-    let empty = BAR_WIDTH - filled;
+    let bw = bar_width.max(1);
+    let filled = remaining.map(|r| filled_cells(r, bw)).unwrap_or(0);
+    let empty = bw - filled;
 
     let pct = remaining
         .map(|r| format!("{}%", (r * 100.0).round() as u64))
         .unwrap_or_else(|| "--".to_string());
 
     let mut spans = vec![
-        Span::raw(format!(" {} ", status_glyph(remaining))),
-        Span::raw(format!("{label:<3} ")),
         Span::styled("▓".repeat(filled), Style::default().fg(accent)),
         Span::styled("░".repeat(empty), Style::default().fg(Color::DarkGray)),
-        Span::raw(format!(" {pct:>4}")),
+        Span::raw(format!("  {} {label:<3} {pct:>4}", status_glyph(remaining))),
     ];
     if let Some(reset) = reset_in {
         spans.push(Span::styled(
@@ -65,7 +85,13 @@ pub fn quota_panel_height(quota: Option<&QuotaInfo>) -> u16 {
 }
 
 /// Live (network) quota: windows row + optional plan/summary row.
-pub fn quota_panel(platform: Platform, quota: Option<&QuotaInfo>) -> Paragraph<'static> {
+/// `width` is the panel's available width and controls how long the bar
+/// stretches — wider terminals get a longer bar that fills the row.
+pub fn quota_panel(
+    platform: Platform,
+    quota: Option<&QuotaInfo>,
+    width: u16,
+) -> Paragraph<'static> {
     let accent = platform.primary_color();
     let dim = Style::default().fg(Color::DarkGray);
     let accent_bold = Style::default().fg(accent).add_modifier(Modifier::BOLD);
@@ -91,20 +117,18 @@ pub fn quota_panel(platform: Platform, quota: Option<&QuotaInfo>) -> Paragraph<'
         }
         Some(q) => {
             let mut lines = Vec::new();
-            // One window per row prevents later model-scoped limits from
-            // being silently clipped at ordinary terminal widths.
             for (i, w) in q.windows.iter().enumerate() {
                 let mut spans = vec![Span::styled(if i == 0 { " live " } else { "      " }, dim)];
+                let bw = bar_width_for(width, w.reset_in.as_deref());
                 spans.extend(mini_window_spans(
                     accent,
                     &w.label,
                     w.remaining_percent,
                     w.reset_in.as_deref(),
+                    bw,
                 ));
                 lines.push(Line::from(spans));
             }
-
-            // Final row: plan / org / credits when present.
             if q.plan.is_some() || q.org.is_some() || q.live_summary.is_some() {
                 let mut meta = vec![Span::styled("      ", dim)];
                 let mut first = true;
@@ -138,7 +162,6 @@ pub fn quota_panel(platform: Platform, quota: Option<&QuotaInfo>) -> Paragraph<'
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn filled_cells_rounds_to_nearest() {
         assert_eq!(filled_cells(0.5, 6), 3);
@@ -162,7 +185,7 @@ mod tests {
 
     #[test]
     fn window_shows_percent_and_reset_time() {
-        let spans = mini_window_spans(Color::Reset, "5h", Some(0.67), Some("1h13m"));
+        let spans = mini_window_spans(Color::Reset, "5h", Some(0.67), Some("1h13m"), 12);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("67%"));
         assert!(text.contains("resets 1h13m"));
@@ -170,7 +193,7 @@ mod tests {
 
     #[test]
     fn window_without_a_reset_time_omits_the_suffix() {
-        let text: String = mini_window_spans(Color::Reset, "7d", Some(0.5), None)
+        let text: String = mini_window_spans(Color::Reset, "7d", Some(0.5), None, 12)
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
@@ -206,7 +229,7 @@ mod tests {
         use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
         let area = Rect::new(0, 0, 60, 4);
         let mut buffer = Buffer::empty(area);
-        quota_panel(Platform::ClaudeCode, Some(&q)).render(area, &mut buffer);
+        quota_panel(Platform::ClaudeCode, Some(&q), area.width).render(area, &mut buffer);
         let rendered: String = (0..area.height)
             .flat_map(|y| (0..area.width).map(move |x| (x, y)))
             .filter_map(|pos| buffer.cell(pos).map(|cell| cell.symbol()))

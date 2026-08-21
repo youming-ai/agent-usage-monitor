@@ -1,6 +1,6 @@
 # Agent Usage Monitor
 
-Real-time terminal dashboard for **Claude Code** & **Codex** local usage, plus live quota for **Claude Code**, **Codex**, and **Grok**. No API keys required for local usage records; vendor credentials are used only for live quota. The command is `aum`.
+Real-time terminal dashboard for **Claude Code** & **Codex** local usage, plus live quota for **Claude Code** and **Codex**. No API keys required for local usage records; vendor credentials are used only for live quota. The command is `aum`.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -186,7 +186,7 @@ Fri · · · · · · · · · · · · · · · · · · · · · · · · · �
 - **Live quota** (network) — vendor APIs using your local login: windows (5h/7d
   and model-scoped when present), plan/org, credits/extra-usage. Prefixed
   `live` in the UI. Claude: `api.anthropic.com/api/oauth/usage`; Codex:
-  `chatgpt.com/backend-api/wham/usage`; Grok: `cli-chat-proxy.grok.com`.
+  `chatgpt.com/backend-api/wham/usage`.
   No official day-by-day quota history is available.
 - **Token activity heatmap + local summary** — from on-disk logs. The header
   shows lifetime tokens, peak day, current/best streak, and longest task. The
@@ -197,7 +197,7 @@ Fri · · · · · · · · · · · · · · · · · · · · · · · · · �
   dim dots, including the rest of the current week, while active days are
   separated colored squares; activity intensity is encoded by color.
 
-Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue, Grok gray); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
+Each platform uses an accent color matched to its official CLI theme or brand palette (Claude orange, Codex blue); everything else stays default or dimmed. These are defined in `src/platforms.rs` (`primary_color`).
 
 ## How it works
 
@@ -206,9 +206,7 @@ Each platform uses an accent color matched to its official CLI theme or brand pa
 - **Claude Code** — `~/.claude/projects/**/*.jsonl`
 - **Codex** — `~/.codex/sessions/**/rollout-*.jsonl`
 
-Grok is quota-only: it has no local usage reader and uses the official billing
-endpoint with the session credentials in `~/.grok/auth.json`. Quota percentages
-for Claude Code and Codex also come from official endpoints, authenticated with
+Quota percentages for Claude Code and Codex also come from official endpoints, authenticated with
 their existing local credentials (Claude: macOS Keychain or
 `~/.claude/.credentials.json`; Codex: `~/.codex/auth.json`). Cost is computed
 from built-in pricing tables for Anthropic & OpenAI models; unknown models show

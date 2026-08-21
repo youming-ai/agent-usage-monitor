@@ -162,7 +162,7 @@ impl<S> FileScanner<S> {
             self.state.insert(file, st);
             records.extend(entries);
         }
-        records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        records.sort_by_key(|a| a.timestamp);
         Ok(records)
     }
 }

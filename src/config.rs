@@ -12,10 +12,6 @@ pub struct Config {
     #[serde(default = "default_codex_path")]
     pub codex_path: PathBuf,
 
-    /// Path to Grok data directory
-    #[serde(default = "default_grok_path")]
-    pub grok_path: PathBuf,
-
     /// Fallback polling interval in seconds
     #[serde(default = "default_refresh")]
     pub refresh: u64,
@@ -31,7 +27,6 @@ impl Default for Config {
         Self {
             claude_path: default_claude_path(),
             codex_path: default_codex_path(),
-            grok_path: default_grok_path(),
             refresh: default_refresh(),
             max_records: default_max_records(),
         }
@@ -50,10 +45,6 @@ fn default_claude_path() -> PathBuf {
 
 fn default_codex_path() -> PathBuf {
     Platform::Codex.default_path()
-}
-
-fn default_grok_path() -> PathBuf {
-    Platform::Grok.default_path()
 }
 
 fn default_refresh() -> u64 {

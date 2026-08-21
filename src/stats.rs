@@ -382,8 +382,6 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
 
     use std::collections::HashMap;
 
-    crate::quota::grok::set_data_dir(paths.path_for(Platform::Grok));
-
     // 第一遍：scan_all 收集记录（顺序，task::spawn_blocking 包 I/O）
     let mut entries: Vec<(String, Platform, PathBuf, Vec<UsageRecord>, ToolOpsView)> = Vec::new();
     for entry in platforms::entries() {
@@ -392,8 +390,8 @@ pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsRe
             continue;
         }
         let path = paths.path_for(entry.platform);
-        // Quota-API-only platforms (Grok) have no local session reader; keep
-        // them in the report as an empty (available) platform row.
+        // Platforms without a local session reader keep their row empty in the
+        // report (currently none are registered, but the branch is defensive).
         let Some(mut reader) = entry.build_reader(path.clone()) else {
             entries.push((
                 key,

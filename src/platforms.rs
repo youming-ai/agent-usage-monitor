@@ -22,7 +22,7 @@ pub struct RegistryEntry {
     cli_path: fn(&Cli) -> Option<PathBuf>,
     set_config_path: fn(&mut Config, PathBuf),
     /// Log reader for this platform's local session files. `None` for
-    /// platforms that expose quota/usage only via an API (e.g. Grok).
+    /// platforms that expose quota/usage only via an API.
     create_reader: Option<fn(PathBuf) -> Box<dyn UsageSource>>,
     pub quota_fetcher: Option<quota::Fetcher>,
     pub account_fetcher: Option<quota::AccountFetcher>,
@@ -59,24 +59,6 @@ static REGISTRY: &[RegistryEntry] = &[
         quota_fetcher: Some(quota::codex::fetch_quota),
         account_fetcher: None,
     },
-    RegistryEntry {
-        platform: Platform::Grok,
-        config_key: "grok_path",
-        log_name: "Grok",
-        label: "GROK",
-        primary_color: Color::Rgb(148, 163, 184),
-        default_path_suffix: ".grok",
-        is_available: Path::exists,
-        config_path: |c| c.grok_path.clone(),
-        cli_path: |cli| cli.grok_path.clone(),
-        set_config_path: |c, p| c.grok_path = p,
-        // No local session-log reader yet: Grok usage comes from the billing
-        // API below. `~/.grok/sessions/**/updates.jsonl` exists but carries no
-        // per-request cost, so a reader would fabricate $0 records.
-        create_reader: None,
-        quota_fetcher: Some(quota::grok::fetch_quota),
-        account_fetcher: None,
-    },
 ];
 
 /// All registered platforms in UI order.
@@ -85,8 +67,8 @@ pub fn entries() -> &'static [RegistryEntry] {
 }
 
 /// Platforms to show in the TUI: platforms with a live reader, plus
-/// quota-only platforms (no local log reader, e.g. Grok) whose data path
-/// exists. `readers::PlatformReaders` only tracks platforms with readers, so
+/// quota-only platforms (no local log reader) whose data path exists.
+/// `readers::PlatformReaders` only tracks platforms with readers, so
 /// quota-only platforms must be added here or their panel never renders.
 pub fn displayable_platforms(
     reader_platforms: impl IntoIterator<Item = Platform>,
@@ -241,8 +223,6 @@ mod tests {
         assert!(apply_config_key(&mut config, "nope", "x").is_err());
         assert!(apply_config_key(&mut config, "refresh", "0").is_err());
         assert!(apply_config_key(&mut config, "cursor_path", "/tmp/x").is_err());
-        assert!(apply_config_key(&mut config, "grok_path", "/tmp/grok").is_ok());
-        assert_eq!(config.grok_path, PathBuf::from("/tmp/grok"));
     }
 
     #[test]
@@ -252,7 +232,6 @@ mod tests {
             command: None,
             claude_path: Some(PathBuf::from("/cli/claude")),
             codex_path: None,
-            grok_path: None,
             refresh: None,
         };
         let paths = resolve_paths(&cli, &config);

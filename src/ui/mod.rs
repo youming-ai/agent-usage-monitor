@@ -15,6 +15,9 @@ use std::sync::{Arc, RwLock};
 
 /// Horizontal inset so the dashboard never touches the terminal edges.
 const CONTENT_PADDING: u16 = 2;
+/// Breathing room (in rows) between the stacked platform panels. 2 rows gives
+/// a clear visual break while still fitting both panels on a ~26-row terminal.
+const PLATFORM_GAP: u16 = 2;
 
 pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
     let state = match app_state.try_read() {
@@ -32,16 +35,15 @@ pub fn render(frame: &mut Frame, app_state: &Arc<RwLock<AppState>>) {
         return;
     }
 
-    // One blank row between platform panels so adjacent headers don't touch.
     let mut constraints: Vec<Constraint> = Vec::with_capacity(available.len() * 2);
     for (i, _) in available.iter().enumerate() {
         if i > 0 {
-            constraints.push(Constraint::Length(1));
+            constraints.push(Constraint::Length(PLATFORM_GAP));
         }
         constraints.push(Constraint::Ratio(1, available.len() as u32));
     }
     let area = frame.area().inner(Margin {
-        vertical: 0,
+        vertical: 1,
         horizontal: CONTENT_PADDING,
     });
     let chunks = Layout::vertical(constraints).split(area);
@@ -71,13 +73,12 @@ fn render_platform(
     } else {
         0
     };
-    let content_remain = h.saturating_sub(header_h + quota_h);
+    // Breathing gaps between major blocks — only when the section is tall
+    // enough that the gap doesn't steal needed content rows.
+    let header_gap: u16 = if h >= 14 { 1 } else { 0 };
+    let quota_gap: u16 = if quota_h > 0 && h >= 14 { 1 } else { 0 };
+    let content_remain = h.saturating_sub(header_h + header_gap + quota_h + quota_gap);
     let full_activity_h = 2 + heatmap::HEATMAP_FULL_HEIGHT;
-
-    // The reference layout gets a two-line activity summary above the year
-    // grid when there is room. Shorter sections keep the old source label and
-    // degrade from the year grid to the compact strip without clipping the
-    // header.
     let (local_label_h, activity_header_h, heatmap_h, overview_h) =
         if content_remain >= full_activity_h {
             (0, 2, heatmap::HEATMAP_FULL_HEIGHT, 0)
@@ -86,7 +87,6 @@ fn render_platform(
         } else if content_remain > heatmap::HEATMAP_MIN_HEIGHT {
             (1, 0, heatmap::HEATMAP_MIN_HEIGHT, 0)
         } else if content_remain >= overview::OVERVIEW_LINES + 2 {
-            // Not enough rows for the year grid: one-line strip + stats.
             (1, 0, 1, overview::OVERVIEW_LINES)
         } else if content_remain >= 2 {
             (1, 0, 1, 0)
@@ -95,13 +95,21 @@ fn render_platform(
         } else {
             (0, 0, 0, 0)
         };
+    let heat_gap: u16 = if heatmap_h > 0 && overview_h > 0 && h >= 18 {
+        1
+    } else {
+        0
+    };
 
     let chunks = Layout::vertical([
         Constraint::Length(header_h),
+        Constraint::Length(header_gap),
         Constraint::Length(quota_h),
+        Constraint::Length(quota_gap),
         Constraint::Length(local_label_h),
         Constraint::Length(activity_header_h),
         Constraint::Length(heatmap_h),
+        Constraint::Length(heat_gap),
         Constraint::Min(overview_h),
     ])
     .split(area);
@@ -145,23 +153,26 @@ fn render_platform(
     );
 
     if quota_h > 0 {
-        frame.render_widget(quota_bar::quota_panel(platform, quota), chunks[1]);
+        frame.render_widget(
+            quota_bar::quota_panel(platform, quota, chunks[2].width),
+            chunks[2],
+        );
     }
 
     if local_label_h > 0 {
         frame.render_widget(
             Paragraph::new(" local activity (from logs)")
                 .style(Style::default().fg(Color::DarkGray)),
-            chunks[2],
+            chunks[4],
         );
     }
 
-    let heat_area = chunks[4];
+    let heat_area = chunks[6];
     if activity_header_h > 0 {
         let stats = overview::OverviewStats::from_platform(p);
         frame.render_widget(
             overview::activity_header(&stats, accent, heatmap::visible_weeks(heat_area.width)),
-            chunks[3],
+            chunks[5],
         );
     }
     if heat_area.height >= heatmap::HEATMAP_MIN_HEIGHT && heat_area.width > heatmap::GUTTER {
@@ -170,9 +181,9 @@ fn render_platform(
         frame.render_widget(heatmap::contribution_strip(&p.daily, accent), heat_area);
     }
 
-    if overview_h > 0 && chunks[5].height >= 3 {
+    if overview_h > 0 && chunks[8].height >= 3 {
         let stats = overview::OverviewStats::from_platform(p);
-        frame.render_widget(overview::overview_paragraph(&stats, accent), chunks[5]);
+        frame.render_widget(overview::overview_paragraph(&stats, accent), chunks[8]);
     }
 }
 
@@ -298,6 +309,9 @@ mod tests {
 
     #[test]
     fn standard_height_keeps_local_activity_label() {
+        // With the stacked layout, standard-height panels are short enough that
+        // the compact branch is chosen and local data carries the explicit
+        // "local activity (from logs)" label.
         let out = dump(80, 24, sample_state());
         assert!(
             out.contains("local activity"),
