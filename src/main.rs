@@ -4,7 +4,7 @@ use agent_usage_monitor::event::{AppEvent, EventLoop};
 use agent_usage_monitor::mcp;
 use agent_usage_monitor::platforms;
 use agent_usage_monitor::readers::{self, PlatformReaders};
-use agent_usage_monitor::state::{AppState, Platform};
+use agent_usage_monitor::state::{AgentPaths, AppState, Platform};
 use agent_usage_monitor::stats;
 use agent_usage_monitor::ui;
 use agent_usage_monitor::updater;
@@ -45,6 +45,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
+    // CLI `Option` paths override config; see `platforms::resolve_paths`.
+    let agent_paths = platforms::resolve_paths(&args, &config);
+
     // Handle subcommands
     match args.command {
         Some(cli::Commands::Update { force, dry_run }) => {
@@ -54,19 +57,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             return handle_config(action);
         }
         Some(cli::Commands::Stats(args)) => {
-            return handle_stats(args, &config).await;
+            return handle_stats(args, &agent_paths).await;
         }
 
         Some(cli::Commands::Mcp) => {
-            return handle_mcp(&config).await;
+            return handle_mcp(agent_paths).await;
         }
         None => {
             // Continue with normal monitor mode
         }
     }
-
-    // CLI `Option` paths override config; see `platforms::resolve_paths`.
-    let agent_paths = platforms::resolve_paths(&args, &config);
     let fallback_seconds = args.refresh.unwrap_or(config.refresh);
     if fallback_seconds == 0 {
         warn!("refresh must be at least 1 second; using 1 second");
@@ -319,10 +319,9 @@ fn handle_update(
             }
             Ok(())
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        // Returned via `main`'s `Result`, whose Termination impl prints the
+        // message and exits 1 — same output as the old eprintln + exit(1).
+        Err(e) => Err(anyhow::anyhow!(e).into()),
     }
 }
 
@@ -341,8 +340,7 @@ fn handle_config(
             let mut config = config::load_config().unwrap_or_default();
 
             if let Err(msg) = platforms::apply_config_key(&mut config, &key, &value) {
-                eprintln!("{msg}");
-                std::process::exit(1);
+                return Err(anyhow::anyhow!(msg).into());
             }
 
             config::save_config(&config).map_err(|e| e.to_string())?;
@@ -368,7 +366,7 @@ fn handle_config(
 
 async fn handle_stats(
     args: cli::StatsArgs,
-    config: &Config,
+    agent_paths: &AgentPaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let since = args
         .since
@@ -389,11 +387,6 @@ async fn handle_stats(
         Some(stats::resolve_platform_filter(&args.platform)?)
     };
 
-    // Re-parse CLI to give resolve_paths a &Cli. Stats subcommand has not yet
-    // consumed CLI args, so the global parse is cheap and safe.
-    let cli = cli::Cli::parse();
-    let paths = platforms::resolve_paths(&cli, config);
-
     let opts = stats::CollectOptions {
         include_quota: args.include_quota,
         filters: stats::Filters {
@@ -402,17 +395,17 @@ async fn handle_stats(
             until,
         },
     };
-    let report = stats::collect(&paths, opts).await?;
+    let report = stats::collect(agent_paths, opts).await?;
     let pretty = args.pretty || (!args.compact && std::io::stdout().is_terminal());
     let stdout = std::io::stdout().lock();
     stats::write_json(&report, pretty, stdout)?;
     Ok(())
 }
 
-async fn handle_mcp(config: &Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let cli = cli::Cli::parse();
-    let paths = platforms::resolve_paths(&cli, config);
-    mcp::server::run_mcp_server(paths).await?;
+async fn handle_mcp(
+    agent_paths: AgentPaths,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    mcp::server::run_mcp_server(agent_paths).await?;
     Ok(())
 }
 
