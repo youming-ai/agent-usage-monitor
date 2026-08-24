@@ -319,8 +319,8 @@ fn handle_update(
             }
             Ok(())
         }
-        // anyhow's Debug prints the message without quotes, so the process
-        // exit report stays identical to the old `eprintln!` + `exit(1)`.
+        // Returned via `main`'s `Result`, whose Termination impl prints the
+        // message and exits 1 — same output as the old eprintln + exit(1).
         Err(e) => Err(anyhow::anyhow!(e).into()),
     }
 }
@@ -340,8 +340,7 @@ fn handle_config(
             let mut config = config::load_config().unwrap_or_default();
 
             if let Err(msg) = platforms::apply_config_key(&mut config, &key, &value) {
-                eprintln!("{msg}");
-                std::process::exit(1);
+                return Err(anyhow::anyhow!(msg).into());
             }
 
             config::save_config(&config).map_err(|e| e.to_string())?;
