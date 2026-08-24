@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.10.2](https://github.com/youming-ai/agent-usage-monitor/compare/v1.10.1...v1.10.2) (2026-08-24)
+
+
+### Bug Fixes
+
+* replace last process::exit(1) in handle_config with returned error ([227240e](https://github.com/youming-ai/agent-usage-monitor/commit/227240ec75cdb85ef43db89b29c744baaeec6bdb))
+* resolve review findings — remove double Cli::parse, exit(1), stale docs ([2e5f9dc](https://github.com/youming-ai/agent-usage-monitor/commit/2e5f9dc80142847c72aca169a08ed1ce21d1e8dd))
+* resolve review findings — remove double Cli::parse, exit(1), stale docs ([c57e085](https://github.com/youming-ai/agent-usage-monitor/commit/c57e0858ba150fa5ef6a592a4a28de478458652e))
+
 ## [1.10.1](https://github.com/youming-ai/agent-usage-monitor/compare/v1.10.0...v1.10.1) (2026-08-21)
 
 
