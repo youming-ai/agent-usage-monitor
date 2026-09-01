@@ -10,15 +10,17 @@ const BAR_MAX_WIDTH: usize = 80;
 const BAR_MIN_WIDTH: usize = 10;
 
 /// Compute a bar width that stretches to fill `available_width` while
-/// leaving room for the fixed glyph/label/pct/reset text.
-fn bar_width_for(available_width: u16, reset_in: Option<&str>) -> usize {
+/// leaving room for the fixed glyph/label/pct/reset text. `reset_len` is the
+/// longest reset string in the panel so every row gets the same bar width and
+/// the right edges stay aligned.
+fn bar_width_for(available_width: u16, reset_len: Option<usize>) -> usize {
     if available_width == 0 {
         return BAR_WIDTH;
     }
     // fixed overhead per window row:
     //   prefix " live "/"      " (6) + glyph " x " (3) + label "xxx " (4)
     //   + pct "  82%" (5) + optional " resets 2h30m" (8+len) + bar + 2 breathing cols.
-    let reset_len = reset_in.map(|s| 8 + s.len()).unwrap_or(0);
+    let reset_len = reset_len.map(|l| 8 + l).unwrap_or(0);
     let fixed = 6 + 3 + 4 + 5 + reset_len + 2;
     let avail = available_width as usize;
     let w = avail.saturating_sub(fixed);
@@ -116,10 +118,19 @@ pub fn quota_panel(
             vec![Line::from(spans)]
         }
         Some(q) => {
+            // One bar width for the whole panel: per-window reset strings have
+            // different lengths, which would make the bars misalign on the right.
+            let bw = bar_width_for(
+                width,
+                q.windows
+                    .iter()
+                    .filter_map(|w| w.reset_in.as_deref())
+                    .map(str::len)
+                    .max(),
+            );
             let mut lines = Vec::new();
             for (i, w) in q.windows.iter().enumerate() {
                 let mut spans = vec![Span::styled(if i == 0 { " live " } else { "      " }, dim)];
-                let bw = bar_width_for(width, w.reset_in.as_deref());
                 spans.extend(mini_window_spans(
                     accent,
                     &w.label,
@@ -199,6 +210,53 @@ mod tests {
             .collect();
         assert!(!text.contains("resets"));
         assert!(text.contains("50%"));
+    }
+
+    #[test]
+    fn bars_align_across_windows_with_different_reset_lengths() {
+        use std::time::Instant;
+        let q = QuotaInfo {
+            tool_name: "Codex".into(),
+            email: None,
+            account_id: None,
+            plan: None,
+            org: None,
+            windows: [
+                ("5h", Some(1.0), Some("4h58m")),
+                ("7d", Some(0.65), Some("6d0h")),
+            ]
+            .into_iter()
+            .map(|(label, remaining, reset)| crate::quota::QuotaWindow {
+                label: label.into(),
+                remaining_percent: remaining,
+                resets_at: None,
+                reset_in: reset.map(str::to_string),
+            })
+            .collect(),
+            live_summary: None,
+            fetched_at: Instant::now(),
+            error: None,
+        };
+        let area = ratatui::layout::Rect::new(0, 0, 60, 2);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        use ratatui::widgets::Widget;
+        quota_panel(Platform::Codex, Some(&q), area.width).render(area, &mut buffer);
+        // Right edge of each bar row (last '░' or '▓') must be the same column.
+        let bar_end = |y: u16| {
+            (0..area.width)
+                .filter(|&x| {
+                    matches!(
+                        buffer
+                            .cell((x, y))
+                            .map(|c| c.symbol().to_string())
+                            .as_deref(),
+                        Some("▓" | "░")
+                    )
+                })
+                .max()
+                .unwrap()
+        };
+        assert_eq!(bar_end(0), bar_end(1));
     }
 
     #[test]
