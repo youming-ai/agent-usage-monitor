@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.10.3](https://github.com/youming-ai/agent-usage-monitor/compare/v1.10.2...v1.10.3) (2026-09-01)
+
+
+### Bug Fixes
+
+* align quota bars across windows with different reset lengths ([32cdb62](https://github.com/youming-ai/agent-usage-monitor/commit/32cdb62cb15b96bdea44862486c86bbe27e6f413))
+* align quota bars across windows with different reset lengths ([0ea15d4](https://github.com/youming-ai/agent-usage-monitor/commit/0ea15d4f097caf3bf8478b3d6dd0c1a16d58642b))
+
 ## [1.10.2](https://github.com/youming-ai/agent-usage-monitor/compare/v1.10.1...v1.10.2) (2026-08-24)
 
 
