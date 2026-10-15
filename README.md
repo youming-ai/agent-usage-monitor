@@ -185,7 +185,8 @@ Fri · · · · · · · · · · · · · · · · · · · · · · · · · �
 
 - **Live quota** (network) — vendor APIs using your local login: windows (5h/7d
   and model-scoped when present), plan/org, credits/extra-usage. Prefixed
-  `live` in the UI. Claude: `api.anthropic.com/api/oauth/usage`; Codex:
+  `live` in the UI; bar widths are computed per panel so right edges align
+  across windows. Claude: `api.anthropic.com/api/oauth/usage`; Codex:
   `chatgpt.com/backend-api/wham/usage`.
   No official day-by-day quota history is available.
 - **Token activity heatmap + local summary** — from on-disk logs. The header

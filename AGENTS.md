@@ -21,6 +21,7 @@
   - `src/quota/`: API clients for fetching platform quotas (such as Claude or Codex).
   - `src/ui/`: Ratatui-based TUI components and layout rendering.
   - `src/state/`: State management, model pricing configurations, and string interning.
+  - `src/event/`: Terminal event loop (key input + 250ms tick) feeding the main async loop.
 - `tests/`: Integration tests.
   - `tests/fixtures/`: Raw log files used for testing the readers against real inputs.
 - `.github/workflows/`: Automated CI/CD release configurations.
@@ -66,3 +67,4 @@
 - **Integration Tests**: Grouped under the `tests/` directory. Uses `tests/reader_fixtures.rs` to run regressions against actual committed logs in `tests/fixtures/`.
 - **E2E/CLI Tests**: `tests/stats.rs` runs process-level tests against the compiled binary.
 - **MCP Tests**: `tests/mcp.rs` tests JSON-RPC interfaces over stdin/stdout.
+- **Watcher Tests**: `tests/watcher.rs` exercises the FS watcher against real tempdirs.
