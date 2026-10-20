@@ -309,15 +309,13 @@ mod tests {
         let rec = |id: &str, model: &str, input: u64| UsageRecord {
             timestamp: ts,
             model: intern(model),
-            session: intern("s1"),
+            session: std::sync::Arc::from("s1"),
             id: record_id(id),
             input_tokens: input,
             output_tokens: 10,
             cache_read_tokens: 100,
             cache_creation_tokens: 0,
             reasoning_tokens: 0,
-            session_title: intern(""),
-            project: intern("p"),
             cost_usd: 0.5,
         };
         s.add_records(

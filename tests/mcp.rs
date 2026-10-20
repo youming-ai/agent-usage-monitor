@@ -41,7 +41,13 @@ fn json_rpc_notification(method: &str, params: serde_json::Value) -> String {
 
 #[test]
 fn mcp_initialize_returns_server_info() {
-    let mut child = aum_mcp().spawn().expect("spawn aum mcp");
+    let home = tempfile::tempdir().unwrap();
+    let mut child = aum_mcp()
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("RUST_LOG", "info")
+        .spawn()
+        .expect("spawn aum mcp");
     let mut stdin = child.stdin.take().expect("stdin");
     let body = json_rpc_request(
         1,
@@ -58,6 +64,12 @@ fn mcp_initialize_returns_server_info() {
 
     let output = child.wait_with_output().expect("wait");
     let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let message: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|error| panic!("non-JSON MCP output: {line}: {error}"));
+        assert_eq!(message["jsonrpc"], "2.0");
+    }
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Starting"));
     assert!(
         stdout.contains("serverInfo"),
         "expected serverInfo, got: {stdout}"

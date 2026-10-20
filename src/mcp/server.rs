@@ -38,75 +38,51 @@ pub struct AumMcpServer {
 
 const SNAPSHOT_TTL: Duration = Duration::from_secs(2);
 
-/// Cache identity for a collected snapshot. The two hot unfiltered slots are
-/// shared by every tool; one extra slot remembers the last filtered collect
-/// (e.g. a dated `get_session_stats`) so repeated dated queries in a burst
-/// don't each rescan the on-disk history.
-#[derive(PartialEq, Eq)]
-enum CacheKey {
-    Usage,
-    WithQuota,
-    Filtered {
-        include_quota: bool,
-        platforms: Option<std::collections::BTreeSet<String>>,
-        since: Option<NaiveDate>,
-        until: Option<NaiveDate>,
-    },
-}
-
-impl CacheKey {
-    fn of(opts: &stats::CollectOptions) -> Self {
-        let stats::Filters {
-            platforms,
-            since,
-            until,
-        } = &opts.filters;
-        match (opts.include_quota, platforms, since, until) {
-            (false, None, None, None) => Self::Usage,
-            (true, None, None, None) => Self::WithQuota,
-            (include_quota, platforms, since, until) => Self::Filtered {
-                include_quota,
-                platforms: platforms.clone(),
-                since: *since,
-                until: *until,
-            },
-        }
-    }
-}
-
+/// Keep the last local report and the last quota report. Filtered queries
+/// replace their own slot rather than retaining a third full history.
 #[derive(Default)]
 struct SnapshotCache {
-    usage: Option<(Instant, Arc<stats::StatsReport>)>,
-    with_quota: Option<(Instant, Arc<stats::StatsReport>)>,
-    filtered: Option<(CacheKey, Instant, Arc<stats::StatsReport>)>,
+    usage: Option<CachedSnapshot>,
+    with_quota: Option<CachedSnapshot>,
+}
+
+struct CachedSnapshot {
+    options: stats::CollectOptions,
+    created: Instant,
+    report: Arc<stats::StatsReport>,
 }
 
 impl SnapshotCache {
-    fn lookup(&self, key: &CacheKey) -> Option<Arc<stats::StatsReport>> {
-        let slot = match key {
-            CacheKey::Usage => &self.usage,
-            CacheKey::WithQuota => &self.with_quota,
-            CacheKey::Filtered { .. } => {
-                return self
-                    .filtered
-                    .as_ref()
-                    .filter(|(k, created, _)| k == key && created.elapsed() < SNAPSHOT_TTL)
-                    .map(|(_, _, report)| report.clone());
-            }
-        };
-        slot.as_ref()
-            .filter(|(created, _)| created.elapsed() < SNAPSHOT_TTL)
-            .map(|(_, report)| report.clone())
-    }
-
-    fn store(&mut self, key: CacheKey, report: Arc<stats::StatsReport>) {
-        match key {
-            CacheKey::Usage => self.usage = Some((Instant::now(), report)),
-            CacheKey::WithQuota => self.with_quota = Some((Instant::now(), report)),
-            key @ CacheKey::Filtered { .. } => {
-                self.filtered = Some((key, Instant::now(), report));
+    fn lookup(&mut self, options: &stats::CollectOptions) -> Option<Arc<stats::StatsReport>> {
+        for slot in [&mut self.usage, &mut self.with_quota] {
+            if slot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.created.elapsed() >= SNAPSHOT_TTL)
+            {
+                *slot = None;
             }
         }
+        self.slot(options)
+            .as_ref()
+            .filter(|snapshot| snapshot.options == *options)
+            .map(|snapshot| snapshot.report.clone())
+    }
+
+    fn slot(&mut self, options: &stats::CollectOptions) -> &mut Option<CachedSnapshot> {
+        if options.include_quota {
+            &mut self.with_quota
+        } else {
+            &mut self.usage
+        }
+    }
+
+    fn store(&mut self, options: stats::CollectOptions, report: Arc<stats::StatsReport>) {
+        let slot = self.slot(&options);
+        *slot = Some(CachedSnapshot {
+            options,
+            created: Instant::now(),
+            report,
+        });
     }
 }
 
@@ -140,25 +116,19 @@ impl AumMcpServer {
         &self,
         opts: stats::CollectOptions,
     ) -> Result<Arc<stats::StatsReport>, McpError> {
-        let key = CacheKey::of(&opts);
-        if let Some(fresh) = self.cached(&key).await {
+        if let Some(fresh) = self.snapshots.lock().await.lookup(&opts) {
             return Ok(fresh);
         }
 
         let report = Arc::new(
-            stats::collect(&self.paths, opts)
+            stats::collect(&self.paths, opts.clone())
                 .await
                 .map_err(|e| McpError::internal_error(format!("collect failed: {e}"), None))?,
         );
 
         let mut snapshots = self.snapshots.lock().await;
-        snapshots.store(key, report.clone());
+        snapshots.store(opts, report.clone());
         Ok(report)
-    }
-
-    async fn cached(&self, key: &CacheKey) -> Option<Arc<stats::StatsReport>> {
-        let snapshots = self.snapshots.lock().await;
-        snapshots.lookup(key)
     }
 }
 
@@ -695,6 +665,55 @@ mod tests {
         let second = server.collect(false).await.unwrap();
 
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn filtered_queries_replace_the_previous_usage_snapshot() {
+        let server = AumMcpServer::new(empty_paths());
+        let first = server.collect(false).await.unwrap();
+        let previous = Arc::downgrade(&first);
+        drop(first);
+
+        let options = stats::CollectOptions {
+            include_quota: false,
+            filters: stats::Filters {
+                since: NaiveDate::from_ymd_opt(2026, 8, 1),
+                ..Default::default()
+            },
+        };
+        let filtered = server.collect_opts(options.clone()).await.unwrap();
+        assert!(previous.upgrade().is_none());
+        let repeated = server.collect_opts(options).await.unwrap();
+        assert!(Arc::ptr_eq(&filtered, &repeated));
+    }
+
+    #[test]
+    fn cache_lookup_releases_expired_reports_in_both_slots() {
+        let mut cache = SnapshotCache::default();
+        let report = Arc::new(stats::StatsReport {
+            generated_at: chrono::Utc::now(),
+            platforms: Default::default(),
+            totals: Default::default(),
+        });
+        let previous = Arc::downgrade(&report);
+        for include_quota in [false, true] {
+            let options = stats::CollectOptions {
+                include_quota,
+                filters: Default::default(),
+            };
+            cache.store(options.clone(), report.clone());
+            cache.slot(&options).as_mut().unwrap().created = Instant::now() - SNAPSHOT_TTL;
+        }
+        drop(report);
+        assert!(
+            cache
+                .lookup(&stats::CollectOptions {
+                    include_quota: false,
+                    filters: Default::default(),
+                })
+                .is_none()
+        );
+        assert!(previous.upgrade().is_none());
     }
 
     // Resource tests require constructing a `RequestContext`, which has no

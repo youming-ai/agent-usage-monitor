@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 use lasso::{Spur, ThreadedRodeo};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 pub type InternedString = Spur;
 pub type RecordId = u64;
@@ -24,7 +24,7 @@ pub fn resolve(key: InternedString) -> &'static str {
 
 /// Stable, fixed-size identity for one source record.
 ///
-/// Record ids are intentionally not interned: unlike model/session names they
+/// Record ids are intentionally not interned: unlike model names they
 /// are almost always unique, so interning them retained the full source string
 /// (occasionally an entire JSON line) for the lifetime of the process. FNV-1a
 /// keeps the state-side identity compact and deterministic across processes.
@@ -141,22 +141,23 @@ impl serde::Serialize for CompactDate {
 /// detection so custom paths are honored instead of always checking defaults.
 #[derive(Debug, Clone)]
 pub struct AgentPaths {
-    paths: HashMap<Platform, PathBuf>,
+    paths: [PathBuf; Platform::COUNT],
 }
 
 impl AgentPaths {
-    pub fn new(paths: HashMap<Platform, PathBuf>) -> Self {
-        Self { paths }
+    pub fn new(mut paths: HashMap<Platform, PathBuf>) -> Self {
+        Self {
+            paths: std::array::from_fn(|index| {
+                let platform = Platform::all()[index];
+                paths
+                    .remove(&platform)
+                    .unwrap_or_else(|| platform.default_path())
+            }),
+        }
     }
 
     pub fn path_for(&self, platform: Platform) -> PathBuf {
-        self.paths
-            .get(&platform)
-            .cloned()
-            .unwrap_or_else(|| {
-                tracing::warn!("AgentPaths missing {platform:?} — falling back to default path; use platforms::resolve_paths");
-                platform.default_path()
-            })
+        self.paths[platform.index()].clone()
     }
 }
 
@@ -208,13 +209,13 @@ pub struct UsageRecord {
     pub timestamp: DateTime<Utc>,
     pub model: InternedString,
     /// Human-readable session label (working-dir basename + short id) used
-    /// for per-session aggregation in `aum stats --json`.
-    pub session: InternedString,
+    /// for per-session aggregation in `aum stats`.
+    pub session: Arc<str>,
     /// Stable identity used to dedup re-emitted records (e.g. after a file
     /// truncation/rewrite forces a reader to re-read from byte 0). Readers
     /// build this from the strongest identifier their source data carries —
-    /// a message/event id, a database primary key, or (when nothing better
-    /// exists) a hash of the record's own content. See `AppState::add_records`.
+    /// a message/event id or a hash of the record's own content when an id is
+    /// unavailable. See `AppState::add_records`.
     pub id: RecordId,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -223,10 +224,6 @@ pub struct UsageRecord {
     /// Reasoning / thinking tokens when the source reports them separately
     /// (Codex). Folded into the OUT column for display and priced as output.
     pub reasoning_tokens: u64,
-    /// Optional session title (e.g. Claude `aiTitle`). Empty when unknown.
-    pub session_title: InternedString,
-    /// Working-dir basename when known; empty when the reader has nothing better.
-    pub project: InternedString,
     pub cost_usd: f64,
 }
 
@@ -243,9 +240,8 @@ pub struct ModelTotals {
     pub request_count: u64,
 }
 
-/// Per-day totals for the contribution heatmap. Kept in step with the
-/// sliding record window (eviction reverses the same way model totals do)
-/// and pruned past ~370 days so memory stays bounded.
+/// Per-day heatmap totals, independent of the record window and pruned past
+/// ~370 days.
 #[derive(Debug, Clone, Default)]
 pub struct DayTotals {
     pub cost_usd: f64,
@@ -253,12 +249,9 @@ pub struct DayTotals {
     pub calls: u64,
 }
 
-/// Per-session aggregate for the top-N session table.
+/// Per-session aggregate for the dashboard overview.
 #[derive(Debug, Clone)]
 pub struct SessionTotals {
-    pub session: InternedString,
-    pub title: InternedString,
-    pub project: InternedString,
     pub first_ts: DateTime<Utc>,
     pub last_ts: DateTime<Utc>,
     pub cost_usd: f64,
@@ -306,16 +299,13 @@ pub struct PlatformState {
     /// Per-model totals for the same bounded record window represented by
     /// `records`, the TUI model table, and `window_calls`/`window_cost`.
     pub models: HashMap<InternedString, ModelTotals>,
-    /// Per-session totals for the same window (top-N session table).
-    pub sessions: HashMap<InternedString, SessionTotals>,
+    /// Session strings live only as long as their reader/window needs them.
+    pub sessions: HashMap<Arc<str>, SessionTotals>,
     /// Per-day totals for the contribution heatmap.
     pub daily: BTreeMap<CompactDate, DayTotals>,
-    /// Cumulative tool ops observed by the platform reader (not window-bounded).
-    pub tool_ops: ToolOps,
     pub window_calls: usize,
     pub window_cost: f64,
     pub quota: Option<QuotaInfo>,
-    pub account_email: Option<String>,
     pub max_records: usize,
     /// Last reader failure for this platform. Cleared by the next successful
     /// scan, including a successful scan that produces no new records.
@@ -331,39 +321,6 @@ pub struct PlatformState {
     // where this would matter; shrink it by hashing into a Bloom filter only
     // if that ever stops being true.
     seen_ids: HashSet<RecordId>,
-}
-
-impl PlatformState {
-    /// Borrow references for the UI render pass.
-    pub fn refs(
-        &self,
-    ) -> (
-        Option<&QuotaInfo>,
-        &HashMap<InternedString, ModelTotals>,
-        usize,
-        f64,
-    ) {
-        (
-            self.quota.as_ref(),
-            &self.models,
-            self.window_calls,
-            self.window_cost,
-        )
-    }
-
-    /// Top sessions by cost (then tokens), highest first.
-    pub fn top_sessions(&self, n: usize) -> Vec<&SessionTotals> {
-        let mut entries: Vec<&SessionTotals> = self.sessions.values().collect();
-        entries.sort_by(|a, b| {
-            b.cost_usd
-                .partial_cmp(&a.cost_usd)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.tokens.cmp(&a.tokens))
-                .then_with(|| resolve(a.session).cmp(resolve(b.session)))
-        });
-        entries.truncate(n);
-        entries
-    }
 }
 
 /// Global application state
@@ -383,11 +340,9 @@ impl AppState {
             models: HashMap::new(),
             sessions: HashMap::new(),
             daily: BTreeMap::new(),
-            tool_ops: ToolOps::default(),
             window_calls: 0,
             window_cost: 0.0,
             quota: None,
-            account_email: None,
             max_records,
             reader_error: None,
             seen_ids: HashSet::new(),
@@ -442,10 +397,6 @@ impl AppState {
             p.records.push_back(r);
         }
         prune_daily(&mut p.daily);
-    }
-
-    pub fn add_tool_ops(&mut self, platform: Platform, ops: ToolOps) {
-        self.platforms[platform.index()].tool_ops.accumulate(&ops);
     }
 
     pub fn mark_reader_success(&mut self, platform: Platform) {
@@ -514,24 +465,17 @@ fn reverse_model_aggregate(map: &mut HashMap<InternedString, ModelTotals>, r: &U
     }
 }
 
-fn upsert_session_aggregate(map: &mut HashMap<InternedString, SessionTotals>, r: &UsageRecord) {
+fn upsert_session_aggregate(map: &mut HashMap<Arc<str>, SessionTotals>, r: &UsageRecord) {
     let tokens = record_tokens(r);
-    let entry = map.entry(r.session).or_insert_with(|| SessionTotals {
-        session: r.session,
-        title: r.session_title,
-        project: r.project,
-        first_ts: r.timestamp,
-        last_ts: r.timestamp,
-        cost_usd: 0.0,
-        tokens: 0,
-        calls: 0,
-    });
-    if resolve(entry.title).is_empty() && !resolve(r.session_title).is_empty() {
-        entry.title = r.session_title;
-    }
-    if resolve(entry.project).is_empty() && !resolve(r.project).is_empty() {
-        entry.project = r.project;
-    }
+    let entry = map
+        .entry(r.session.clone())
+        .or_insert_with(|| SessionTotals {
+            first_ts: r.timestamp,
+            last_ts: r.timestamp,
+            cost_usd: 0.0,
+            tokens: 0,
+            calls: 0,
+        });
     if r.timestamp < entry.first_ts {
         entry.first_ts = r.timestamp;
     }
@@ -543,8 +487,8 @@ fn upsert_session_aggregate(map: &mut HashMap<InternedString, SessionTotals>, r:
     entry.calls += 1;
 }
 
-fn reverse_session_aggregate(map: &mut HashMap<InternedString, SessionTotals>, r: &UsageRecord) {
-    if let std::collections::hash_map::Entry::Occupied(mut entry) = map.entry(r.session) {
+fn reverse_session_aggregate(map: &mut HashMap<Arc<str>, SessionTotals>, r: &UsageRecord) {
+    if let std::collections::hash_map::Entry::Occupied(mut entry) = map.entry(r.session.clone()) {
         let s = entry.get_mut();
         s.cost_usd = (s.cost_usd - r.cost_usd).max(0.0);
         s.tokens = s.tokens.saturating_sub(record_tokens(r));
@@ -593,15 +537,13 @@ pub(crate) fn test_record(model: &str) -> UsageRecord {
     UsageRecord {
         timestamp: Utc::now(),
         model: intern(model),
-        session: intern("test"),
+        session: Arc::from("test"),
         id: record_id("test-id"),
         input_tokens: 0,
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         reasoning_tokens: 0,
-        session_title: intern(""),
-        project: intern(""),
         cost_usd: 0.0,
     }
 }
@@ -676,17 +618,13 @@ mod tests {
     fn eviction_reverses_session_but_keeps_daily_history() {
         let mut s = AppState::with_capacity(1);
         let a = UsageRecord {
-            session: intern("sess-a"),
-            session_title: intern("Title A"),
-            project: intern("proj"),
+            session: Arc::from("sess-a"),
             cost_usd: 1.0,
             input_tokens: 100,
             ..rec("opus-4", 100, 0, 1.0)
         };
         let b = UsageRecord {
-            session: intern("sess-b"),
-            session_title: intern("Title B"),
-            project: intern("proj"),
+            session: Arc::from("sess-b"),
             cost_usd: 2.0,
             input_tokens: 200,
             ..rec("opus-4", 200, 0, 2.0)
@@ -694,11 +632,29 @@ mod tests {
         s.add_records(Platform::ClaudeCode, vec![a, b]);
         let p = &s.platforms[claude_idx()];
         assert_eq!(p.sessions.len(), 1, "first session evicted with the record");
-        assert!(p.sessions.contains_key(&intern("sess-b")));
+        assert!(p.sessions.contains_key("sess-b"));
         assert_eq!(p.window_calls, 1);
         // Heatmap history keeps both records' day contributions.
         let day_calls: u64 = p.daily.values().map(|d| d.calls).sum();
         assert_eq!(day_calls, 2);
+    }
+
+    #[test]
+    fn eviction_releases_session_strings() {
+        let mut state = AppState::with_capacity(1);
+        let record = UsageRecord {
+            session: Arc::from("evicted-session-label"),
+            ..rec_with_id("opus-4", 100, 50, 1.0, "old-session")
+        };
+        let session = Arc::downgrade(&record.session);
+        state.add_records(Platform::ClaudeCode, vec![record]);
+        assert!(session.upgrade().is_some());
+        state.add_records(
+            Platform::ClaudeCode,
+            vec![rec_with_id("opus-4", 100, 50, 1.0, "new-session")],
+        );
+        assert!(session.upgrade().is_none());
+        assert_eq!(state.platform(Platform::ClaudeCode).lifetime_tokens, 300);
     }
 
     #[test]

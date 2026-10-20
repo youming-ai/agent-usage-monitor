@@ -22,40 +22,41 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize logging
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
         )
         .init();
 
     let args = cli::Cli::parse();
+    args.validate().unwrap_or_else(|error| error.exit());
     info!(
         "Starting agent-usage-monitor v{}",
         env!("CARGO_PKG_VERSION")
     );
 
-    // Load configuration
-    let config = match config::load_config() {
-        Ok(config) => {
-            info!("Configuration loaded from {:?}", config::config_file_path());
-            config
+    // Maintenance commands must work even when the config needs repair.
+    match &args.command {
+        Some(cli::Commands::Update { force, dry_run }) => {
+            return handle_update(*force, *dry_run);
         }
-        Err(e) => {
-            warn!("Failed to load config: {}, using defaults", e);
-            Config::default()
+        Some(cli::Commands::Config { action }) => {
+            return handle_config(action.as_ref());
         }
-    };
+        _ => {}
+    }
+
+    let config = config::load_config()?;
+    info!(
+        "Configuration resolved from {:?}",
+        config::config_file_path()
+    );
 
     // CLI `Option` paths override config; see `platforms::resolve_paths`.
     let agent_paths = platforms::resolve_paths(&args, &config);
 
     // Handle subcommands
-    match args.command {
-        Some(cli::Commands::Update { force, dry_run }) => {
-            return handle_update(force, dry_run);
-        }
-        Some(cli::Commands::Config { action }) => {
-            return handle_config(action);
-        }
+    let monitor_refresh = match args.command {
         Some(cli::Commands::Stats(args)) => {
             return handle_stats(args, &agent_paths).await;
         }
@@ -63,11 +64,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Some(cli::Commands::Mcp) => {
             return handle_mcp(agent_paths).await;
         }
-        None => {
-            // Continue with normal monitor mode
-        }
-    }
-    let fallback_seconds = args.refresh.unwrap_or(config.refresh);
+        Some(cli::Commands::Monitor(options)) => options.refresh.or(args.refresh),
+        None => args.refresh,
+        Some(cli::Commands::Update { .. } | cli::Commands::Config { .. }) => unreachable!(),
+    };
+    let fallback_seconds = monitor_refresh.unwrap_or(config.refresh);
     if fallback_seconds == 0 {
         warn!("refresh must be at least 1 second; using 1 second");
     }
@@ -96,10 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let build_paths = agent_paths.clone();
             let (mut readers, displayable) = task::spawn_blocking(move || {
                 let readers = PlatformReaders::build(&build_paths);
-                // `displayable_platforms` stats paths (Path::exists) — keep
-                // the disk I/O off the async runtime with the reader build.
-                let displayable =
-                    platforms::displayable_platforms(readers.platforms(), &build_paths);
+                let displayable = readers.platforms();
                 (readers, displayable)
             })
             .await
@@ -149,10 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         let (updated_readers, newly, displayable) = task::spawn_blocking(move || {
                             let mut readers = readers;
                             let newly = readers.discover_new(&discovery_paths);
-                            let displayable = platforms::displayable_platforms(
-                                readers.platforms(),
-                                &discovery_paths,
-                            );
+                            let displayable = readers.platforms();
                             (readers, newly, displayable)
                         })
                         .await
@@ -192,87 +187,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     // Quota fetcher: each fetch runs in spawn_blocking so the API call (HTTP
-    // via ureq) does not block the tokio runtime. Quota and account capabilities
-    // are registered alongside each platform in `platforms::REGISTRY`.
+    // via ureq) does not block the tokio runtime. Each supported platform has
+    // a quota fetcher in `platforms::REGISTRY`.
     let quota_state = app_state.clone();
     let quota_handle = task::spawn(async move {
-        // Initial fetch — batch in one spawn_blocking to avoid concurrent
-        // token-spawns at startup.
-        {
-            let qs = quota_state.clone();
-            let (results, accounts) = task::spawn_blocking(|| {
-                let quotas = platforms::entries()
-                    .iter()
-                    .filter_map(|entry| entry.quota_fetcher.map(|fetch| (entry.platform, fetch())))
-                    .collect::<Vec<_>>();
-                let accounts = platforms::entries()
-                    .iter()
-                    .filter_map(|entry| {
-                        entry.account_fetcher.map(|fetch| (entry.platform, fetch()))
-                    })
-                    .collect::<Vec<_>>();
-                (quotas, accounts)
-            })
-            .await
-            .unwrap_or_default();
-
-            for (platform, q) in results {
-                if let Some(quota) = q {
-                    info!("{:?} quota fetched successfully", platform);
-                    if let Ok(mut state) = qs.write() {
-                        state.platform_mut(platform).quota = Some(quota);
-                    }
-                } else {
-                    warn!("Failed to fetch {:?} quota", platform);
-                }
-            }
-            for (platform, email) in accounts {
-                if let Ok(mut state) = qs.write() {
-                    state.platform_mut(platform).account_email = email;
-                }
-            }
-        }
-
         // Refresh every 2 minutes — each platform independently.
         let mut interval = tokio::time::interval(Duration::from_secs(120));
         loop {
             interval.tick().await;
 
             for entry in platforms::entries() {
-                let p = entry.platform;
-                let Some(fetch) = entry.quota_fetcher else {
-                    continue;
-                };
-                let stale = quota_state
-                    .try_read()
-                    .map(|state| {
-                        state
-                            .platform(p)
-                            .quota
-                            .as_ref()
-                            .is_none_or(|q| q.is_stale())
-                    })
-                    .unwrap_or(true);
-
-                if stale {
-                    let qs = quota_state.clone();
-                    if let Some(q) = task::spawn_blocking(fetch).await.unwrap_or_default()
-                        && let Ok(mut s) = qs.write()
-                    {
-                        s.platform_mut(p).quota = Some(q);
-                    }
-                }
-            }
-
-            for entry in platforms::entries() {
-                let Some(fetch) = entry.account_fetcher else {
-                    continue;
-                };
-                let platform = entry.platform;
-                let email = task::spawn_blocking(fetch).await.unwrap_or_default();
-                if let Ok(mut state) = quota_state.write() {
-                    state.platform_mut(platform).account_email = email;
-                }
+                refresh_quota(&quota_state, entry.platform, entry.quota_fetcher).await;
             }
         }
     });
@@ -291,6 +216,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     quota_handle.abort();
 
     Ok(())
+}
+
+async fn refresh_quota(
+    state: &Arc<RwLock<AppState>>,
+    platform: Platform,
+    fetch: agent_usage_monitor::quota::Fetcher,
+) {
+    // The periodic tick determines freshness. Gating again on response age
+    // would skip a tick whenever the previous request took nonzero time.
+    if let Some(quota) = task::spawn_blocking(fetch).await.unwrap_or_default()
+        && let Ok(mut state) = state.write()
+    {
+        state.platform_mut(platform).quota = Some(quota);
+    }
 }
 
 fn handle_update(
@@ -326,20 +265,20 @@ fn handle_update(
 }
 
 fn handle_config(
-    action: Option<cli::ConfigAction>,
+    action: Option<&cli::ConfigAction>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match action {
-        Some(cli::ConfigAction::Show) => {
-            let config = config::load_config().unwrap_or_default();
+        Some(cli::ConfigAction::Show) | None => {
+            let config = config::load_config()?;
             let content = toml::to_string_pretty(&config).map_err(|e| e.to_string())?;
             println!("Configuration file: {:?}", config::config_file_path());
             println!();
             println!("{}", content);
         }
         Some(cli::ConfigAction::Set { key, value }) => {
-            let mut config = config::load_config().unwrap_or_default();
+            let mut config = config::load_config()?;
 
-            if let Err(msg) = platforms::apply_config_key(&mut config, &key, &value) {
+            if let Err(msg) = platforms::apply_config_key(&mut config, key, value) {
                 return Err(anyhow::anyhow!(msg).into());
             }
 
@@ -351,14 +290,6 @@ fn handle_config(
             config::save_config(&config).map_err(|e| e.to_string())?;
             println!("Configuration reset to defaults.");
         }
-        None => {
-            // Show config by default
-            let config = config::load_config().unwrap_or_default();
-            let content = toml::to_string_pretty(&config).map_err(|e| e.to_string())?;
-            println!("Configuration file: {:?}", config::config_file_path());
-            println!();
-            println!("{}", content);
-        }
     }
 
     Ok(())
@@ -368,19 +299,6 @@ async fn handle_stats(
     args: cli::StatsArgs,
     agent_paths: &AgentPaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let since = args
-        .since
-        .as_deref()
-        .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d"))
-        .transpose()
-        .map_err(|e| format!("--since must be YYYY-MM-DD: {e}"))?;
-    let until = args
-        .until
-        .as_deref()
-        .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d"))
-        .transpose()
-        .map_err(|e| format!("--until must be YYYY-MM-DD: {e}"))?;
-
     let platform_filter = if args.platform.is_empty() {
         None
     } else {
@@ -391,8 +309,8 @@ async fn handle_stats(
         include_quota: args.include_quota,
         filters: stats::Filters {
             platforms: platform_filter,
-            since,
-            until,
+            since: args.since,
+            until: args.until,
         },
     };
     let report = stats::collect(agent_paths, opts).await?;
@@ -433,4 +351,55 @@ fn run_tui(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_usage_monitor::quota::QuotaInfo;
+    use std::time::Instant;
+
+    fn fetched_quota() -> Option<QuotaInfo> {
+        Some(QuotaInfo {
+            tool_name: "refreshed".into(),
+            email: None,
+            account_id: None,
+            plan: None,
+            org: None,
+            windows: vec![],
+            live_summary: None,
+            fetched_at: Instant::now(),
+            error: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn scheduled_refresh_does_not_skip_a_recent_successful_response() {
+        let state = Arc::new(RwLock::new(AppState::new()));
+        for platform in Platform::all() {
+            // A request started at t=0 and completed at t=1 is only 119s old
+            // at the t=120 tick. It must still be refreshed on that tick.
+            for age_seconds in [119, 1] {
+                let mut previous = fetched_quota().unwrap();
+                previous.tool_name = "previous".into();
+                previous.fetched_at = Instant::now() - Duration::from_secs(age_seconds);
+                state.write().unwrap().platform_mut(*platform).quota = Some(previous);
+
+                refresh_quota(&state, *platform, fetched_quota).await;
+
+                assert_eq!(
+                    state
+                        .read()
+                        .unwrap()
+                        .platform(*platform)
+                        .quota
+                        .as_ref()
+                        .unwrap()
+                        .tool_name,
+                    "refreshed",
+                    "the scheduled refresh must run even when the previous response is {age_seconds}s old",
+                );
+            }
+        }
+    }
 }

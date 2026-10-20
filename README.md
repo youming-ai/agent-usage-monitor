@@ -21,6 +21,7 @@ Also available from [Releases](https://github.com/youming-ai/agent-usage-monitor
 ```bash
 aum                # start monitoring (defaults below)
 aum -r 2           # use a 2-second fallback poll
+aum monitor -r 2   # explicit dashboard command (same as aum -r 2)
 aum update         # self-update to the latest release (--dry-run / --force)
 aum config         # show current configuration
 aum config set <key> <value>  # set a configuration value
@@ -37,6 +38,10 @@ aum stats         # print JSON usage report (no TUI)
 
 **Keys:** `q` / `Esc` quit
 
+Data path flags work before or after a subcommand, for example
+`aum stats --codex-path /path/to/codex`. `--refresh` applies only to the
+dashboard (`aum` or `aum monitor`); other commands reject it.
+
 ## JSON stats
 
 For scripts, CI, and external monitoring, `aum` can emit a structured JSON
@@ -50,13 +55,13 @@ aum stats
 aum stats --compact | jq '.platforms.claude_code.totals.cost_usd'
 
 # Filter to specific agents
-aum stats --platform claude_code,codex
+aum stats --platform claude,codex
 
-# Time-bounded report
+# Time-bounded report (inclusive UTC dates)
 aum stats --since 2026-06-01 --until 2026-06-30
 
 # Include live quota (Claude / Codex; requires local credentials)
-aum stats --platform claude_code --include-quota
+aum stats --platform claude --include-quota
 ```
 
 ### Schema
@@ -64,7 +69,7 @@ aum stats --platform claude_code --include-quota
 | Field | Type | Description |
 |---|---|---|
 | `generated_at` | RFC 3339 timestamp | When the report was generated |
-| `platforms` | object | Per-platform breakdown keyed by `config_key` (e.g. `claude_code`) |
+| `platforms` | object | Per-platform breakdown keyed by stable platform name (e.g. `claude_code`) |
 | `platforms.<k>.available` | bool | Whether the data directory exists |
 | `platforms.<k>.data_path` | path | Resolved path (CLI override > config > default) |
 | `platforms.<k>.totals` | object | Aggregate: `calls`, `cost_usd`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens` |
@@ -77,9 +82,20 @@ aum stats --platform claude_code --include-quota
 Top-level keys are alphabetically ordered (BTreeMap). Use `--compact` for
 scripting, default (pretty) for human reading.
 
+`--platform` accepts `claude` and `codex`, plus legacy names such as
+`claude_code`, `ClaudeCode`, and `Claude Code`. JSON keys remain `claude_code`
+and `codex`. Invalid platforms, invalid dates, and reversed date ranges exit
+with status 2. Diagnostics and logs go to stderr, keeping JSON/MCP stdout clean.
+
+Date filters apply to usage and tool-operation counts using UTC calendar days.
+Operations without a valid timestamp are excluded from dated reports. Live
+quota always describes the current state, independently of the date range.
+
 ### Configuration
 
-Configuration is stored in `~/.config/aum/config.toml` (or platform equivalent). Available keys:
+Configuration is stored in `~/.config/aum/config.toml` on Linux (respecting
+`XDG_CONFIG_HOME`), or `~/Library/Application Support/aum/config.toml` on macOS.
+`aum config` shows the exact path. Available keys:
 
 - `claude_path` - Path to Claude Code data directory
 - `codex_path` - Path to Codex data directory
@@ -95,6 +111,12 @@ aum config set refresh 2
 aum config set max_records 50000
 aum config set codex_path ~/.codex
 ```
+
+A missing configuration uses defaults without creating a file. `config set`
+and `config reset` save configuration. Unreadable or malformed configuration
+causes commands that need it to fail; `config set` preserves the original file.
+Use `config reset` explicitly to replace it with defaults. Self-update does not
+require a valid configuration.
 
 ## Real-time updates
 
@@ -213,11 +235,24 @@ their existing local credentials (Claude: macOS Keychain or
 from built-in pricing tables for Anthropic & OpenAI models; unknown models show
 `$0.00`.
 
-### Adding a new agent
+### Memory and platform scope
 
-Platform wiring lives in `src/platforms.rs` (`RegistryEntry`). A registry row
-contains its path keys, reader factory, and optional quota/account
-fetchers, keeping runtime orchestration free of platform-specific match arms.
+Supported platforms are Claude Code and Codex. Their paths, reader factories,
+colors, and quota clients live in `src/platforms.rs`; both use the same
+incremental JSONL scanner.
+
+The dashboard retains a bounded record window and roughly 370 days of heatmap
+buckets. Session labels are shared with `Arc<str>` and released when their
+readers/window no longer need them. Only model names use the process-wide
+string interner. Record and tool-event deduplication retains fixed-size hashes
+so replaying old logs remains safe; these identity sets still grow with history.
+Unused session titles and project metadata are not retained. Tool-operation
+breakdowns remain available through JSON/MCP without a second dashboard copy.
+
+JSON reports scan and aggregate one platform at a time. MCP keeps at most two
+recent reports, one for local usage and one including live quota; a filtered
+query replaces its corresponding slot. Expired reports are released on the
+next cache lookup. Full scans still temporarily hold a platform's raw history.
 
 ### Tests
 

@@ -1,4 +1,5 @@
-use clap::{Args, Parser, Subcommand};
+use chrono::NaiveDate;
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -10,13 +11,55 @@ pub struct Cli {
     pub command: Option<Commands>,
 
     /// Path to Claude Code data directory
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub claude_path: Option<PathBuf>,
 
     /// Path to Codex data directory
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub codex_path: Option<PathBuf>,
 
+    /// Monitor fallback polling interval in seconds (minimum: 1; monitor mode only)
+    #[arg(short, long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub refresh: Option<u64>,
+}
+
+impl Cli {
+    pub fn validate(&self) -> Result<(), clap::Error> {
+        if self.refresh.is_some()
+            && self
+                .command
+                .as_ref()
+                .is_some_and(|command| !matches!(command, Commands::Monitor(_)))
+        {
+            return Err(Self::command().error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--refresh is only available with `aum` or `aum monitor`",
+            ));
+        }
+        if let Some(Commands::Monitor(args)) = &self.command
+            && self.refresh.is_some()
+            && args.refresh.is_some()
+        {
+            return Err(Self::command().error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--refresh may only be specified once",
+            ));
+        }
+        if let Some(Commands::Stats(args)) = &self.command
+            && let (Some(since), Some(until)) = (args.since, args.until)
+            && since > until
+        {
+            return Err(Self::command().error(
+                clap::error::ErrorKind::ValueValidation,
+                "--since must be on or before --until (UTC dates)",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct MonitorArgs {
     /// Fallback polling interval in seconds (minimum: 1)
     #[arg(short, long, value_parser = clap::value_parser!(u64).range(1..))]
     pub refresh: Option<u64>,
@@ -24,33 +67,48 @@ pub struct Cli {
 
 #[derive(Args, Debug)]
 pub struct StatsArgs {
-    /// 仅输出指定平台 (逗号分隔, 支持 config_key / platform variant / log_name)
-    #[arg(long, value_delimiter = ',')]
+    /// Platforms to include: claude, codex (comma-separated; legacy names accepted)
+    #[arg(long, value_delimiter = ',', value_parser = parse_platform)]
     pub platform: Vec<String>,
 
-    /// 起始日期（含） YYYY-MM-DD
-    #[arg(long)]
-    pub since: Option<String>,
+    /// Start date, inclusive, in UTC (YYYY-MM-DD)
+    #[arg(long, value_parser = parse_date)]
+    pub since: Option<NaiveDate>,
 
-    /// 结束日期（含） YYYY-MM-DD
-    #[arg(long)]
-    pub until: Option<String>,
+    /// End date, inclusive, in UTC (YYYY-MM-DD)
+    #[arg(long, value_parser = parse_date)]
+    pub until: Option<NaiveDate>,
 
-    /// 拉取 quota (Claude/Codex 需本地凭据)
+    /// Include current live quota, independent of dates (requires local credentials)
     #[arg(long)]
     pub include_quota: bool,
 
-    /// Pretty-print JSON (默认: stdout 是 TTY 时 pretty)
+    /// Pretty-print JSON (default when stdout is a terminal)
     #[arg(long)]
     pub pretty: bool,
 
-    /// 显式 compact 输出 (反 --pretty)
+    /// Compact JSON (default when stdout is redirected)
     #[arg(long, conflicts_with = "pretty")]
     pub compact: bool,
 }
 
+fn parse_date(value: &str) -> Result<NaiveDate, String> {
+    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| "expected a valid UTC date in YYYY-MM-DD format".to_string())?;
+    if date.format("%Y-%m-%d").to_string() != value {
+        return Err("expected YYYY-MM-DD format".to_string());
+    }
+    Ok(date)
+}
+
+fn parse_platform(value: &str) -> Result<String, String> {
+    crate::stats::resolve_platform(value).map_err(|error| error.to_string())
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Start the terminal dashboard (also the default with no subcommand)
+    Monitor(MonitorArgs),
     /// Check for updates and install the latest version
     Update {
         /// Force update even if already on latest version
@@ -67,7 +125,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
-    /// 输出 JSON 用量报告（不启动 TUI）
+    /// Print a JSON usage report without starting the dashboard
     Stats(StatsArgs),
     /// Run as an MCP (Model Context Protocol) server over stdio
     Mcp,
@@ -94,6 +152,63 @@ pub enum ConfigAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_schema_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn data_paths_work_before_and_after_subcommands() {
+        for args in [
+            vec!["aum", "--codex-path", "/tmp/codex", "stats"],
+            vec!["aum", "stats", "--codex-path", "/tmp/codex"],
+            vec!["aum", "mcp", "--codex-path", "/tmp/codex"],
+            vec!["aum", "monitor", "--codex-path", "/tmp/codex"],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            cli.validate().unwrap();
+            assert_eq!(cli.codex_path, Some(PathBuf::from("/tmp/codex")));
+        }
+    }
+
+    #[test]
+    fn refresh_only_applies_to_monitoring() {
+        for args in [
+            vec!["aum", "-r", "2"],
+            vec!["aum", "monitor", "-r", "2"],
+            vec!["aum", "-r", "2", "monitor"],
+        ] {
+            Cli::try_parse_from(args).unwrap().validate().unwrap();
+        }
+        for command in ["stats", "mcp", "config", "update"] {
+            assert!(
+                Cli::try_parse_from(["aum", "-r", "2", command])
+                    .unwrap()
+                    .validate()
+                    .is_err()
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["aum", "-r", "2", "monitor", "-r", "3"])
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["aum", "monitor", "-r", "0"]).is_err());
+    }
+
+    #[test]
+    fn invalid_dates_and_platforms_are_rejected_during_parsing() {
+        for args in [
+            vec!["aum", "stats", "--since", "2026-02-30"],
+            vec!["aum", "stats", "--until", "2026-5-1"],
+            vec!["aum", "stats", "--platform", ""],
+            vec!["aum", "stats", "--platform", "claude,,codex"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
 
     #[test]
     fn refresh_requires_at_least_one_second() {

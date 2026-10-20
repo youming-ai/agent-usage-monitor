@@ -61,14 +61,13 @@ fn render_platform(
     state: &AppState,
 ) {
     let p = state.platform(platform);
-    let (quota, _, _, _) = p.refs();
+    let quota = p.quota.as_ref();
     let accent = platform.primary_color();
 
-    let has_quota = crate::platforms::entry_for_platform(platform).has_quota();
     let h = area.height;
 
     let header_h: u16 = if h >= 2 { 2 } else { 1 };
-    let quota_h: u16 = if has_quota && h >= 4 {
+    let quota_h: u16 = if h >= 4 {
         quota_bar::quota_panel_height(quota).min(h.saturating_sub(header_h + 3))
     } else {
         0
@@ -121,9 +120,7 @@ fn render_platform(
     let header_inner = header_block.inner(chunks[0]);
     frame.render_widget(header_block, chunks[0]);
 
-    let email = quota
-        .and_then(|q| q.email.as_deref())
-        .or(p.account_email.as_deref());
+    let email = quota.and_then(|q| q.email.as_deref());
     let acct_w = email.map(|e| e.chars().count() as u16 + 4).unwrap_or(15);
     let header_cols =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(acct_w)]).split(header_inner);
@@ -254,7 +251,7 @@ mod tests {
         }
 
         let mk = |session: &str, model: &str, input: u64, output: u64| UsageRecord {
-            session: crate::state::intern(session),
+            session: Arc::from(session),
             id: crate::state::record_id(&format!("{session}:{model}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,

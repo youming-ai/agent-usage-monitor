@@ -67,20 +67,23 @@ pub fn config_file_path() -> PathBuf {
         .join("config.toml")
 }
 
-/// Load configuration from file, or create default if not exists
-pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
+/// Load configuration without writing. A missing file uses defaults; an
+/// unreadable or malformed file is an error, never a reason to replace it.
+pub fn load_config() -> Result<Config, Box<dyn std::error::Error + Send + Sync>> {
     let config_path = config_file_path();
-
-    if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
-        let config: Config = toml::from_str(&content)?;
-        Ok(config)
-    } else {
-        // Create default config file
-        let config = Config::default();
-        save_config(&config)?;
-        Ok(config)
-    }
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(error) => {
+            return Err(format!(
+                "failed to read configuration {}: {error}",
+                config_path.display()
+            )
+            .into());
+        }
+    };
+    toml::from_str(&content)
+        .map_err(|error| format!("invalid configuration {}: {error}", config_path.display()).into())
 }
 
 /// Save configuration to file

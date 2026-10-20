@@ -95,23 +95,25 @@ pub(crate) fn read_lines_from_offset(
 /// file's offset and state, read new records via a caller-supplied
 /// `read_file`, collect, and sort by timestamp.
 pub(crate) struct FileScanner<S> {
-    positions: HashMap<PathBuf, u64>,
-    state: HashMap<PathBuf, S>,
+    files: HashMap<PathBuf, FileCursor<S>>,
+}
+
+struct FileCursor<S> {
+    offset: u64,
+    state: S,
 }
 
 impl<S> FileScanner<S> {
     pub(crate) fn new() -> Self {
         Self {
-            positions: HashMap::new(),
-            state: HashMap::new(),
+            files: HashMap::new(),
         }
     }
 
     /// Drop every tracked offset and per-file state — call before a full
     /// re-read so every file starts again from byte 0 with fresh state.
     pub(crate) fn reset(&mut self) {
-        self.positions.clear();
-        self.state.clear();
+        self.files.clear();
     }
 
     /// (Re)scan `files`: for each, look up its last byte offset (0 if never
@@ -148,18 +150,20 @@ impl<S> FileScanner<S> {
         mut read_file: impl FnMut(&Path, u64, &mut S) -> ReaderResult<(Vec<UsageRecord>, u64)>,
     ) -> ReaderResult<Vec<UsageRecord>> {
         if prune_missing {
-            let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
-            self.positions
-                .retain(|path, _| current_files.contains(path));
-            self.state.retain(|path, _| current_files.contains(path));
+            let current_files: HashSet<_> = files.iter().collect();
+            self.files.retain(|path, _| current_files.contains(path));
         }
         let mut records = Vec::new();
         for file in files {
-            let offset = self.positions.get(&file).copied().unwrap_or(0);
-            let mut st = self.state.remove(&file).unwrap_or_else(|| init(&file));
-            let (entries, bytes_read) = read_file(&file, offset, &mut st)?;
-            self.positions.insert(file.clone(), bytes_read);
-            self.state.insert(file, st);
+            let cursor = self
+                .files
+                .entry(file.clone())
+                .or_insert_with(|| FileCursor {
+                    offset: 0,
+                    state: init(&file),
+                });
+            let (entries, offset) = read_file(&file, cursor.offset, &mut cursor.state)?;
+            cursor.offset = offset;
             records.extend(entries);
         }
         records.sort_by_key(|a| a.timestamp);
@@ -270,7 +274,7 @@ impl std::error::Error for ReaderError {}
 pub type ReaderResult<T> = Result<T, ReaderError>;
 
 /// A source of usage records, abstracting over the backing store (JSONL files
-/// for Claude/Codex, SQLite for opencode). `main.rs` drives every source the
+/// for Claude Code and Codex). `main.rs` drives every source the
 /// same way: an initial `scan_all`, then a `poll_delta` loop. The file watcher
 /// watches each platform's own resolved path directly (see `watcher.rs`) —
 /// it does not go through this trait.

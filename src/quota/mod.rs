@@ -3,16 +3,10 @@ pub mod codex;
 pub(crate) mod util;
 
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
-
-const CACHE_TTL: Duration = Duration::from_secs(120);
-
 /// A quota fetcher: a bare fn with no state to capture.
 pub type Fetcher = fn() -> Option<QuotaInfo>;
-pub type AccountFetcher = fn() -> Option<String>;
 
-/// Reason a quota fetch failed. Surfaced verbatim in the UI and used to decide
-/// whether the cached result should be re-tried sooner than the regular TTL.
+/// Reason a quota fetch failed, surfaced in the UI and reports.
 #[derive(Debug, Clone, PartialEq)]
 pub enum QuotaError {
     /// No local credentials found (Keychain, credentials.json, or auth.json).
@@ -59,15 +53,4 @@ pub struct QuotaInfo {
     pub live_summary: Option<String>,
     pub fetched_at: std::time::Instant,
     pub error: Option<QuotaError>,
-}
-
-impl QuotaInfo {
-    /// True if the cached data is older than the TTL — and also true if the
-    /// last fetch was an error (so we don't keep showing a stale failure).
-    pub fn is_stale(&self) -> bool {
-        if self.error.is_some() {
-            return true;
-        }
-        self.fetched_at.elapsed() > CACHE_TTL
-    }
 }
