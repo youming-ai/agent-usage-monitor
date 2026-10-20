@@ -1,6 +1,6 @@
 [package]
 name = "agent-usage-monitor"
-version = "1.10.3"
+version = "1.10.4"
 edition = "2024"
 
 [lib]
