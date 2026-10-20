@@ -8,7 +8,7 @@
 //! double-counted every record on every tick. Keeping one reader alive per
 //! platform is the fix; the shared `Mutex` also protects direct callers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -25,7 +25,7 @@ pub type SharedReader = Arc<Mutex<Box<dyn UsageSource>>>;
 
 /// One live reader per registered platform whose data path currently exists.
 pub struct PlatformReaders {
-    readers: HashMap<Platform, SharedReader>,
+    readers: [Option<SharedReader>; Platform::COUNT],
 }
 
 impl PlatformReaders {
@@ -36,7 +36,7 @@ impl PlatformReaders {
     /// [`discover_new`]: PlatformReaders::discover_new
     pub fn build(paths: &AgentPaths) -> Self {
         let mut this = Self {
-            readers: HashMap::new(),
+            readers: std::array::from_fn(|_| None),
         };
         this.discover_new(paths);
         this
@@ -52,18 +52,15 @@ impl PlatformReaders {
     pub fn discover_new(&mut self, paths: &AgentPaths) -> Vec<Platform> {
         let mut added = Vec::new();
         for entry in platforms::entries() {
-            if self.readers.contains_key(&entry.platform) {
+            if self.readers[entry.platform.index()].is_some() {
                 continue;
             }
             let path = paths.path_for(entry.platform);
             if !entry.is_available_at(&path) {
                 continue;
             }
-            let Some(reader) = entry.build_reader(path) else {
-                continue;
-            };
-            self.readers
-                .insert(entry.platform, Arc::new(Mutex::new(reader)));
+            let reader = entry.build_reader(path);
+            self.readers[entry.platform.index()] = Some(Arc::new(Mutex::new(reader)));
             added.push(entry.platform);
         }
         added
@@ -71,12 +68,16 @@ impl PlatformReaders {
 
     /// Shared handle to one platform's reader, if it was built.
     pub fn get(&self, platform: Platform) -> Option<SharedReader> {
-        self.readers.get(&platform).cloned()
+        self.readers[platform.index()].clone()
     }
 
-    /// All platforms that have a live reader, in arbitrary order.
+    /// Platforms with a live reader, in dashboard order.
     pub fn platforms(&self) -> Vec<Platform> {
-        self.readers.keys().copied().collect()
+        Platform::all()
+            .iter()
+            .copied()
+            .filter(|platform| self.readers[platform.index()].is_some())
+            .collect()
     }
 }
 
@@ -85,7 +86,7 @@ impl PlatformReaders {
 /// appended data since the reader's last cursor.
 pub struct ReaderRefreshers {
     state: Arc<RwLock<AppState>>,
-    senders: HashMap<Platform, RefreshTrigger>,
+    senders: [Option<RefreshTrigger>; Platform::COUNT],
 }
 
 struct RefreshTrigger {
@@ -102,13 +103,13 @@ impl ReaderRefreshers {
     pub fn new(state: Arc<RwLock<AppState>>) -> Self {
         Self {
             state,
-            senders: HashMap::new(),
+            senders: std::array::from_fn(|_| None),
         }
     }
 
     /// Start the refresh worker for a reader after its initial full scan.
     pub fn add(&mut self, platform: Platform, reader: SharedReader) {
-        if self.senders.contains_key(&platform) {
+        if self.senders[platform.index()].is_some() {
             return;
         }
 
@@ -138,14 +139,13 @@ impl ReaderRefreshers {
                 .await;
             }
         });
-        self.senders
-            .insert(platform, RefreshTrigger { tx, pending });
+        self.senders[platform.index()] = Some(RefreshTrigger { tx, pending });
     }
 
     /// Request an incremental poll. A full queue already represents a pending
     /// poll, so dropping another event cannot lose appended records.
     pub fn request(&self, platform: Platform) {
-        if let Some(trigger) = self.senders.get(&platform) {
+        if let Some(trigger) = self.senders[platform.index()].as_ref() {
             if let Ok(mut pending) = trigger.pending.lock() {
                 *pending = PendingRefresh::Full;
             }
@@ -155,7 +155,7 @@ impl ReaderRefreshers {
 
     /// Request a watcher-driven refresh narrowed to one changed path.
     pub fn request_changed(&self, platform: Platform, path: PathBuf) {
-        if let Some(trigger) = self.senders.get(&platform) {
+        if let Some(trigger) = self.senders[platform.index()].as_ref() {
             if let Ok(mut pending) = trigger.pending.lock()
                 && let PendingRefresh::Paths(paths) = &mut *pending
             {
@@ -202,23 +202,20 @@ fn run_reader_operation(
     platform: Platform,
     operation: impl FnOnce(&mut dyn UsageSource) -> ReaderResult<Vec<crate::state::UsageRecord>>,
 ) -> usize {
-    let (result, tool_ops) = match reader.lock() {
+    let result = match reader.lock() {
         Ok(mut r) => {
             let result = operation(r.as_mut());
-            let ops = r.take_tool_ops_delta();
-            (result, ops)
+            // Tool-operation details are exposed by stats/MCP, not the dashboard.
+            r.take_tool_ops_delta();
+            result
         }
-        Err(_) => (
-            Err(ReaderError::new("reader lock poisoned")),
-            crate::state::ToolOps::default(),
-        ),
+        Err(_) => Err(ReaderError::new("reader lock poisoned")),
     };
-    apply_result(result, tool_ops, state, platform)
+    apply_result(result, state, platform)
 }
 
 fn apply_result(
     result: ReaderResult<Vec<crate::state::UsageRecord>>,
-    tool_ops: crate::state::ToolOps,
     state: &Arc<RwLock<AppState>>,
     platform: Platform,
 ) -> usize {
@@ -241,11 +238,10 @@ fn apply_result(
     if n > 0 {
         info!("{:?}: Found {} new records", platform, n);
     }
-    if let Ok(mut s) = state.write() {
-        if n > 0 {
-            s.add_records(platform, records);
-        }
-        s.add_tool_ops(platform, tool_ops);
+    if n > 0
+        && let Ok(mut s) = state.write()
+    {
+        s.add_records(platform, records);
     }
     n
 }

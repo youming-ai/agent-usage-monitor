@@ -1,4 +1,4 @@
-//! `aum stats --json` subcommand implementation.
+//! `aum stats` subcommand implementation.
 //!
 //! Produces a JSON usage report by driving each registered reader's
 //! `scan_all()` and aggregating into a `StatsReport`. Independent from
@@ -165,7 +165,7 @@ impl QuotaView {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Filters {
     pub platforms: Option<std::collections::BTreeSet<String>>,
     pub since: Option<NaiveDate>,
@@ -181,7 +181,10 @@ impl Filters {
     }
 
     pub fn matches_date(&self, ts: DateTime<Utc>) -> bool {
-        let d = ts.date_naive();
+        self.matches_day(ts.date_naive())
+    }
+
+    fn matches_day(&self, d: NaiveDate) -> bool {
         if let Some(s) = self.since
             && d < s
         {
@@ -193,6 +196,25 @@ impl Filters {
             return false;
         }
         true
+    }
+
+    fn filter_tool_ops(&self, ops: crate::state::ToolOps) -> crate::state::ToolOps {
+        if self.since.is_none() && self.until.is_none() {
+            return ops;
+        }
+        let mut filtered = crate::state::ToolOps::default();
+        for (date, daily) in ops.by_date {
+            let day = NaiveDate::from_ymd_opt(
+                i32::from(date.year()),
+                u32::from(date.month()),
+                u32::from(date.day()),
+            );
+            if day.is_some_and(|day| self.matches_day(day)) {
+                filtered.accumulate(&daily);
+                filtered.by_date.insert(date, daily);
+            }
+        }
+        filtered
     }
 }
 
@@ -213,36 +235,33 @@ pub fn platform_canonical_key(platform: Platform) -> String {
     canonical
 }
 
-pub fn resolve_platform_filter(raw: &[String]) -> Result<BTreeSet<String>> {
-    use crate::platforms;
-    let mut set = BTreeSet::new();
-    for r in raw {
-        let normalized = r.trim();
-        if normalized.is_empty() {
-            continue;
-        }
-        let mut matched = false;
-        for entry in platforms::entries() {
-            let platform_name = format!("{:?}", entry.platform);
-            let canonical = platform_canonical_key(entry.platform);
-            if canonical == normalized
-                || platform_name == normalized
-                || entry.log_name == normalized
-            {
-                set.insert(canonical);
-                matched = true;
-                break;
-            }
-        }
-        if !matched {
-            anyhow::bail!(
-                "unknown platform: `{normalized}`; run `aum config set` to list valid keys"
-            );
+pub fn resolve_platform(raw: &str) -> Result<String> {
+    let normalized = raw.trim();
+    for entry in crate::platforms::entries() {
+        let platform_name = format!("{:?}", entry.platform);
+        let canonical = platform_canonical_key(entry.platform);
+        if [entry.cli_name, &canonical, &platform_name, entry.log_name]
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(normalized))
+        {
+            return Ok(canonical);
         }
     }
-    Ok(set)
+    let names: Vec<_> = crate::platforms::entries()
+        .iter()
+        .map(|entry| entry.cli_name)
+        .collect();
+    anyhow::bail!(
+        "unknown platform: `{normalized}`; valid platforms: {}",
+        names.join(", ")
+    )
 }
 
+pub fn resolve_platform_filter(raw: &[String]) -> Result<BTreeSet<String>> {
+    raw.iter().map(|value| resolve_platform(value)).collect()
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct CollectOptions {
     pub include_quota: bool,
     pub filters: Filters,
@@ -276,7 +295,6 @@ pub fn build_platform_report_with_ops(
     let mut totals = PlatformTotals::default();
     let mut models: BTreeMap<crate::state::InternedString, ModelSummary> = BTreeMap::new();
     struct SessionAcc {
-        session: crate::state::InternedString,
         calls: u64,
         cost_usd: f64,
         input_tokens: u64,
@@ -285,7 +303,7 @@ pub fn build_platform_report_with_ops(
         cache_creation_tokens: u64,
         models: Vec<crate::state::InternedString>,
     }
-    let mut session_map: BTreeMap<crate::state::InternedString, SessionAcc> = BTreeMap::new();
+    let mut session_map: BTreeMap<std::sync::Arc<str>, SessionAcc> = BTreeMap::new();
     let mut dates: BTreeMap<crate::state::CompactDate, DateBucket> = BTreeMap::new();
 
     for r in records {
@@ -305,7 +323,6 @@ pub fn build_platform_report_with_ops(
         m.cache_creation_tokens += r.cache_creation_tokens;
 
         let s = session_map.entry(r.session).or_insert_with(|| SessionAcc {
-            session: r.session,
             calls: 0,
             cost_usd: 0.0,
             input_tokens: 0,
@@ -348,9 +365,9 @@ pub fn build_platform_report_with_ops(
     }
 
     let mut serialized_sessions = Vec::new();
-    for s in session_map.into_values() {
+    for (session, s) in session_map {
         serialized_sessions.push(SessionSummaryView {
-            session: crate::state::resolve(s.session).to_string(),
+            session: session.to_string(),
             calls: s.calls,
             cost_usd: s.cost_usd,
             input_tokens: s.input_tokens,
@@ -378,123 +395,54 @@ pub fn build_platform_report_with_ops(
     }
 }
 pub async fn collect(paths: &AgentPaths, opts: CollectOptions) -> Result<StatsReport> {
-    use crate::platforms;
-
-    use std::collections::HashMap;
-
-    // 第一遍：scan_all 收集记录（顺序，task::spawn_blocking 包 I/O）
-    let mut entries: Vec<(String, Platform, PathBuf, Vec<UsageRecord>, ToolOpsView)> = Vec::new();
-    for entry in platforms::entries() {
-        let key = platform_canonical_key(entry.platform);
-        if !opts.filters.matches_platform(&key) {
-            continue;
-        }
-        let path = paths.path_for(entry.platform);
-        // Platforms without a local session reader keep their row empty in the
-        // report (currently none are registered, but the branch is defensive).
-        let Some(mut reader) = entry.build_reader(path.clone()) else {
-            entries.push((
-                key,
-                entry.platform,
-                path,
-                Vec::new(),
-                ToolOpsView::from(crate::state::ToolOps::default()),
-            ));
-            continue;
-        };
-        let (records, tool_ops) = tokio::task::spawn_blocking(move || {
-            let records = reader.scan_all();
-            let ops = reader.take_tool_ops_delta();
-            (records, ops)
-        })
-        .await
-        .context("reader task failed")?;
-        let records = records.with_context(|| format!("failed to read {}", path.display()))?;
-        entries.push((
-            key,
-            entry.platform,
-            path,
-            records,
-            ToolOpsView::from(tool_ops),
-        ));
-    }
-
-    // Quota：仅在 --include-quota 时拉取。fetch() 是阻塞 HTTP，调完后取时间戳
-    // 作为 fetched_at 写入 QuotaView（Instant 无法转 RFC3339，必须用 DateTime<Utc>）。
-    let quota_views: Option<HashMap<Platform, QuotaView>> = if opts.include_quota {
-        // Platforms without a usage API still report who is signed in; they'd
-        // otherwise vanish from `--json` entirely.
-        let (quotas, accounts) = tokio::task::spawn_blocking(|| {
-            let entries = crate::platforms::entries();
-            let quotas = entries
-                .iter()
-                .filter_map(|entry| entry.quota_fetcher.map(|fetch| (entry.platform, fetch())))
-                .collect::<Vec<_>>();
-            let accounts = entries
-                .iter()
-                .filter_map(|entry| {
-                    entry
-                        .account_fetcher
-                        .map(|fetch| (entry.platform, entry.log_name, fetch()))
-                })
-                .collect::<Vec<_>>();
-            (quotas, accounts)
-        })
-        .await
-        .unwrap_or_default();
-        let now = Utc::now();
-        let fetched_at = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let mut views: HashMap<Platform, QuotaView> = quotas
-            .into_iter()
-            .filter_map(|(p, q)| q.map(|qi| (p, QuotaView::from_info(qi, now))))
-            .collect();
-        for (platform, tool_name, email) in accounts {
-            views.entry(platform).or_insert_with(|| QuotaView {
-                tool_name: tool_name.to_string(),
-                error: email
-                    .is_none()
-                    .then(|| crate::quota::QuotaError::NoCredentials.display()),
-                email,
-                plan: None,
-                org: None,
-                windows: vec![],
-                live_summary: None,
-                fetched_at: fetched_at.clone(),
-            });
-        }
-        Some(views)
-    } else {
-        None
-    };
-
-    // 第二遍：聚合
     let mut report = StatsReport {
         generated_at: Utc::now(),
         platforms: BTreeMap::new(),
         totals: Totals::default(),
     };
-    for (key, platform, path, records, tool_ops) in entries {
-        let filtered: Vec<UsageRecord> = records
-            .into_iter()
-            .filter(|r| opts.filters.matches_date(r.timestamp))
-            .collect();
-        let available = path.exists();
-        let quota = quota_views.as_ref().and_then(|m| m.get(&platform).cloned());
-        let pr = build_platform_report_with_ops(
+    // Aggregate and release one platform's raw history before scanning the next.
+    for entry in crate::platforms::entries() {
+        let key = platform_canonical_key(entry.platform);
+        if !opts.filters.matches_platform(&key) {
+            continue;
+        }
+        let path = paths.path_for(entry.platform);
+        let scan_path = path.clone();
+        let (records, tool_ops, available) = tokio::task::spawn_blocking(move || {
+            let available = entry.is_available_at(&scan_path);
+            let mut reader = entry.build_reader(scan_path);
+            let records = reader.scan_all();
+            let ops = reader.take_tool_ops_delta();
+            (records, ops, available)
+        })
+        .await
+        .context("reader task failed")?;
+        let mut records = records.with_context(|| format!("failed to read {}", path.display()))?;
+        records.retain(|record| opts.filters.matches_date(record.timestamp));
+        let quota = if opts.include_quota {
+            tokio::task::spawn_blocking(entry.quota_fetcher)
+                .await
+                .context("quota task failed")?
+                .map(|info| QuotaView::from_info(info, Utc::now()))
+        } else {
+            None
+        };
+        let platform = build_platform_report_with_ops(
             &path,
             available,
-            filtered,
+            records,
             quota,
             key.clone(),
-            tool_ops,
+            ToolOpsView::from(opts.filters.filter_tool_ops(tool_ops)),
         );
-        if pr.available {
+        if platform.available {
             report.totals.platforms_with_data += 1;
         }
-        report.totals.total_calls += pr.totals.calls;
-        report.totals.total_cost_usd += pr.totals.cost_usd;
-        report.platforms.insert(key, pr);
+        report.totals.total_calls += platform.totals.calls;
+        report.totals.total_cost_usd += platform.totals.cost_usd;
+        report.platforms.insert(key, platform);
     }
+    report.generated_at = Utc::now();
     Ok(report)
 }
 pub fn write_json<W: Write>(report: &StatsReport, pretty: bool, out: W) -> Result<()> {
@@ -523,7 +471,7 @@ mod tests {
     ) -> UsageRecord {
         UsageRecord {
             timestamp: Utc.with_ymd_and_hms(2026, 6, day, 12, 0, 0).unwrap(),
-            session: crate::state::intern(session),
+            session: std::sync::Arc::from(session),
             id: crate::state::record_id(&format!("{session}:{day}:{input}:{output}")),
             input_tokens: input,
             output_tokens: output,

@@ -1,8 +1,9 @@
-use crate::state::{ToolOps, UsageRecord};
+use crate::state::{RecordId, ToolOps, UsageRecord, record_id};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::FileScanner;
 use super::find_recursive;
@@ -10,11 +11,9 @@ use super::{ReaderResult, UsageSource, note_tool};
 
 pub struct ClaudeReader {
     data_dir: PathBuf,
-    scanner: FileScanner<()>,
+    scanner: FileScanner<FileState>,
     pending_ops: ToolOps,
-    seen_tool_ids: HashSet<String>,
-    /// session_id -> latest title seen in this process
-    titles: std::collections::HashMap<String, String>,
+    seen_tool_ids: HashSet<RecordId>,
 }
 
 impl ClaudeReader {
@@ -24,7 +23,6 @@ impl ClaudeReader {
             scanner: FileScanner::new(),
             pending_ops: ToolOps::default(),
             seen_tool_ids: HashSet::new(),
-            titles: std::collections::HashMap::new(),
         }
     }
 
@@ -40,15 +38,14 @@ impl ClaudeReader {
 
     fn scan(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         let files = self.find_files()?;
-        let titles = &mut self.titles;
         let ops = &mut self.pending_ops;
         let seen_tool_ids = &mut self.seen_tool_ids;
         self.scanner.scan(
             files,
-            |_| (),
-            |file, offset, _st| {
+            |_| FileState::default(),
+            |file, offset, state| {
                 crate::reader::read_lines_from_offset(file, offset, |line| {
-                    parse_claude_line(line, titles, ops, seen_tool_ids)
+                    parse_claude_line(line, state, ops, seen_tool_ids)
                 })
             },
         )
@@ -69,15 +66,14 @@ impl ClaudeReader {
         }
         files.sort_unstable();
         files.dedup();
-        let titles = &mut self.titles;
         let ops = &mut self.pending_ops;
         let seen_tool_ids = &mut self.seen_tool_ids;
         self.scanner.scan_changed(
             files,
-            |_| (),
-            |file, offset, _st| {
+            |_| FileState::default(),
+            |file, offset, state| {
                 crate::reader::read_lines_from_offset(file, offset, |line| {
-                    parse_claude_line(line, titles, ops, seen_tool_ids)
+                    parse_claude_line(line, state, ops, seen_tool_ids)
                 })
             },
         )
@@ -87,7 +83,6 @@ impl ClaudeReader {
 impl UsageSource for ClaudeReader {
     fn scan_all(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         self.scanner.reset();
-        self.titles.clear();
         self.pending_ops = ToolOps::default();
         self.seen_tool_ids.clear();
         self.scan()
@@ -106,11 +101,16 @@ impl UsageSource for ClaudeReader {
     }
 }
 
+#[derive(Default)]
+struct FileState {
+    session: Option<Arc<str>>,
+}
+
 fn parse_claude_line(
     line: &str,
-    titles: &mut std::collections::HashMap<String, String>,
+    state: &mut FileState,
     ops: &mut ToolOps,
-    seen_tool_ids: &mut HashSet<String>,
+    seen_tool_ids: &mut HashSet<RecordId>,
 ) -> Option<UsageRecord> {
     let v: Value = serde_json::from_str(line).ok()?;
 
@@ -119,17 +119,7 @@ fn parse_claude_line(
         .get("sessionId")
         .or_else(|| v.get("session_id"))
         .and_then(|s| s.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    if line_type == "ai-title" {
-        if let Some(title) = v.get("aiTitle").and_then(|t| t.as_str())
-            && !session_id.is_empty()
-        {
-            titles.insert(session_id, title.to_string());
-        }
-        return None;
-    }
+        .unwrap_or("");
 
     // Tool uses live inside assistant message content blocks.
     if line_type == "assistant"
@@ -143,7 +133,7 @@ fn parse_claude_line(
                 && let Some(name) = block.get("name").and_then(|n| n.as_str())
             {
                 if let Some(id) = block.get("id").and_then(|id| id.as_str())
-                    && !seen_tool_ids.insert(id.to_string())
+                    && !seen_tool_ids.insert(record_id(id))
                 {
                     continue;
                 }
@@ -194,8 +184,11 @@ fn parse_claude_line(
     } else {
         crate::reader::basename(cwd)
     };
-    let session = crate::reader::session_label(&dir, &session_id);
-    let title = titles.get(&session_id).map(|s| s.as_str()).unwrap_or("");
+    let session = crate::reader::session_label(&dir, session_id);
+    if state.session.as_deref() != Some(session.as_str()) {
+        state.session = Some(Arc::from(session));
+    }
+    let session = state.session.as_ref()?.clone();
 
     // Cost: read from JSONL only (comes from Anthropic API response).
     // `costUSD` is the historical camelCase key some Claude Code versions
@@ -219,15 +212,13 @@ fn parse_claude_line(
     Some(UsageRecord {
         timestamp,
         model: crate::state::intern(&model),
-        session: crate::state::intern(&session),
+        session,
         id: crate::state::record_id(record_id),
         input_tokens,
         output_tokens,
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_creation,
         reasoning_tokens: 0,
-        session_title: crate::state::intern(title),
-        project: crate::state::intern(&dir),
         cost_usd,
     })
 }

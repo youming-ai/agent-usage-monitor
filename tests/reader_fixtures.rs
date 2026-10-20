@@ -22,8 +22,35 @@ fn claude_fixture_parses_assistant_records() {
     assert_eq!(records[0].input_tokens, 100);
     assert_eq!(records[0].output_tokens, 50);
     assert_eq!(records[0].cost_usd, 0.01);
-    assert_eq!(resolve(records[0].session), "agent-usage-monitor a3f2c1d8");
+    assert_eq!(records[0].session.as_ref(), "agent-usage-monitor a3f2c1d8");
     assert!(reader.poll_delta().unwrap().is_empty());
+}
+
+#[test]
+fn session_labels_are_shared_and_released_with_their_reader_and_records() {
+    use std::sync::Arc;
+
+    let mut reader = ClaudeReader::new(fixtures_root().join("claude"));
+    let records = reader.scan_all().unwrap();
+    assert!(Arc::ptr_eq(&records[0].session, &records[1].session));
+    let session = Arc::downgrade(&records[0].session);
+    drop(records);
+    assert!(
+        session.upgrade().is_some(),
+        "the live file cursor shares the label"
+    );
+    drop(reader);
+    assert!(
+        session.upgrade().is_none(),
+        "session labels must not be retained globally"
+    );
+
+    let mut reader = CodexReader::new(fixtures_root().join("codex"));
+    let records = reader.scan_all().unwrap();
+    let session = Arc::downgrade(&records[0].session);
+    drop(records);
+    drop(reader);
+    assert!(session.upgrade().is_none());
 }
 
 #[test]
@@ -57,16 +84,7 @@ fn registry_rows_build_the_reader_that_parses_their_own_fixture() {
         if !path.exists() {
             continue;
         }
-        let Some(mut reader) = entry.build_reader(path) else {
-            checked += 1;
-            assert_eq!(
-                expected_fixture_records(entry.platform),
-                0,
-                "{:?} has no reader but expects fixture records",
-                entry.platform
-            );
-            continue;
-        };
+        let mut reader = entry.build_reader(path);
         let records = reader.scan_all().unwrap();
         assert_eq!(
             records.len(),

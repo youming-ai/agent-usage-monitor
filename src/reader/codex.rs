@@ -1,9 +1,10 @@
 use crate::reader::pricing;
-use crate::state::{ToolOps, UsageRecord};
+use crate::state::{RecordId, ToolOps, UsageRecord, record_id};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::FileScanner;
 use super::find_recursive;
@@ -13,17 +14,36 @@ use super::{ReaderResult, UsageSource, note_tool};
 /// directory in events at the top, which are skipped on later polls — so this
 /// must persist per file rather than in a single shared field that would leak
 /// between sessions.
-#[derive(Clone)]
 struct FileState {
     model: String,
     dir: String,
     sid: String,
-    seen_tool_call_ids: HashSet<String>,
+    seen_tool_call_ids: HashSet<RecordId>,
+    session_label: Arc<str>,
 }
 
 impl FileState {
-    fn session(&self) -> String {
-        crate::reader::session_label(&self.dir, &self.sid)
+    fn new(path: &Path) -> Self {
+        let sid = extract_codex_project(path);
+        let session_label = Arc::from(crate::reader::session_label("codex", &sid));
+        Self {
+            model: "unknown".to_string(),
+            dir: "codex".to_string(),
+            sid,
+            seen_tool_call_ids: HashSet::new(),
+            session_label,
+        }
+    }
+
+    fn session(&self) -> &str {
+        &self.session_label
+    }
+
+    fn refresh_session(&mut self) {
+        let label = crate::reader::session_label(&self.dir, &self.sid);
+        if self.session_label.as_ref() != label {
+            self.session_label = Arc::from(label);
+        }
     }
 }
 
@@ -59,16 +79,9 @@ impl CodexReader {
     fn scan(&mut self) -> ReaderResult<Vec<UsageRecord>> {
         let files = self.find_files()?;
         let ops = &mut self.pending_ops;
-        self.scanner.scan(
-            files,
-            |file| FileState {
-                model: "unknown".to_string(),
-                dir: "codex".to_string(),
-                sid: extract_codex_project(file),
-                seen_tool_call_ids: HashSet::new(),
-            },
-            |path, skip, st| read_codex_from_offset(path, skip, st, ops),
-        )
+        self.scanner.scan(files, FileState::new, |path, skip, st| {
+            read_codex_from_offset(path, skip, st, ops)
+        })
     }
 
     fn scan_changed(&mut self, paths: &[PathBuf]) -> ReaderResult<Vec<UsageRecord>> {
@@ -86,16 +99,10 @@ impl CodexReader {
         files.sort_unstable();
         files.dedup();
         let ops = &mut self.pending_ops;
-        self.scanner.scan_changed(
-            files,
-            |file| FileState {
-                model: "unknown".to_string(),
-                dir: "codex".to_string(),
-                sid: extract_codex_project(file),
-                seen_tool_call_ids: HashSet::new(),
-            },
-            |path, skip, st| read_codex_from_offset(path, skip, st, ops),
-        )
+        self.scanner
+            .scan_changed(files, FileState::new, |path, skip, st| {
+                read_codex_from_offset(path, skip, st, ops)
+            })
     }
 }
 
@@ -143,6 +150,7 @@ fn parse_codex_line(line: &str, st: &mut FileState, ops: &mut ToolOps) -> Option
         if let Some(id) = payload.and_then(|p| p.get("id")).and_then(|i| i.as_str()) {
             st.sid = id.to_string();
         }
+        st.refresh_session();
         return None;
     }
 
@@ -161,6 +169,7 @@ fn parse_codex_line(line: &str, st: &mut FileState, ops: &mut ToolOps) -> Option
         {
             st.dir = crate::reader::basename(cwd);
         }
+        st.refresh_session();
         return None;
     }
 
@@ -303,15 +312,13 @@ fn parse_codex_line(line: &str, st: &mut FileState, ops: &mut ToolOps) -> Option
         return Some(UsageRecord {
             timestamp,
             model: crate::state::intern(&st.model),
-            session: crate::state::intern(&st.session()),
+            session: st.session_label.clone(),
             id: crate::state::record_id(&record_id),
             input_tokens: delta_input,
             output_tokens: delta_output,
             cache_read_tokens: delta_cached,
             cache_creation_tokens: 0,
             reasoning_tokens: delta_reasoning,
-            session_title: crate::state::intern(""),
-            project: crate::state::intern(&st.dir),
             cost_usd,
         });
     }
@@ -323,7 +330,7 @@ fn first_tool_event(st: &mut FileState, payload: &Value) -> bool {
     payload
         .get("call_id")
         .and_then(Value::as_str)
-        .is_none_or(|id| st.seen_tool_call_ids.insert(id.to_string()))
+        .is_none_or(|id| st.seen_tool_call_ids.insert(record_id(id)))
 }
 
 fn extract_codex_project(path: &Path) -> String {
@@ -458,7 +465,7 @@ mod tests {
         let records = reader.scan_all().unwrap();
         assert_eq!(records.len(), 1);
         // The real id and working dir must feed the session label.
-        assert_eq!(crate::state::resolve(records[0].session), "proj sess-42");
+        assert_eq!(records[0].session.as_ref(), "proj sess-42");
     }
 
     /// A rollout whose `last_token_usage` is `null` (as opposed to absent)
