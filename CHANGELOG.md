@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.10.4](https://github.com/youming-ai/agent-usage-monitor/compare/v1.10.3...v1.10.4) (2026-10-20)
+
+
+### Performance
+
+* reduce monitoring memory and harden CLI behavior ([d6555d1](https://github.com/youming-ai/agent-usage-monitor/commit/d6555d1e39c7f450143920aed0b7852e31ceedb0))
+* reduce monitoring memory and harden CLI behavior ([623da5a](https://github.com/youming-ai/agent-usage-monitor/commit/623da5ad75cc02abb9808cd9cebedc5ca885e533))
+
+
+### Documentation
+
+* cover src/event and watcher tests, note aligned quota bars ([9407c8f](https://github.com/youming-ai/agent-usage-monitor/commit/9407c8ff9cf525b01aab5c6a8a040b4a259a5f70))
+
 ## [1.10.3](https://github.com/youming-ai/agent-usage-monitor/compare/v1.10.2...v1.10.3) (2026-09-01)
 
 
