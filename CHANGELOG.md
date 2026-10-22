@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.5](https://github.com/youming-ai/agent-usage-monitor/compare/v1.10.4...v1.10.5) (2026-10-22)
+
+
+### Documentation
+
+* simplify AGENTS.md and README ([d869f9f](https://github.com/youming-ai/agent-usage-monitor/commit/d869f9f6eb03e9549504347487f0871bcf514565))
+
 ## [1.10.4](https://github.com/youming-ai/agent-usage-monitor/compare/v1.10.3...v1.10.4) (2026-10-20)
 
 
